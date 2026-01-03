@@ -21,16 +21,6 @@ export type TaskRecord = {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:10000";
 
-export function resolveAssetUrl(path?: string | null): string {
-  if (!path) {
-    return "";
-  }
-  if (path.startsWith("http://") || path.startsWith("https://")) {
-    return path;
-  }
-  return `${API_BASE}${path}`;
-}
-
 export async function createTask({
   videoFile,
   imageFile,

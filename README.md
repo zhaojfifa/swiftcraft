@@ -23,3 +23,8 @@ npm run dev
 ## Preset assets
 Place preset MP4s under `presets/` following the structure in `presets/README.txt`.
 These are served from `/static/presets` and used by the mock engine for playback.
+
+## Git LFS
+Preset assets are stored via Git LFS under `presets/**.mp4`.
+After cloning, run `git lfs pull` to download the media files.
+For local dev, set `NEXT_PUBLIC_API_BASE=http://localhost:10000`.

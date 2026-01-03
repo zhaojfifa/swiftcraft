@@ -6,9 +6,9 @@ import {
   TaskRecord,
   createTask,
   fetchTask,
-  fetchTasks,
-  resolveAssetUrl
+  fetchTasks
 } from "../lib/api";
+import TaskDetail from "../components/TaskDetail";
 
 type ServiceOption = {
   id: string;
@@ -251,56 +251,7 @@ export default function ExplorePage() {
             </div>
             <p className="mt-2 text-xs text-white/60">{progressValue}%</p>
 
-            <div className="mt-6 grid gap-4 md:grid-cols-2">
-              <div className="rounded-xl border border-white/10 bg-black/40 p-4">
-                <h3 className="text-sm font-semibold">Input Snapshot</h3>
-                {activeTask?.thumbnail_url ? (
-                  <img
-                    src={resolveAssetUrl(activeTask.thumbnail_url)}
-                    alt="thumbnail"
-                    className="mt-3 h-40 w-full rounded-lg object-cover"
-                  />
-                ) : (
-                  <div className="mt-3 flex h-40 items-center justify-center rounded-lg border border-dashed border-white/20 text-xs text-white/40">
-                    Thumbnail pending
-                  </div>
-                )}
-                <div className="mt-3 text-xs text-white/60">
-                  <p>
-                    Duration:{" "}
-                    {activeTask?.input_metadata?.duration?.toFixed(2) ?? "--"}s
-                  </p>
-                  <p>
-                    Resolution:{" "}
-                    {activeTask?.input_metadata?.width ?? "--"}x
-                    {activeTask?.input_metadata?.height ?? "--"}
-                  </p>
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-white/10 bg-black/40 p-4">
-                <h3 className="text-sm font-semibold">Output Preview</h3>
-                {activeTask?.result_url ? (
-                  <div className="mt-3">
-                    <video
-                      controls
-                      className="h-40 w-full rounded-lg bg-black"
-                      src={resolveAssetUrl(activeTask.result_url)}
-                    />
-                    <a
-                      href={resolveAssetUrl(activeTask.result_url)}
-                      className="mt-3 inline-flex text-xs text-emerald-200 hover:text-emerald-100"
-                    >
-                      Download preset
-                    </a>
-                  </div>
-                ) : (
-                  <div className="mt-3 flex h-40 items-center justify-center rounded-lg border border-dashed border-white/20 text-xs text-white/40">
-                    Output pending
-                  </div>
-                )}
-              </div>
-            </div>
+            <TaskDetail task={activeTask} />
 
             <div className="mt-6">
               <h3 className="text-sm font-semibold">Logs</h3>
