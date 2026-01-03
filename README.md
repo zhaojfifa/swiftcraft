@@ -12,6 +12,28 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 10000 --reload
 ```
 
+Akool baseline (optional):
+```
+set USE_MOCK_AI=false
+set AKOOL_DRY_RUN=true
+set AKOOL_BASE_URL=https://api.akool.example
+set AKOOL_SWAP_ENDPOINT=/swap
+set AKOOL_AVATAR_ENDPOINT=/avatar
+set AKOOL_API_KEY=your_key
+uvicorn app.main:app --host 0.0.0.0 --port 10000 --reload
+```
+
+Real Akool call:
+```
+set USE_MOCK_AI=false
+set AKOOL_DRY_RUN=false
+set AKOOL_BASE_URL=https://api.akool.example
+set AKOOL_SWAP_ENDPOINT=/swap
+set AKOOL_AVATAR_ENDPOINT=/avatar
+set AKOOL_API_KEY=your_key
+uvicorn app.main:app --host 0.0.0.0 --port 10000 --reload
+```
+
 Frontend (Next.js, port 3000):
 ```
 cd frontend

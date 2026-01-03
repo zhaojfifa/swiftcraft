@@ -26,6 +26,7 @@ class TaskRecord(BaseModel):
     result_url: Optional[str] = None
     thumbnail_url: Optional[str] = None
     input_metadata: Optional[InputMetadata] = None
+    error: Optional[str] = None
     is_mock: bool = True
     created_at: str = Field(default_factory=_now_iso)
     updated_at: str = Field(default_factory=_now_iso)

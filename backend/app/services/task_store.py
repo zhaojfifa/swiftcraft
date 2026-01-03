@@ -15,6 +15,7 @@ class TaskStore:
     def __init__(self) -> None:
         self._tasks: Dict[str, TaskRecord] = {}
         self._order: List[str] = []
+        self._artifacts: Dict[str, Dict[str, object]] = {}
         self._lock = Lock()
 
     def create_task(
@@ -72,3 +73,11 @@ class TaskStore:
         with self._lock:
             ids = self._order[:limit]
             return [self._tasks[task_id].copy() for task_id in ids if task_id in self._tasks]
+
+    def set_artifacts(self, task_id: str, artifacts: Dict[str, object]) -> None:
+        with self._lock:
+            self._artifacts[task_id] = artifacts
+
+    def get_artifacts(self, task_id: str) -> Dict[str, object]:
+        with self._lock:
+            return dict(self._artifacts.get(task_id, {}))

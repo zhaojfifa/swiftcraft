@@ -9,7 +9,6 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.engines.mock_engine import MockEngine
 from app.models.task import TaskRecord
 from app.services.task_manager import TaskManager
 from app.services.task_store import TaskStore
@@ -27,8 +26,7 @@ ensure_dir(UPLOAD_DIR)
 ensure_dir(THUMB_DIR)
 
 store = TaskStore()
-engine = MockEngine()
-task_manager = TaskManager(store, engine, profile=os.getenv("SWIFTCRAFT_PROFILE", "dev"))
+task_manager = TaskManager(store, profile=os.getenv("SWIFTCRAFT_PROFILE", "dev"))
 
 app = FastAPI(title="SwiftCraft Demo API")
 
@@ -62,7 +60,7 @@ async def create_task(
         raise HTTPException(status_code=400, detail="image_file is required.")
 
     video_path = save_upload_file(video_file, UPLOAD_DIR)
-    _ = save_upload_file(image_file, UPLOAD_DIR)
+    image_path = save_upload_file(image_file, UPLOAD_DIR)
     metadata = probe_video(video_path)
     thumb_path = generate_thumbnail(video_path, THUMB_DIR)
     thumb_url = None
@@ -71,6 +69,10 @@ async def create_task(
 
     task_id = uuid.uuid4().hex
     store.create_task(task_id, service, mode, metadata, thumb_url)
+    store.set_artifacts(
+        task_id,
+        {"video_path": video_path, "image_path": image_path},
+    )
     task_manager.start(task_id)
     return {"task_id": task_id}
 

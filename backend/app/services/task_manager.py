@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import random
-from typing import Iterable, Tuple
 
+from app.core.config import settings
+from app.engines.akool_engine import AkoolEngine
+from app.engines.base import EngineAdapter, EngineRunError
 from app.engines.mock_engine import MockEngine
 from app.services.task_store import TaskStore
 
 
 class TaskManager:
-    def __init__(self, store: TaskStore, engine: MockEngine, profile: str = "dev") -> None:
+    def __init__(self, store: TaskStore, profile: str = "dev") -> None:
         self.store = store
-        self.engine = engine
         self.profile = profile
+        self.engine: EngineAdapter = MockEngine() if settings.USE_MOCK_AI else AkoolEngine()
 
     def start(self, task_id: str) -> None:
         asyncio.create_task(self._run(task_id))
@@ -23,12 +26,19 @@ class TaskManager:
             return
 
         total_duration = self._pick_duration()
-        stages = [
-            ("analyzing", 0.15),
-            ("slicing", 0.2),
-            ("rendering", 0.45),
-            ("merging", 0.2),
-        ]
+        if record.mode == "intelligent":
+            stages = [
+                ("analyzing", 0.25),
+                ("rendering", 0.55),
+                ("merging", 0.2),
+            ]
+        else:
+            stages = [
+                ("analyzing", 0.15),
+                ("slicing", 0.2),
+                ("rendering", 0.45),
+                ("merging", 0.2),
+            ]
         total_weight = sum(weight for _, weight in stages)
         progress = 0.0
 
@@ -47,15 +57,52 @@ class TaskManager:
         record = self.store.get_task(task_id)
         if record is None:
             return
-        result_url = self.engine.resolve_preset(record.service, record.mode)
-        self.store.update_task(
-            task_id,
-            stage="completed",
-            progress=1.0,
-            result_url=result_url,
-            is_mock=True,
-        )
-        self.store.append_log(task_id, "Completed with preset output.")
+
+        artifacts = self.store.get_artifacts(task_id)
+        mode_for_engine = "baseline" if record.mode == "intelligent" else record.mode
+
+        try:
+            if not settings.USE_MOCK_AI and not settings.AKOOL_DRY_RUN:
+                self.store.append_log(task_id, "Uploading to Akool...")
+            result = await self.engine.run(record.service, mode_for_engine, artifacts)
+            if result.metrics.get("job_id"):
+                self.store.append_log(task_id, f"Polling job {result.metrics.get('job_id')}...")
+            self.store.append_log(task_id, "Download/Using output url...")
+            self.store.update_task(
+                task_id,
+                stage="completed",
+                progress=1.0,
+                result_url=result.output_url,
+                is_mock=result.is_mock,
+                error=None,
+            )
+            if result.is_mock:
+                self.store.append_log(task_id, "Completed with preset output.")
+            else:
+                self.store.append_log(task_id, "Completed with Akool output.")
+        except EngineRunError as exc:
+            payload = self._stringify_payload(exc.payload)
+            self.store.update_task(
+                task_id,
+                stage="failed",
+                progress=1.0,
+                result_url=None,
+                is_mock=False,
+                error=str(exc),
+            )
+            self.store.append_log(task_id, f"Failed: {exc}")
+            if payload:
+                self.store.append_log(task_id, f"Final status payload: {payload}")
+        except Exception as exc:
+            self.store.update_task(
+                task_id,
+                stage="failed",
+                progress=1.0,
+                result_url=None,
+                is_mock=False,
+                error=str(exc),
+            )
+            self.store.append_log(task_id, f"Failed: {exc}")
 
     async def _tick_progress(self, task_id: str, start: float, end: float, duration: float) -> float:
         steps = max(3, int(duration / 0.4))
@@ -73,3 +120,11 @@ class TaskManager:
         if self.profile == "demo":
             return random.uniform(30.0, 70.0)
         return random.uniform(5.0, 8.0)
+
+    def _stringify_payload(self, payload) -> str:
+        if payload is None:
+            return ""
+        try:
+            return json.dumps(payload)
+        except TypeError:
+            return str(payload)
