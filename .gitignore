@@ -1,0 +1,7 @@
+backend/app/__pycache__/
+backend/app/data/
+backend/app/data/**
+backend/.venv/
+frontend/.next/
+frontend/node_modules/
+*.pyc

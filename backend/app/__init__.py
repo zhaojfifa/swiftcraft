@@ -1,0 +1,1 @@
+"""SwiftCraft backend application package."""

@@ -1,0 +1,46 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-1: #0b0c10;
+  --bg-2: #151823;
+  --accent: #86f2b7;
+  --accent-soft: rgba(134, 242, 183, 0.2);
+  --ember: #f25f5c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Space Grotesk", sans-serif;
+  background: radial-gradient(circle at 20% 20%, #1e2435 0%, var(--bg-1) 45%),
+    radial-gradient(circle at 80% 10%, #242a3b 0%, #0d0f15 55%);
+  color: #e6e7eb;
+  min-height: 100vh;
+}
+
+.glow {
+  box-shadow: 0 0 40px rgba(134, 242, 183, 0.18);
+}
+
+.noise {
+  position: relative;
+  isolation: isolate;
+}
+
+.noise::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.06'/%3E%3C/svg%3E");
+  mix-blend-mode: soft-light;
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: -1;
+}
