@@ -62,8 +62,11 @@ class TaskManager:
         mode_for_engine = "baseline" if record.mode == "intelligent" else record.mode
 
         try:
-            if not settings.USE_MOCK_AI and not settings.AKOOL_DRY_RUN:
-                self.store.append_log(task_id, "Uploading to Akool...")
+            if not settings.USE_MOCK_AI:
+                if settings.AKOOL_DRY_RUN:
+                    self.store.append_log(task_id, "Akool (dry-run) path selected (no network calls).")
+                else:
+                    self.store.append_log(task_id, "Uploading to Akool...")
             result = await self.engine.run(record.service, mode_for_engine, artifacts)
             if result.metrics.get("job_id"):
                 self.store.append_log(task_id, f"Polling job {result.metrics.get('job_id')}...")
