@@ -27,47 +27,63 @@ export default function Home() {
         </div>
 
         <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
-          <Link href='/workspace?service=swap' className='group relative block rounded-2xl border border-slate-200 bg-white p-8 hover:shadow-xl hover:-translate-y-1 transition-all duration-300 cursor-pointer overflow-hidden hover:border-emerald-200'>
-            <div className='absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-400 to-teal-500 opacity-0 group-hover:opacity-100 transition-opacity' />
+          <Link href="/workspace?service=swap"
+            className="group relative block rounded-2xl border border-emerald-200/20 bg-gradient-to-br from-emerald-950 via-slate-950 to-slate-950 p-8 overflow-hidden
+                      shadow-[0_18px_60px_rgba(16,185,129,0.18)] hover:shadow-[0_22px_80px_rgba(16,185,129,0.24)]
+                      hover:-translate-y-1 transition-all duration-300"
+          >
+            {/* subtle glow */}
+            <div className="pointer-events-none absolute -top-24 -left-24 h-56 w-56 rounded-full bg-emerald-400/20 blur-3xl opacity-60 group-hover:opacity-80 transition-opacity" />
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-white/5" />
 
-            <div className='flex justify-between items-start mb-12'>
-              <div className='p-3 bg-emerald-50 rounded-xl group-hover:bg-emerald-100 transition-colors'>
-                <div className='w-6 h-6 rounded-full border-2 border-emerald-500/30' />
+            <div className="relative z-10 flex justify-between items-start mb-12">
+              <div className="p-3 rounded-xl bg-white/5 border border-white/10">
+                <div className="w-6 h-6 rounded-full border-2 border-emerald-300/30" />
               </div>
-              <span className='text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-1 rounded border border-emerald-100 uppercase tracking-wider'>
+              <span className="text-[10px] font-bold text-emerald-200 bg-white/5 px-2 py-1 rounded border border-white/10 uppercase tracking-wider">
                 Service
               </span>
             </div>
 
-            <h2 className='text-2xl font-bold text-slate-900 mb-2'>Swap</h2>
-            <p className='text-slate-500 leading-relaxed mb-6'>
+            <h2 className="relative z-10 text-2xl font-bold text-white mb-2 group-hover:text-emerald-200 transition-colors">
+              Swap
+            </h2>
+            <p className="relative z-10 text-slate-200/80 leading-relaxed mb-6">
               Replace subject with target identity while preserving motion.
             </p>
 
-            <div className='flex items-center text-emerald-600 font-medium text-sm group-hover:underline'>
-              Enter Workspace <ArrowRight className='w-4 h-4 ml-1' />
+            <div className="relative z-10 flex items-center text-emerald-200 font-medium text-sm group-hover:underline underline-offset-4">
+              Enter Workspace <span className="ml-2">→</span>
             </div>
           </Link>
 
-          <Link href='/workspace?service=avatar' className='group relative block rounded-2xl border border-slate-200 bg-white p-8 hover:shadow-xl hover:-translate-y-1 transition-all duration-300 cursor-pointer overflow-hidden hover:border-rose-200'>
-            <div className='absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-rose-400 to-purple-500 opacity-0 group-hover:opacity-100 transition-opacity' />
+          <Link href="/workspace?service=avatar"
+            className="group relative block rounded-2xl border border-rose-200/20 bg-gradient-to-br from-rose-950 via-slate-950 to-slate-950 p-8 overflow-hidden
+                      shadow-[0_18px_60px_rgba(244,63,94,0.18)] hover:shadow-[0_22px_80px_rgba(244,63,94,0.24)]
+                      hover:-translate-y-1 transition-all duration-300"
+          >
+            {/* subtle glow */}
+            <div className="pointer-events-none absolute -top-24 -left-24 h-56 w-56 rounded-full bg-rose-400/20 blur-3xl opacity-60 group-hover:opacity-80 transition-opacity" />
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-white/5" />
 
-            <div className='flex justify-between items-start mb-12'>
-              <div className='p-3 bg-rose-50 rounded-xl group-hover:bg-rose-100 transition-colors'>
-                <div className='w-6 h-6 rounded-full border-2 border-rose-500/30' />
+            <div className="relative z-10 flex justify-between items-start mb-12">
+              <div className="p-3 rounded-xl bg-white/5 border border-white/10">
+                <div className="w-6 h-6 rounded-full border-2 border-rose-300/30" />
               </div>
-              <span className='text-[10px] font-bold text-rose-700 bg-rose-50 px-2 py-1 rounded border border-rose-100 uppercase tracking-wider'>
+              <span className="text-[10px] font-bold text-rose-200 bg-white/5 px-2 py-1 rounded border border-white/10 uppercase tracking-wider">
                 Service
               </span>
             </div>
 
-            <h2 className='text-2xl font-bold text-slate-900 mb-2'>Avatar</h2>
-            <p className='text-slate-500 leading-relaxed mb-6'>
+            <h2 className="relative z-10 text-2xl font-bold text-white mb-2 group-hover:text-rose-200 transition-colors">
+              Avatar
+            </h2>
+            <p className="relative z-10 text-slate-200/80 leading-relaxed mb-6">
               Generate a stylized avatar track with adaptive lighting.
             </p>
 
-            <div className='flex items-center text-rose-600 font-medium text-sm group-hover:underline'>
-              Enter Workspace <ArrowRight className='w-4 h-4 ml-1' />
+            <div className="relative z-10 flex items-center text-rose-200 font-medium text-sm group-hover:underline underline-offset-4">
+              Enter Workspace <span className="ml-2">→</span>
             </div>
           </Link>
         </div>
