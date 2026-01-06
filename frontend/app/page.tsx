@@ -1,320 +1,77 @@
-"use client";
+import Link from 'next/link';
+import { Sparkles, ArrowRight } from 'lucide-react';
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-
-import {
-  TaskRecord,
-  createTask,
-  fetchTask,
-  fetchTasks
-} from "../lib/api";
-import TaskDetail from "../components/TaskDetail";
-
-type ServiceOption = {
-  id: string;
-  title: string;
-  description: string;
-  accent: string;
-};
-
-const SERVICES: ServiceOption[] = [
-  {
-    id: "swap",
-    title: "Swap",
-    description: "Replace subject with target identity while preserving motion.",
-    accent: "from-emerald-400/40 to-emerald-200/10"
-  },
-  {
-    id: "avatar",
-    title: "Avatar",
-    description: "Generate a stylized avatar track with adaptive lighting.",
-    accent: "from-rose-400/40 to-rose-200/10"
-  }
-];
-
-const MODES = [
-  { id: "baseline", label: "Baseline" },
-  { id: "intelligent", label: "Intelligent" }
-];
-
-export default function ExplorePage() {
-  const [service, setService] = useState("swap");
-  const [mode, setMode] = useState("baseline");
-  const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [tasks, setTasks] = useState<TaskRecord[]>([]);
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
-  const [activeTask, setActiveTask] = useState<TaskRecord | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const selectedService = useMemo(
-    () => SERVICES.find((item) => item.id === service),
-    [service]
-  );
-
-  const refreshTasks = useCallback(async () => {
-    try {
-      const data = await fetchTasks();
-      setTasks(data);
-      if (!activeTaskId && data.length > 0) {
-        setActiveTaskId(data[0].id);
-      }
-    } catch (err) {
-      setError("Unable to load task history.");
-    }
-  }, [activeTaskId]);
-
-  const refreshTask = useCallback(
-    async (taskId: string) => {
-      const task = await fetchTask(taskId);
-      setActiveTask(task);
-      setTasks((prev) => {
-        const other = prev.filter((item) => item.id !== task.id);
-        return [task, ...other].slice(0, 20);
-      });
-      return task;
-    },
-    [setTasks]
-  );
-
-  useEffect(() => {
-    refreshTasks();
-  }, [refreshTasks]);
-
-  useEffect(() => {
-    if (!activeTaskId) {
-      setActiveTask(null);
-      return;
-    }
-    let timer: NodeJS.Timeout;
-    const poll = async () => {
-      try {
-        await refreshTask(activeTaskId);
-      } catch (err) {
-        setError("Polling failed. Is the backend running?");
-      }
-    };
-    poll();
-    timer = setInterval(poll, 2500);
-    return () => clearInterval(timer);
-  }, [activeTaskId, refreshTask]);
-
-  const handleRun = async () => {
-    if (!videoFile || !imageFile) {
-      setError("Please upload both a source video and a target image.");
-      return;
-    }
-    setError(null);
-    setIsSubmitting(true);
-    try {
-      const response = await createTask({
-        videoFile,
-        imageFile,
-        mode,
-        service
-      });
-      setActiveTaskId(response.task_id);
-      await refreshTask(response.task_id);
-      await refreshTasks();
-    } catch (err) {
-      setError("Failed to start task.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const progressValue = Math.round((activeTask?.progress || 0) * 100);
-
+export default function Home() {
   return (
-    <main className="px-6 py-10 md:px-12">
-      <div className="mx-auto flex max-w-6xl flex-col gap-10 lg:flex-row">
-        <section className="flex-1">
-          <div className="mb-6">
-            <p className="text-sm uppercase tracking-[0.3em] text-emerald-200/70">
-              SwiftCraft Demo 1.1
+    <div className='min-h-screen bg-white text-slate-900 font-sans selection:bg-blue-100'>
+      <header className='h-16 flex items-center justify-between px-6 bg-white border-b border-slate-200 sticky top-0 z-50'>
+        <div className='flex items-center gap-2'>
+          <div className='bg-blue-600 p-1.5 rounded-lg'>
+            <Sparkles className='w-4 h-4 text-white' />
+          </div>
+          <span className='font-bold text-lg tracking-tight text-slate-900'>SwiftCraft</span>
+        </div>
+        <div className='bg-slate-50 px-3 py-1 rounded-full text-xs font-medium text-slate-600 border border-slate-200'>
+          AI Video Generation Demo
+        </div>
+      </header>
+
+      <main className='max-w-5xl mx-auto mt-24 px-6'>
+        <div className='text-center mb-16'>
+          <h1 className='text-4xl font-extrabold mb-4 text-slate-900 tracking-tight'>
+            Select a Service
+          </h1>
+          <p className='text-slate-500 text-lg'>
+            Choose a pipeline to start your generation task.
+          </p>
+        </div>
+
+        <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
+          <Link href='/workspace?service=swap' className='group relative block rounded-2xl border border-slate-200 bg-white p-8 hover:shadow-xl hover:-translate-y-1 transition-all duration-300 cursor-pointer overflow-hidden hover:border-emerald-200'>
+            <div className='absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-400 to-teal-500 opacity-0 group-hover:opacity-100 transition-opacity' />
+
+            <div className='flex justify-between items-start mb-12'>
+              <div className='p-3 bg-emerald-50 rounded-xl group-hover:bg-emerald-100 transition-colors'>
+                <div className='w-6 h-6 rounded-full border-2 border-emerald-500/30' />
+              </div>
+              <span className='text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-1 rounded border border-emerald-100 uppercase tracking-wider'>
+                Service
+              </span>
+            </div>
+
+            <h2 className='text-2xl font-bold text-slate-900 mb-2'>Swap</h2>
+            <p className='text-slate-500 leading-relaxed mb-6'>
+              Replace subject with target identity while preserving motion.
             </p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight md:text-5xl">
-              Explore the Mock Engine
-            </h1>
-            <p className="mt-3 max-w-2xl text-base text-slate-300">
-              Upload a source video and a target image to simulate the SwiftCraft
-              pipeline with staged progress and preset playback.
+
+            <div className='flex items-center text-emerald-600 font-medium text-sm group-hover:underline'>
+              Enter Workspace <ArrowRight className='w-4 h-4 ml-1' />
+            </div>
+          </Link>
+
+          <Link href='/workspace?service=avatar' className='group relative block rounded-2xl border border-slate-200 bg-white p-8 hover:shadow-xl hover:-translate-y-1 transition-all duration-300 cursor-pointer overflow-hidden hover:border-rose-200'>
+            <div className='absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-rose-400 to-purple-500 opacity-0 group-hover:opacity-100 transition-opacity' />
+
+            <div className='flex justify-between items-start mb-12'>
+              <div className='p-3 bg-rose-50 rounded-xl group-hover:bg-rose-100 transition-colors'>
+                <div className='w-6 h-6 rounded-full border-2 border-rose-500/30' />
+              </div>
+              <span className='text-[10px] font-bold text-rose-700 bg-rose-50 px-2 py-1 rounded border border-rose-100 uppercase tracking-wider'>
+                Service
+              </span>
+            </div>
+
+            <h2 className='text-2xl font-bold text-slate-900 mb-2'>Avatar</h2>
+            <p className='text-slate-500 leading-relaxed mb-6'>
+              Generate a stylized avatar track with adaptive lighting.
             </p>
-          </div>
 
-          <div className="grid gap-4 md:grid-cols-2">
-            {SERVICES.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setService(item.id)}
-                className={`group rounded-2xl border border-white/10 bg-gradient-to-br ${item.accent} p-4 text-left transition hover:border-white/30 ${
-                  service === item.id ? "glow" : ""
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <h3 className="text-lg font-semibold">{item.title}</h3>
-                  <span className="text-xs uppercase tracking-[0.2em] text-white/60">
-                    Service
-                  </span>
-                </div>
-                <p className="mt-2 text-sm text-slate-200/80">
-                  {item.description}
-                </p>
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-6 flex gap-3">
-            {MODES.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setMode(item.id)}
-                className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                  mode === item.id
-                    ? "bg-emerald-400 text-black"
-                    : "border border-white/10 text-white/70 hover:border-white/30"
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-8 grid gap-4 rounded-2xl border border-white/10 bg-white/5 p-6">
-            <div>
-              <label className="text-sm text-white/70">
-                Source video (MP4)
-              </label>
-              <input
-                type="file"
-                accept="video/*"
-                onChange={(event) =>
-                  setVideoFile(event.target.files?.[0] || null)
-                }
-                className="mt-2 block w-full rounded-lg border border-white/10 bg-black/40 p-2 text-sm text-white"
-              />
+            <div className='flex items-center text-rose-600 font-medium text-sm group-hover:underline'>
+              Enter Workspace <ArrowRight className='w-4 h-4 ml-1' />
             </div>
-            <div>
-              <label className="text-sm text-white/70">Target image</label>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(event) =>
-                  setImageFile(event.target.files?.[0] || null)
-                }
-                className="mt-2 block w-full rounded-lg border border-white/10 bg-black/40 p-2 text-sm text-white"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={handleRun}
-              disabled={isSubmitting}
-              className="rounded-xl bg-emerald-400 px-5 py-3 text-sm font-semibold text-black transition hover:bg-emerald-300 disabled:opacity-50"
-            >
-              {isSubmitting ? "Starting..." : "Run Mock Task"}
-            </button>
-            {error ? (
-              <p className="text-sm text-rose-300">{error}</p>
-            ) : (
-              <p className="text-xs text-white/50">
-                Active service: {selectedService?.title} · Mode:{" "}
-                {mode.toUpperCase()}
-              </p>
-            )}
-          </div>
-
-          <div className="mt-8 rounded-2xl border border-white/10 bg-white/5 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">Live Status</h2>
-                <p className="text-sm text-white/60">
-                  {activeTask
-                    ? `Stage: ${activeTask.stage}`
-                    : "No task selected"}
-                </p>
-              </div>
-              {activeTask?.is_mock ? (
-                <span className="rounded-full border border-emerald-300/40 px-3 py-1 text-xs text-emerald-200/80">
-                  Sandbox
-                </span>
-              ) : null}
-            </div>
-
-            <div className="mt-4 h-2 w-full rounded-full bg-white/10">
-              <div
-                className="h-2 rounded-full bg-emerald-400 transition-all"
-                style={{ width: `${progressValue}%` }}
-              />
-            </div>
-            <p className="mt-2 text-xs text-white/60">{progressValue}%</p>
-
-            <TaskDetail task={activeTask} />
-
-            <div className="mt-6">
-              <h3 className="text-sm font-semibold">Logs</h3>
-              <div className="mt-2 max-h-32 space-y-2 overflow-y-auto rounded-xl border border-white/10 bg-black/30 p-3 text-xs text-white/60">
-                {activeTask?.logs?.length ? (
-                  activeTask.logs.map((log, index) => (
-                    <p key={`${log}-${index}`}>{log}</p>
-                  ))
-                ) : (
-                  <p>No logs yet.</p>
-                )}
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <aside className="w-full max-w-md rounded-3xl border border-white/10 bg-black/40 p-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Task Vault</h2>
-            <button
-              type="button"
-              onClick={refreshTasks}
-              className="text-xs text-emerald-200/80 hover:text-emerald-200"
-            >
-              Refresh
-            </button>
-          </div>
-          <div className="mt-4 space-y-3">
-            {tasks.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-white/20 p-6 text-sm text-white/50">
-                No tasks yet. Start a run to populate history.
-              </div>
-            ) : (
-              tasks.map((task) => (
-                <button
-                  key={task.id}
-                  type="button"
-                  onClick={() => setActiveTaskId(task.id)}
-                  className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
-                    task.id === activeTaskId
-                      ? "border-emerald-300/60 bg-emerald-300/10"
-                      : "border-white/10 hover:border-white/30"
-                  }`}
-                >
-                  <div className="flex items-center justify-between text-sm font-semibold">
-                    <span>{task.service.toUpperCase()}</span>
-                    <span className="text-xs text-white/50">
-                      {task.mode.toUpperCase()}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-xs text-white/60">{task.stage}</p>
-                  <div className="mt-2 h-1 rounded-full bg-white/10">
-                    <div
-                      className="h-1 rounded-full bg-emerald-300"
-                      style={{ width: `${Math.round(task.progress * 100)}%` }}
-                    />
-                  </div>
-                </button>
-              ))
-            )}
-          </div>
-        </aside>
-      </div>
-    </main>
+          </Link>
+        </div>
+      </main>
+    </div>
   );
 }
