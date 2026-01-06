@@ -1,12 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import random
 
 from app.core.config import settings
-from app.engines.akool_engine import AkoolEngine
-from app.engines.base import EngineAdapter, EngineRunError
 from app.engines.mock_engine import MockEngine
 from app.services.task_store import TaskStore
 
@@ -15,7 +11,6 @@ class TaskManager:
     def __init__(self, store: TaskStore, profile: str = "dev") -> None:
         self.store = store
         self.profile = profile
-        self.engine: EngineAdapter = MockEngine() if settings.USE_MOCK_AI else AkoolEngine()
 
     def start(self, task_id: str) -> None:
         asyncio.create_task(self._run(task_id))
@@ -25,109 +20,54 @@ class TaskManager:
         if record is None:
             return
 
-        total_duration = self._pick_duration()
-        if record.mode == "intelligent":
-            stages = [
-                ("analyzing", 0.25),
-                ("rendering", 0.55),
-                ("merging", 0.2),
-            ]
-        else:
-            stages = [
-                ("analyzing", 0.15),
-                ("slicing", 0.2),
-                ("rendering", 0.45),
-                ("merging", 0.2),
-            ]
-        total_weight = sum(weight for _, weight in stages)
-        progress = 0.0
-
-        for stage, weight in stages:
-            stage_duration = total_duration * (weight / total_weight)
-            self.store.update_task(task_id, stage=stage)
-            self.store.append_log(task_id, f"{stage.capitalize()} started.")
-            progress = await self._tick_progress(
-                task_id=task_id,
-                start=progress,
-                end=min(0.99, progress + (weight / total_weight)),
-                duration=stage_duration,
-            )
-            self.store.append_log(task_id, f"{stage.capitalize()} finished.")
-
-        record = self.store.get_task(task_id)
-        if record is None:
+        engine_mode = "mock" if settings.USE_MOCK_AI else "akool_dry_run" if settings.AKOOL_DRY_RUN else "akool"
+        if engine_mode == "akool":
+            self.store.append_log(task_id, "Akool real call not implemented.")
+            self.store.fail(task_id, "Akool real call not implemented.")
             return
+        if engine_mode == "akool_dry_run":
+            self.store.append_log(task_id, "Akool dry-run: using preset output.")
 
-        artifacts = self.store.get_artifacts(task_id)
-        mode_for_engine = "baseline" if record.mode == "intelligent" else record.mode
+        output_url = self._preset_url(record.service, record.mode)
+        if record.mode == "baseline":
+            await self._run_baseline(task_id, output_url)
+        else:
+            await self._run_intelligent(task_id, output_url)
 
-        try:
-            if not settings.USE_MOCK_AI:
-                if settings.AKOOL_DRY_RUN:
-                    self.store.append_log(task_id, "Akool (dry-run) path selected (no network calls).")
-                else:
-                    self.store.append_log(task_id, "Uploading to Akool...")
-            result = await self.engine.run(record.service, mode_for_engine, artifacts)
-            if result.metrics.get("job_id"):
-                self.store.append_log(task_id, f"Polling job {result.metrics.get('job_id')}...")
-            self.store.append_log(task_id, "Download/Using output url...")
-            self.store.update_task(
-                task_id,
-                stage="completed",
-                progress=1.0,
-                result_url=result.output_url,
-                is_mock=result.is_mock,
-                error=None,
-            )
-            if result.is_mock:
-                self.store.append_log(task_id, "Completed with preset output.")
-            else:
-                self.store.append_log(task_id, "Completed with Akool output.")
-        except EngineRunError as exc:
-            payload = self._stringify_payload(exc.payload)
-            self.store.update_task(
-                task_id,
-                stage="failed",
-                progress=1.0,
-                result_url=None,
-                is_mock=False,
-                error=str(exc),
-            )
-            self.store.append_log(task_id, f"Failed: {exc}")
-            if payload:
-                self.store.append_log(task_id, f"Final status payload: {payload}")
-        except Exception as exc:
-            self.store.update_task(
-                task_id,
-                stage="failed",
-                progress=1.0,
-                result_url=None,
-                is_mock=False,
-                error=str(exc),
-            )
-            self.store.append_log(task_id, f"Failed: {exc}")
+    async def _run_baseline(self, task_id: str, output_url: str) -> None:
+        self.store.set_stage(task_id, "rendering", 5)
+        self.store.append_log(task_id, "Dispatching baseline request...")
+        await asyncio.sleep(0.8)
+        for progress in (20, 40, 60, 80, 95):
+            self.store.set_stage(task_id, "rendering", progress)
+            self.store.append_log(task_id, f"Inference running... ({progress}%)")
+            await asyncio.sleep(0.6)
+        self.store.set_result(task_id, output_url)
+        self.store.append_log(task_id, "Completed.")
 
-    async def _tick_progress(self, task_id: str, start: float, end: float, duration: float) -> float:
-        steps = max(3, int(duration / 0.4))
-        if steps <= 0:
-            self.store.update_task(task_id, progress=end)
-            return end
-        step_time = duration / steps
-        for i in range(1, steps + 1):
-            await asyncio.sleep(step_time)
-            progress = start + (end - start) * (i / steps)
-            self.store.update_task(task_id, progress=round(progress, 3))
-        return end
+    async def _run_intelligent(self, task_id: str, output_url: str) -> None:
+        self.store.set_stage(task_id, "analyzing", 5)
+        self.store.append_log(task_id, "AI Analyzing Scene...")
+        await asyncio.sleep(0.8)
 
-    def _pick_duration(self) -> float:
-        if self.profile == "demo":
-            return random.uniform(30.0, 70.0)
-        return random.uniform(5.0, 8.0)
+        self.store.set_stage(task_id, "slicing", 20)
+        self.store.append_log(task_id, "Smart Slicing (3 Segments)...")
+        await asyncio.sleep(0.8)
 
-    def _stringify_payload(self, payload) -> str:
-        if payload is None:
-            return ""
-        try:
-            return json.dumps(payload)
-        except TypeError:
-            return str(payload)
+        self.store.set_stage(task_id, "rendering", 45)
+        self.store.append_log(task_id, "Parallel Rendering (GPU Cluster)...")
+        await asyncio.sleep(0.8)
+
+        self.store.set_stage(task_id, "merging", 75)
+        self.store.append_log(task_id, "Optical Flow Merging...")
+        await asyncio.sleep(0.8)
+
+        self.store.set_stage(task_id, "merging", 92)
+        self.store.append_log(task_id, "Finalizing output...")
+        await asyncio.sleep(0.6)
+
+        self.store.set_result(task_id, output_url)
+        self.store.append_log(task_id, "Completed.")
+
+    def _preset_url(self, service: str, mode: str) -> str:
+        return f"/static/presets/{service}/{mode}_demo.mp4"

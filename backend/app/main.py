@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from app.models.task import TaskRecord
 from app.services.task_manager import TaskManager
 from app.services.task_store import TaskStore
-from app.utils.media import ensure_dir, generate_thumbnail, probe_video, save_upload_file
+from app.utils.media import generate_thumbnail, probe_video, save_upload_file
 
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parents[1]
@@ -21,9 +21,9 @@ UPLOAD_DIR = DATA_DIR / "uploads"
 THUMB_DIR = DATA_DIR / "thumbnails"
 PRESETS_DIR = REPO_ROOT / "presets"
 
-ensure_dir(DATA_DIR)
-ensure_dir(UPLOAD_DIR)
-ensure_dir(THUMB_DIR)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+THUMB_DIR.mkdir(parents=True, exist_ok=True)
 
 store = TaskStore()
 task_manager = TaskManager(store, profile=os.getenv("SWIFTCRAFT_PROFILE", "dev"))
@@ -68,7 +68,7 @@ async def create_task(
         thumb_url = f"/static/data/thumbnails/{thumb_path.name}"
 
     task_id = uuid.uuid4().hex
-    store.create_task(task_id, service, mode, metadata, thumb_url)
+    store.create_task(task_id, service, mode, metadata.dict() if metadata else {}, thumb_url)
     store.set_artifacts(
         task_id,
         {"video_path": video_path, "image_path": image_path},

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -10,23 +10,22 @@ def _now_iso() -> str:
     return datetime.utcnow().isoformat() + "Z"
 
 
-class InputMetadata(BaseModel):
-    duration: Optional[float] = None
-    width: Optional[int] = None
-    height: Optional[int] = None
-
-
 class TaskRecord(BaseModel):
-    id: str
-    service: str
-    mode: str
-    stage: str = "queued"
-    progress: float = 0.0
-    logs: List[str] = Field(default_factory=list)
+    task_id: str
+    id: Optional[str] = None
+    service: str = "swap"
+    mode: str = "baseline"
+
+    status: str = "pending"
+    stage: str = "pending"
+    progress: int = 0
+
+    output_url: Optional[str] = None
     result_url: Optional[str] = None
-    thumbnail_url: Optional[str] = None
-    input_metadata: Optional[InputMetadata] = None
+    thumb_url: Optional[str] = None
     error: Optional[str] = None
-    is_mock: bool = True
+
+    logs: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=_now_iso)
     updated_at: str = Field(default_factory=_now_iso)
