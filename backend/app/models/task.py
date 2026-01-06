@@ -29,3 +29,13 @@ class TaskRecord(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=_now_iso)
     updated_at: str = Field(default_factory=_now_iso)
+
+
+class InputMetadata(BaseModel):
+    duration: Optional[float] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    fps: Optional[float] = None
+
+
+__all__ = ["TaskRecord", "InputMetadata"]
