@@ -1,6 +1,7 @@
 backend/app/__pycache__/
 backend/app/data/
 backend/app/data/**
+!backend/app/data/
 !backend/app/data/*.py
 !backend/app/data/**/*.py
 backend/.venv/
