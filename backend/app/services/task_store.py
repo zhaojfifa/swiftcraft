@@ -82,7 +82,7 @@ class TaskStore:
         if stage in {"completed", "failed"}:
             pass
         else:
-            update["status"] = "processing"
+            update["status"] = "running"
         self._update(task_id, update)
 
     def update_progress(self, task_id: str, progress: int) -> None:

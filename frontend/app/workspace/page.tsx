@@ -15,6 +15,8 @@ export default function Workspace() {
   const [mode, setMode] = useState<'baseline' | 'intelligent'>('intelligent');
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
+  const [inputVideoUrl, setInputVideoUrl] = useState<string | null>(null);
+  const [inputImageUrl, setInputImageUrl] = useState<string | null>(null);
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,6 +29,30 @@ export default function Workspace() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!videoFile) {
+      setInputVideoUrl(null);
+      return;
+    }
+    const previewUrl = URL.createObjectURL(videoFile);
+    setInputVideoUrl(previewUrl);
+    return () => {
+      URL.revokeObjectURL(previewUrl);
+    };
+  }, [videoFile]);
+
+  useEffect(() => {
+    if (!imageFile) {
+      setInputImageUrl(null);
+      return;
+    }
+    const previewUrl = URL.createObjectURL(imageFile);
+    setInputImageUrl(previewUrl);
+    return () => {
+      URL.revokeObjectURL(previewUrl);
+    };
+  }, [imageFile]);
 
   const handleRun = async () => {
     if (!videoFile || !imageFile) {
@@ -71,7 +97,7 @@ export default function Workspace() {
           setIsRunning(false);
           setError('Polling failed. Is the backend running?');
         }
-      }, 1000);
+      }, 800);
     } catch (err) {
       setIsRunning(false);
       setError('Failed to start task.');
@@ -79,6 +105,7 @@ export default function Workspace() {
   };
 
   const outputUrl = resolveAssetUrl(task?.output_url ?? task?.result_url ?? null);
+  const previewUrl = outputUrl ?? inputVideoUrl ?? null;
   const logs = task?.logs ?? [];
 
   return (
@@ -163,6 +190,12 @@ export default function Workspace() {
                 </div>
                 <span className="text-xs font-medium text-slate-600">Click to upload image</span>
               </div>
+              {inputImageUrl ? (
+                <div className="mt-3 flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-2">
+                  <img src={inputImageUrl} alt="Target preview" className="h-10 w-10 rounded-md object-cover" />
+                  <span className="text-[11px] text-slate-500">Target preview ready</span>
+                </div>
+              ) : null}
             </div>
 
             <div className="pt-6 border-t border-slate-100">
@@ -200,8 +233,8 @@ export default function Workspace() {
           ></div>
 
           <div className="w-full max-w-4xl aspect-video bg-black rounded-2xl shadow-2xl border border-slate-300/50 flex flex-col items-center justify-center relative overflow-hidden group">
-            {outputUrl ? (
-              <video controls className="w-full h-full object-cover" src={outputUrl} />
+            {previewUrl ? (
+              <video controls className="w-full h-full object-cover" src={previewUrl} />
             ) : (
               <div className="text-slate-500 font-medium flex flex-col items-center gap-3">
                 <div className="w-16 h-16 rounded-full bg-slate-800/50 flex items-center justify-center backdrop-blur">
