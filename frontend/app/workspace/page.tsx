@@ -108,14 +108,21 @@ export default function Workspace() {
   };
 
   const outputUrl = resolveAssetUrl(task?.output_url ?? task?.result_url ?? null);
-  const previewUrl = outputUrl ?? inputVideoUrl ?? null;
+  const fallbackOutputUrl = resolveAssetUrl(`/static/presets/${serviceType}/${mode}_demo.mp4`);
+  const isSandboxFallback = !outputUrl && !!task;
+  const previewUrl = outputUrl ?? (isSandboxFallback ? fallbackOutputUrl : inputVideoUrl);
   const logs = task?.logs ?? [];
+  const taskId = task?.task_id ?? task?.id ?? '';
   const payloadPreview = {
     service: serviceType,
     mode,
     faceEnhancer,
     video: videoFile ? { name: videoFile.name, size: videoFile.size } : null,
     image: imageFile ? { name: imageFile.name, size: imageFile.size } : null
+  };
+  const jsonPreview = {
+    request: payloadPreview,
+    task: task ?? null
   };
   const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:10000';
   const curlSnippet = [
@@ -191,7 +198,7 @@ export default function Workspace() {
             {activeTab !== 'playground' ? (
               activeTab === 'json' ? (
                 <div className="rounded-xl border border-slate-200 bg-white p-4 text-xs font-mono text-slate-700 whitespace-pre-wrap">
-                  {JSON.stringify(payloadPreview, null, 2)}
+                  {JSON.stringify(jsonPreview, null, 2)}
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -209,87 +216,95 @@ export default function Workspace() {
               )
             ) : null}
             {activeTab === 'playground' ? (
-            <div className="space-y-3">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex justify-between">
-                Source Video
-                <span className="text-[10px] font-normal text-slate-400">MP4, 4-8s</span>
-              </label>
-              <div className="flex items-center justify-between text-[11px] text-slate-400">
-                <span>{videoFile ? videoFile.name : 'No file selected'}</span>
-                {videoFile ? (
-                  <button
-                    type="button"
-                    className="text-slate-500 hover:text-slate-700"
-                    onClick={() => setVideoFile(null)}
-                  >
-                    Clear
-                  </button>
+              <div className="space-y-8">
+                <div className="space-y-3">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex justify-between">
+                    Source Video
+                    <span className="text-[10px] font-normal text-slate-400">MP4, 4-8s</span>
+                  </label>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                    <span>{videoFile ? videoFile.name : 'No file selected'}</span>
+                    {videoFile ? (
+                      <button
+                        type="button"
+                        className="text-slate-500 hover:text-slate-700"
+                        onClick={() => setVideoFile(null)}
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="relative border border-dashed border-slate-300 rounded-xl h-36 flex flex-col items-center justify-center bg-slate-50 hover:bg-slate-100 hover:border-slate-400 transition cursor-pointer group">
+                    <input
+                      type="file"
+                      accept="video/*"
+                      onChange={(event) => setVideoFile(event.target.files?.[0] || null)}
+                      className="absolute inset-0 opacity-0 cursor-pointer"
+                    />
+                    <div className="p-3 bg-white rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform border border-slate-100">
+                      <UploadCloud className="w-5 h-5 text-slate-600" />
+                    </div>
+                    <span className="text-xs font-medium text-slate-600">Click to upload video</span>
+                    <span className="text-[10px] text-slate-400 mt-1">or drag and drop</span>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    {serviceType === 'swap' ? 'Target Face' : 'Character Reference'}
+                  </label>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                    <span>{imageFile ? imageFile.name : 'No file selected'}</span>
+                    {imageFile ? (
+                      <button
+                        type="button"
+                        className="text-slate-500 hover:text-slate-700"
+                        onClick={() => setImageFile(null)}
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="relative border border-dashed border-slate-300 rounded-xl h-36 flex flex-col items-center justify-center bg-slate-50 hover:bg-slate-100 hover:border-slate-400 transition cursor-pointer group">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(event) => setImageFile(event.target.files?.[0] || null)}
+                      className="absolute inset-0 opacity-0 cursor-pointer"
+                    />
+                    <div className="p-3 bg-white rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform border border-slate-100">
+                      <UploadCloud className="w-5 h-5 text-slate-600" />
+                    </div>
+                    <span className="text-xs font-medium text-slate-600">Click to upload image</span>
+                  </div>
+                  {inputImageUrl ? (
+                    <div className="mt-3 flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-2">
+                      <img src={inputImageUrl} alt="Target preview" className="h-10 w-10 rounded-md object-cover" />
+                      <span className="text-[11px] text-slate-500">Target preview ready</span>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="pt-6 border-t border-slate-100">
+                  <div className="flex justify-between items-center py-2">
+                    <span className="text-sm font-medium text-slate-700">Face Enhancer</span>
+                    <button
+                      type="button"
+                      onClick={() => setFaceEnhancer((prev) => !prev)}
+                      className={`w-10 h-6 rounded-full relative cursor-pointer shadow-inner ${faceEnhancer ? 'bg-blue-600' : 'bg-slate-300'}`}
+                    >
+                      <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${faceEnhancer ? 'right-1' : 'left-1'}`}></div>
+                    </button>
+                  </div>
+                </div>
+                {error ? <p className="text-xs text-rose-500">{error}</p> : null}
+                {taskId ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                    <div>Task ID: {taskId}</div>
+                    <div>Status: {task?.status || 'pending'} · Stage: {task?.stage || 'pending'}</div>
+                  </div>
                 ) : null}
               </div>
-              <div className="relative border border-dashed border-slate-300 rounded-xl h-36 flex flex-col items-center justify-center bg-slate-50 hover:bg-slate-100 hover:border-slate-400 transition cursor-pointer group">
-                <input
-                  type="file"
-                  accept="video/*"
-                  onChange={(event) => setVideoFile(event.target.files?.[0] || null)}
-                  className="absolute inset-0 opacity-0 cursor-pointer"
-                />
-                <div className="p-3 bg-white rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform border border-slate-100">
-                  <UploadCloud className="w-5 h-5 text-slate-600" />
-                </div>
-                <span className="text-xs font-medium text-slate-600">Click to upload video</span>
-                <span className="text-[10px] text-slate-400 mt-1">or drag and drop</span>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                {serviceType === 'swap' ? 'Target Face' : 'Character Reference'}
-              </label>
-              <div className="flex items-center justify-between text-[11px] text-slate-400">
-                <span>{imageFile ? imageFile.name : 'No file selected'}</span>
-                {imageFile ? (
-                  <button
-                    type="button"
-                    className="text-slate-500 hover:text-slate-700"
-                    onClick={() => setImageFile(null)}
-                  >
-                    Clear
-                  </button>
-                ) : null}
-              </div>
-              <div className="relative border border-dashed border-slate-300 rounded-xl h-36 flex flex-col items-center justify-center bg-slate-50 hover:bg-slate-100 hover:border-slate-400 transition cursor-pointer group">
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={(event) => setImageFile(event.target.files?.[0] || null)}
-                  className="absolute inset-0 opacity-0 cursor-pointer"
-                />
-                <div className="p-3 bg-white rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform border border-slate-100">
-                  <UploadCloud className="w-5 h-5 text-slate-600" />
-                </div>
-                <span className="text-xs font-medium text-slate-600">Click to upload image</span>
-              </div>
-            {inputImageUrl ? (
-              <div className="mt-3 flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-2">
-                <img src={inputImageUrl} alt="Target preview" className="h-10 w-10 rounded-md object-cover" />
-                <span className="text-[11px] text-slate-500">Target preview ready</span>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="pt-6 border-t border-slate-100">
-            <div className="flex justify-between items-center py-2">
-              <span className="text-sm font-medium text-slate-700">Face Enhancer</span>
-              <button
-                type="button"
-                onClick={() => setFaceEnhancer((prev) => !prev)}
-                className={`w-10 h-6 rounded-full relative cursor-pointer shadow-inner ${faceEnhancer ? 'bg-blue-600' : 'bg-slate-300'}`}
-              >
-                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${faceEnhancer ? 'right-1' : 'left-1'}`}></div>
-              </button>
-            </div>
-          </div>
-            {error ? <p className="text-xs text-rose-500">{error}</p> : null}
             ) : null}
           </div>
 
@@ -328,30 +343,31 @@ export default function Workspace() {
               </div>
             )}
           </div>
+          {isSandboxFallback ? (
+            <div className="mt-3 text-xs text-slate-500">Sandbox output preview (preset).</div>
+          ) : null}
 
-          {mode === 'intelligent' && (
-            <div className="w-full max-w-4xl mt-6 animate-in slide-in-from-bottom-4 fade-in duration-500">
-              <div className="flex items-center gap-2 mb-2 ml-1">
-                <Terminal className="w-3 h-3 text-slate-400" />
-                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">SwiftFlow Engine Logs</span>
-              </div>
-              <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm font-mono text-xs h-32 overflow-y-auto">
-                {logs.length ? (
-                  logs.map((line, index) => (
-                    <div key={`${line}-${index}`} className="flex gap-3 py-1 border-b border-slate-50">
-                      <span className="text-slate-400 w-12 select-none">[{String(index + 1).padStart(2, '0')}]</span>
-                      <span className="text-slate-700">{line}</span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="flex gap-3 py-1">
-                    <span className="text-slate-400 w-12 select-none">[--]</span>
-                    <span className="text-slate-500 italic">Waiting for logs...</span>
-                  </div>
-                )}
-              </div>
+          <div className="w-full max-w-4xl mt-6 animate-in slide-in-from-bottom-4 fade-in duration-500">
+            <div className="flex items-center gap-2 mb-2 ml-1">
+              <Terminal className="w-3 h-3 text-slate-400" />
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">SwiftFlow Engine Logs</span>
             </div>
-          )}
+            <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm font-mono text-xs h-32 overflow-y-auto">
+              {logs.length ? (
+                logs.map((line, index) => (
+                  <div key={`${line}-${index}`} className="flex gap-3 py-1 border-b border-slate-50">
+                    <span className="text-slate-400 w-12 select-none">[{String(index + 1).padStart(2, '0')}]</span>
+                    <span className="text-slate-700">{line}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="flex gap-3 py-1">
+                  <span className="text-slate-400 w-12 select-none">[--]</span>
+                  <span className="text-slate-500 italic">Waiting for logs...</span>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>
