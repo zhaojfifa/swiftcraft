@@ -62,6 +62,8 @@ async def create_task(
 
     video_path = save_upload_file(video_file, UPLOAD_DIR)
     image_path = save_upload_file(image_file, UPLOAD_DIR)
+    input_video_url = f"/static/data/uploads/{video_path.name}"
+    input_image_url = f"/static/data/uploads/{image_path.name}"
     metadata = probe_video(video_path)
     thumb_path = generate_thumbnail(video_path, THUMB_DIR)
     thumb_url = None
@@ -72,7 +74,15 @@ async def create_task(
     metadata_dict = metadata.dict() if metadata else {}
     if face_enhancer is not None:
         metadata_dict["face_enhancer"] = face_enhancer
-    store.create_task(task_id, service, mode, metadata_dict, thumb_url)
+    store.create_task(
+        task_id,
+        service,
+        mode,
+        metadata_dict,
+        thumb_url,
+        input_video_url,
+        input_image_url,
+    )
     store.set_artifacts(
         task_id,
         {"video_path": video_path, "image_path": image_path},

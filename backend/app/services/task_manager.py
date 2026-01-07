@@ -28,6 +28,8 @@ class TaskManager:
         if engine_mode == "akool_dry_run":
             self.store.append_log(task_id, "Akool dry-run: using preset output.")
 
+        # Sandbox demo: always return a preset output_url as the mock swap result.
+        # Sandbox demo: always return a preset output URL when work completes.
         output_url = self._preset_url(record.service, record.mode)
         if record.mode == "baseline":
             await self._run_baseline(task_id, output_url)

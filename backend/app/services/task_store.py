@@ -29,18 +29,22 @@ class TaskStore:
         mode: str,
         metadata: Dict[str, Any],
         thumb_url: Optional[str],
+        input_video_url: Optional[str],
+        input_image_url: Optional[str],
     ) -> TaskRecord:
         record = TaskRecord(
             task_id=task_id,
             id=task_id,
             service=service,
             mode=mode,
-            status="pending",
-            stage="pending",
+            status="queued",
+            stage="queued",
             progress=0,
             logs=["Task queued."],
             metadata=metadata or {},
             thumb_url=thumb_url,
+            input_video_url=input_video_url,
+            input_image_url=input_image_url,
         )
         with self._lock:
             self._tasks[task_id] = record
@@ -75,12 +79,11 @@ class TaskStore:
             self._update(task_id, {"logs": logs})
 
     def set_stage(self, task_id: str, stage: str, progress: int) -> None:
-        update: Dict[str, Any] = {
-            "stage": stage,
-            "progress": _clamp(progress),
-        }
-        if stage in {"completed", "failed"}:
-            pass
+        update: Dict[str, Any] = {"stage": stage, "progress": _clamp(progress)}
+        if stage == "failed":
+            update["status"] = "failed"
+        elif stage == "completed":
+            update["status"] = "done"
         else:
             update["status"] = "running"
         self._update(task_id, update)
@@ -92,11 +95,10 @@ class TaskStore:
         self._update(
             task_id,
             {
-                "status": "succeeded",
+                "status": "done",
                 "stage": "completed",
                 "progress": 100,
                 "output_url": output_url,
-                "result_url": output_url,
             },
         )
 

@@ -37,6 +37,12 @@ export default function Workspace() {
       setInputVideoUrl(null);
       return;
     }
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    setIsRunning(false);
+    setTask(null);
     const previewUrl = URL.createObjectURL(videoFile);
     setInputVideoUrl(previewUrl);
     return () => {
@@ -63,6 +69,7 @@ export default function Workspace() {
     }
     setError(null);
     setIsRunning(true);
+    setTask(null);
 
     try {
       const result = await createTask({
@@ -85,8 +92,7 @@ export default function Workspace() {
           const latest = await getTask(taskId);
           setTask(latest);
           const status = (latest.status || '').toLowerCase();
-          const stage = (latest.stage || '').toLowerCase();
-          const done = status === 'succeeded' || status === 'completed' || status === 'failed' || stage === 'completed' || stage === 'failed';
+          const done = status === 'done' || status === 'failed';
           if (done || ticks >= 60) {
             if (pollRef.current) {
               clearInterval(pollRef.current);
@@ -107,10 +113,10 @@ export default function Workspace() {
     }
   };
 
-  const outputUrl = resolveAssetUrl(task?.output_url ?? task?.result_url ?? null);
-  const fallbackOutputUrl = resolveAssetUrl(`/static/presets/${serviceType}/${mode}_demo.mp4`);
-  const isSandboxFallback = !outputUrl && !!task;
-  const previewUrl = outputUrl ?? (isSandboxFallback ? fallbackOutputUrl : inputVideoUrl);
+  const isDone = (task?.status || '').toLowerCase() === 'done';
+  const outputUrl = isDone ? resolveAssetUrl(task?.output_url ?? null) : null;
+  // Preview priority: output (done) -> local upload -> empty placeholder.
+  const previewUrl = outputUrl ?? inputVideoUrl;
   const logs = task?.logs ?? [];
   const taskId = task?.task_id ?? task?.id ?? '';
   const payloadPreview = {
@@ -247,6 +253,17 @@ export default function Workspace() {
                     <span className="text-xs font-medium text-slate-600">Click to upload video</span>
                     <span className="text-[10px] text-slate-400 mt-1">or drag and drop</span>
                   </div>
+                  {inputVideoUrl ? (
+                    <div className="mt-3 flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-2">
+                      <video
+                        src={inputVideoUrl}
+                        muted
+                        playsInline
+                        className="h-10 w-14 rounded-md object-cover"
+                      />
+                      <span className="text-[11px] text-slate-500">Video preview ready</span>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="space-y-3">
@@ -301,7 +318,7 @@ export default function Workspace() {
                 {taskId ? (
                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
                     <div>Task ID: {taskId}</div>
-                    <div>Status: {task?.status || 'pending'} · Stage: {task?.stage || 'pending'}</div>
+                    <div>Status: {task?.status || 'queued'} · Stage: {task?.stage || 'queued'}</div>
                   </div>
                 ) : null}
               </div>
@@ -343,9 +360,6 @@ export default function Workspace() {
               </div>
             )}
           </div>
-          {isSandboxFallback ? (
-            <div className="mt-3 text-xs text-slate-500">Sandbox output preview (preset).</div>
-          ) : null}
 
           <div className="w-full max-w-4xl mt-6 animate-in slide-in-from-bottom-4 fade-in duration-500">
             <div className="flex items-center gap-2 mb-2 ml-1">
