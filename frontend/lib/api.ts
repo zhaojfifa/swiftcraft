@@ -21,12 +21,16 @@ export async function createTask(params: {
   imageFile: File;
   mode: string;
   service: string;
+  faceEnhancer?: boolean;
 }): Promise<{ task_id: string }> {
   const form = new FormData();
   form.append("video_file", params.videoFile);
   form.append("image_file", params.imageFile);
   form.append("mode", params.mode);
   form.append("service", params.service);
+  if (params.faceEnhancer !== undefined) {
+    form.append("face_enhancer", String(params.faceEnhancer));
+  }
 
   const response = await fetch(`${API_BASE}/api/v1/tasks`, {
     method: "POST",

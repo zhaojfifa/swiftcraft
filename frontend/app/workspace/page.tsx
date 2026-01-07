@@ -17,9 +17,11 @@ export default function Workspace() {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [inputVideoUrl, setInputVideoUrl] = useState<string | null>(null);
   const [inputImageUrl, setInputImageUrl] = useState<string | null>(null);
+  const [faceEnhancer, setFaceEnhancer] = useState(true);
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'playground' | 'json' | 'api'>('playground');
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -67,7 +69,8 @@ export default function Workspace() {
         videoFile,
         imageFile,
         mode,
-        service: serviceType
+        service: serviceType,
+        faceEnhancer
       });
       const taskId = result.task_id;
       let ticks = 0;
@@ -107,6 +110,22 @@ export default function Workspace() {
   const outputUrl = resolveAssetUrl(task?.output_url ?? task?.result_url ?? null);
   const previewUrl = outputUrl ?? inputVideoUrl ?? null;
   const logs = task?.logs ?? [];
+  const payloadPreview = {
+    service: serviceType,
+    mode,
+    faceEnhancer,
+    video: videoFile ? { name: videoFile.name, size: videoFile.size } : null,
+    image: imageFile ? { name: imageFile.name, size: imageFile.size } : null
+  };
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:10000';
+  const curlSnippet = [
+    `curl -X POST \"${apiBase}/api/v1/tasks\"`,
+    '  -F \"video_file=@<path/to/video.mp4>\"',
+    '  -F \"image_file=@<path/to/image.jpg>\"',
+    `  -F \"mode=${mode}\"`,
+    `  -F \"service=${serviceType}\"`,
+    `  -F \"face_enhancer=${faceEnhancer}\"`
+  ].join(' \\\n');
 
   return (
     <div className="h-screen bg-white text-slate-900 flex flex-col font-sans overflow-hidden">
@@ -148,17 +167,65 @@ export default function Workspace() {
       <div className="flex-1 flex overflow-hidden">
         <div className="w-[400px] bg-white border-r border-slate-200 flex flex-col z-10 shadow-[4px_0_24px_rgba(0,0,0,0.02)]">
           <div className="flex border-b border-slate-100 px-6 pt-6 gap-6 text-sm">
-            <button className="text-slate-900 border-b-2 border-slate-900 pb-3 font-semibold">Playground</button>
-            <button className="text-slate-400 pb-3 hover:text-slate-600 transition">JSON</button>
-            <button className="text-slate-400 pb-3 hover:text-slate-600 transition">API</button>
+            <button
+              className={`pb-3 transition ${activeTab === 'playground' ? 'text-slate-900 border-b-2 border-slate-900 font-semibold' : 'text-slate-400 hover:text-slate-600'}`}
+              onClick={() => setActiveTab('playground')}
+            >
+              Playground
+            </button>
+            <button
+              className={`pb-3 transition ${activeTab === 'json' ? 'text-slate-900 border-b-2 border-slate-900 font-semibold' : 'text-slate-400 hover:text-slate-600'}`}
+              onClick={() => setActiveTab('json')}
+            >
+              JSON
+            </button>
+            <button
+              className={`pb-3 transition ${activeTab === 'api' ? 'text-slate-900 border-b-2 border-slate-900 font-semibold' : 'text-slate-400 hover:text-slate-600'}`}
+              onClick={() => setActiveTab('api')}
+            >
+              API
+            </button>
           </div>
 
           <div className="p-6 space-y-8 overflow-y-auto flex-1">
+            {activeTab !== 'playground' ? (
+              activeTab === 'json' ? (
+                <div className="rounded-xl border border-slate-200 bg-white p-4 text-xs font-mono text-slate-700 whitespace-pre-wrap">
+                  {JSON.stringify(payloadPreview, null, 2)}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 text-xs font-mono text-slate-700 whitespace-pre-wrap">
+                    {curlSnippet}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigator.clipboard.writeText(curlSnippet)}
+                    className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                  >
+                    Copy curl
+                  </button>
+                </div>
+              )
+            ) : null}
+            {activeTab === 'playground' ? (
             <div className="space-y-3">
               <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex justify-between">
                 Source Video
                 <span className="text-[10px] font-normal text-slate-400">MP4, 4-8s</span>
               </label>
+              <div className="flex items-center justify-between text-[11px] text-slate-400">
+                <span>{videoFile ? videoFile.name : 'No file selected'}</span>
+                {videoFile ? (
+                  <button
+                    type="button"
+                    className="text-slate-500 hover:text-slate-700"
+                    onClick={() => setVideoFile(null)}
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
               <div className="relative border border-dashed border-slate-300 rounded-xl h-36 flex flex-col items-center justify-center bg-slate-50 hover:bg-slate-100 hover:border-slate-400 transition cursor-pointer group">
                 <input
                   type="file"
@@ -178,6 +245,18 @@ export default function Workspace() {
               <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                 {serviceType === 'swap' ? 'Target Face' : 'Character Reference'}
               </label>
+              <div className="flex items-center justify-between text-[11px] text-slate-400">
+                <span>{imageFile ? imageFile.name : 'No file selected'}</span>
+                {imageFile ? (
+                  <button
+                    type="button"
+                    className="text-slate-500 hover:text-slate-700"
+                    onClick={() => setImageFile(null)}
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
               <div className="relative border border-dashed border-slate-300 rounded-xl h-36 flex flex-col items-center justify-center bg-slate-50 hover:bg-slate-100 hover:border-slate-400 transition cursor-pointer group">
                 <input
                   type="file"
@@ -190,23 +269,28 @@ export default function Workspace() {
                 </div>
                 <span className="text-xs font-medium text-slate-600">Click to upload image</span>
               </div>
-              {inputImageUrl ? (
-                <div className="mt-3 flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-2">
-                  <img src={inputImageUrl} alt="Target preview" className="h-10 w-10 rounded-md object-cover" />
-                  <span className="text-[11px] text-slate-500">Target preview ready</span>
-                </div>
-              ) : null}
-            </div>
-
-            <div className="pt-6 border-t border-slate-100">
-              <div className="flex justify-between items-center py-2">
-                <span className="text-sm font-medium text-slate-700">Face Enhancer</span>
-                <div className="w-10 h-6 bg-blue-600 rounded-full relative cursor-pointer shadow-inner">
-                  <div className="absolute right-1 top-1 w-4 h-4 bg-white rounded-full shadow-sm"></div>
-                </div>
+            {inputImageUrl ? (
+              <div className="mt-3 flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-2">
+                <img src={inputImageUrl} alt="Target preview" className="h-10 w-10 rounded-md object-cover" />
+                <span className="text-[11px] text-slate-500">Target preview ready</span>
               </div>
+            ) : null}
+          </div>
+
+          <div className="pt-6 border-t border-slate-100">
+            <div className="flex justify-between items-center py-2">
+              <span className="text-sm font-medium text-slate-700">Face Enhancer</span>
+              <button
+                type="button"
+                onClick={() => setFaceEnhancer((prev) => !prev)}
+                className={`w-10 h-6 rounded-full relative cursor-pointer shadow-inner ${faceEnhancer ? 'bg-blue-600' : 'bg-slate-300'}`}
+              >
+                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${faceEnhancer ? 'right-1' : 'left-1'}`}></div>
+              </button>
             </div>
+          </div>
             {error ? <p className="text-xs text-rose-500">{error}</p> : null}
+            ) : null}
           </div>
 
           <div className="p-6 border-t border-slate-100 bg-white">

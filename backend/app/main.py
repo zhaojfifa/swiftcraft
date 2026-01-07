@@ -53,6 +53,7 @@ async def create_task(
     image_file: UploadFile = File(...),
     mode: str = Form("baseline"),
     service: str = Form("swap"),
+    face_enhancer: str | None = Form(None),
 ) -> dict:
     if not video_file.filename:
         raise HTTPException(status_code=400, detail="video_file is required.")
@@ -68,7 +69,10 @@ async def create_task(
         thumb_url = f"/static/data/thumbnails/{thumb_path.name}"
 
     task_id = uuid.uuid4().hex
-    store.create_task(task_id, service, mode, metadata.dict() if metadata else {}, thumb_url)
+    metadata_dict = metadata.dict() if metadata else {}
+    if face_enhancer is not None:
+        metadata_dict["face_enhancer"] = face_enhancer
+    store.create_task(task_id, service, mode, metadata_dict, thumb_url)
     store.set_artifacts(
         task_id,
         {"video_path": video_path, "image_path": image_path},
