@@ -1,17 +1,19 @@
 export type TaskRecord = {
   task_id?: string;
   id?: string;
-  status?: string;
+  service?: "swap" | "avatar";
+  mode?: "baseline" | "intelligent";
+  status?: "queued" | "running" | "done" | "failed";
   stage?: string;
   progress?: number;
-  service?: string;
-  mode?: string;
-  output_url?: string | null;
-  result_url?: string | null;
+  created_at?: string;
+  input_video_url?: string | null;
+  input_image_url?: string | null;
   thumb_url?: string | null;
-  thumbnail_url?: string | null;
+  output_url?: string | null;
   logs?: string[];
   error?: string | null;
+  metadata?: Record<string, unknown>;
 };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:10000";
