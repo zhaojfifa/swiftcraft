@@ -119,6 +119,7 @@ export default function Workspace() {
   const previewUrl = outputUrl ?? inputVideoUrl;
   const logs = task?.logs ?? [];
   const taskId = task?.task_id ?? task?.id ?? '';
+  const canRun = Boolean(videoFile && imageFile) && !isRunning;
   const payloadPreview = {
     service: serviceType,
     mode,
@@ -240,30 +241,38 @@ export default function Workspace() {
                       </button>
                     ) : null}
                   </div>
-                  <div className="relative border border-dashed border-slate-300 rounded-xl h-36 flex flex-col items-center justify-center bg-slate-50 hover:bg-slate-100 hover:border-slate-400 transition cursor-pointer group">
-                    <input
-                      type="file"
-                      accept="video/*"
-                      onChange={(event) => setVideoFile(event.target.files?.[0] || null)}
-                      className="absolute inset-0 opacity-0 cursor-pointer"
-                    />
-                    <div className="p-3 bg-white rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform border border-slate-100">
-                      <UploadCloud className="w-5 h-5 text-slate-600" />
-                    </div>
-                    <span className="text-xs font-medium text-slate-600">Click to upload video</span>
-                    <span className="text-[10px] text-slate-400 mt-1">or drag and drop</span>
-                  </div>
-                  {inputVideoUrl ? (
-                    <div className="mt-3 flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-2">
-                      <video
-                        src={inputVideoUrl}
-                        muted
-                        playsInline
-                        className="h-10 w-14 rounded-md object-cover"
+                  <div className="group relative grid h-48 grid-rows-[1fr_auto] gap-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-3 transition hover:bg-slate-100 hover:border-slate-400">
+                    <div className="relative flex flex-col items-center justify-center">
+                      <input
+                        type="file"
+                        accept="video/*"
+                        onChange={(event) => setVideoFile(event.target.files?.[0] || null)}
+                        className="absolute inset-0 opacity-0 cursor-pointer"
                       />
-                      <span className="text-[11px] text-slate-500">Video preview ready</span>
+                      <div className="p-3 bg-white rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform border border-slate-100">
+                        <UploadCloud className="w-5 h-5 text-slate-600" />
+                      </div>
+                      <span className="text-xs font-medium text-slate-600">Click to upload video</span>
+                      <span className="text-[10px] text-slate-400 mt-1">or drag and drop</span>
                     </div>
-                  ) : null}
+                    <div className="rounded-lg border border-slate-200 bg-white p-2">
+                      {inputVideoUrl ? (
+                        <div className="flex items-center gap-3">
+                          <video
+                            src={inputVideoUrl}
+                            muted
+                            playsInline
+                            className="h-10 w-14 rounded-md object-cover"
+                          />
+                          <span className="text-[11px] text-slate-500">Video preview ready</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center text-[11px] text-slate-400">
+                          Preview will appear here
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="space-y-3">
@@ -282,24 +291,32 @@ export default function Workspace() {
                       </button>
                     ) : null}
                   </div>
-                  <div className="relative border border-dashed border-slate-300 rounded-xl h-36 flex flex-col items-center justify-center bg-slate-50 hover:bg-slate-100 hover:border-slate-400 transition cursor-pointer group">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(event) => setImageFile(event.target.files?.[0] || null)}
-                      className="absolute inset-0 opacity-0 cursor-pointer"
-                    />
-                    <div className="p-3 bg-white rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform border border-slate-100">
-                      <UploadCloud className="w-5 h-5 text-slate-600" />
+                  <div className="group relative grid h-48 grid-rows-[1fr_auto] gap-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-3 transition hover:bg-slate-100 hover:border-slate-400">
+                    <div className="relative flex flex-col items-center justify-center">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(event) => setImageFile(event.target.files?.[0] || null)}
+                        className="absolute inset-0 opacity-0 cursor-pointer"
+                      />
+                      <div className="p-3 bg-white rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform border border-slate-100">
+                        <UploadCloud className="w-5 h-5 text-slate-600" />
+                      </div>
+                      <span className="text-xs font-medium text-slate-600">Click to upload image</span>
                     </div>
-                    <span className="text-xs font-medium text-slate-600">Click to upload image</span>
+                    <div className="rounded-lg border border-slate-200 bg-white p-2">
+                      {inputImageUrl ? (
+                        <div className="flex items-center gap-3">
+                          <img src={inputImageUrl} alt="Target preview" className="h-10 w-10 rounded-md object-cover" />
+                          <span className="text-[11px] text-slate-500">Target preview ready</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center text-[11px] text-slate-400">
+                          Preview will appear here
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  {inputImageUrl ? (
-                    <div className="mt-3 flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-2">
-                      <img src={inputImageUrl} alt="Target preview" className="h-10 w-10 rounded-md object-cover" />
-                      <span className="text-[11px] text-slate-500">Target preview ready</span>
-                    </div>
-                  ) : null}
                 </div>
 
                 <div className="pt-6 border-t border-slate-100">
@@ -328,13 +345,13 @@ export default function Workspace() {
           <div className="p-6 border-t border-slate-100 bg-white">
             <button
               onClick={handleRun}
-              disabled={isRunning}
+              disabled={!canRun}
               className={`w-full py-3.5 rounded-xl font-bold text-white flex items-center justify-center gap-2 shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all ${
                 mode === 'intelligent' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-200' : 'bg-slate-800 hover:bg-slate-900 shadow-slate-200'
-              } ${isRunning ? 'opacity-60 cursor-not-allowed' : ''}`}
+              } ${!canRun ? 'opacity-60 cursor-not-allowed' : ''}`}
             >
               <Play className="w-4 h-4" />
-              Run {mode === 'intelligent' ? 'SwiftFlow' : 'Basic'}
+              {isRunning ? 'Running...' : `Run ${mode === 'intelligent' ? 'SwiftFlow' : 'Basic'}`}
             </button>
             <div className="text-center mt-3 text-[10px] text-slate-400 font-medium">
               Estimated Cost: {mode === 'intelligent' ? '$0.15' : '$0.05'}

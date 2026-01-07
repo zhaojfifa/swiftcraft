@@ -9,6 +9,13 @@ type TaskDetailProps = {
 export default function TaskDetail({ task }: TaskDetailProps) {
   const thumbnailUrl = resolveAssetUrl(task?.thumb_url);
   const outputUrl = resolveAssetUrl(task?.output_url);
+  const metadataWidth = task?.metadata?.width;
+  const metadataHeight = task?.metadata?.height;
+  const metadataDuration = task?.metadata?.duration;
+  const widthLabel = typeof metadataWidth === "number" ? metadataWidth : "--";
+  const heightLabel = typeof metadataHeight === "number" ? metadataHeight : "--";
+  const durationLabel =
+    typeof metadataDuration === "number" ? metadataDuration.toFixed(2) : "--";
 
   return (
     <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -32,15 +39,10 @@ export default function TaskDetail({ task }: TaskDetailProps) {
         ) : null}
         <div className="mt-3 text-xs text-white/60">
           <p>
-            Duration:{" "}
-            {typeof task?.metadata?.duration === "number"
-              ? task?.metadata?.duration.toFixed(2)
-              : "--"}
-            s
+            Duration: {durationLabel}s
           </p>
           <p>
-            Resolution: {task?.metadata?.width ?? "--"}x
-            {task?.metadata?.height ?? "--"}
+            Resolution: {widthLabel}x{heightLabel}
           </p>
         </div>
       </div>
