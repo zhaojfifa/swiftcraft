@@ -21,9 +21,11 @@ class TaskRecord(BaseModel):
     progress: int = 0
 
     created_at: str = Field(default_factory=_now_iso)
+    input_key: Optional[str] = None
     input_video_url: Optional[str] = None
     input_image_url: Optional[str] = None
     thumb_url: Optional[str] = None
+    output_key: Optional[str] = None
     output_url: Optional[str] = None
     error: Optional[str] = None
 
