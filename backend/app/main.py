@@ -5,13 +5,14 @@ import uuid
 from pathlib import Path
 from typing import List
 
-from fastapi import BackgroundTasks, Body, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.models.task import TaskRecord
 from app.services.r2_client import R2Client
+from app.services.preset_resolver import is_supported, resolve_input_key
 from app.services.task_manager import TaskManager
 from app.services.task_store import TaskStore
 from app.utils.media import generate_thumbnail, probe_video, save_upload_file
@@ -56,7 +57,9 @@ async def health() -> dict:
 class CreateTaskRequest(BaseModel):
     service: str = Field(default="swap")
     mode: str = Field(default="baseline")
-    input_key: str = Field(..., description="R2 object key returned by /api/v1/upload-url")
+    input_key: str | None = Field(
+        default=None, description="R2 object key returned by /api/v1/upload-url"
+    )
     content_type: str | None = Field(default=None)
 
 
@@ -73,40 +76,100 @@ def _mock_copy_result_to_outputs(task_id: str, preset_key: str) -> None:
     store.set_output(task_id, output_key, output_url)
 
 
-@app.post("/api/v1/tasks")
+@app.post(
+    "/api/v1/tasks",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "service": {"type": "string", "example": "swap"},
+                            "mode": {"type": "string", "example": "baseline"},
+                            "input_key": {"type": "string", "example": "presets/swap/baseline.mp4"},
+                        },
+                        "required": ["service", "mode"],
+                    },
+                    "description": "JSON mode for R2 preset/mock input.",
+                },
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "service": {"type": "string"},
+                            "mode": {"type": "string"},
+                            "input_key": {"type": "string"},
+                            "video_file": {"type": "string", "format": "binary"},
+                            "image_file": {"type": "string", "format": "binary"},
+                        },
+                    },
+                    "description": "Multipart mode for local uploads.",
+                },
+            }
+        }
+    },
+)
 async def create_task(
     background_tasks: BackgroundTasks,
+    request: Request,
+    service: str | None = Form(None),
+    mode: str | None = Form("baseline"),
+    input_key: str | None = Form(None),
     video_file: UploadFile | None = File(None),
     image_file: UploadFile | None = File(None),
-    mode: str = Form("baseline"),
-    service: str = Form("swap"),
     face_enhancer: str | None = Form(None),
-    req: CreateTaskRequest | None = Body(None),
 ) -> dict:
-    if video_file or image_file:
-        if not video_file or not video_file.filename:
-            raise HTTPException(status_code=400, detail="video_file is required.")
-        if not image_file or not image_file.filename:
-            raise HTTPException(status_code=400, detail="image_file is required.")
+    content_type = (request.headers.get("content-type") or "").lower()
+    if content_type.startswith("application/json"):
+        try:
+            raw = await request.json()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid JSON payload.")
+        try:
+            payload = CreateTaskRequest(**(raw or {}))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON payload: {exc}")
+        service = payload.service
+        mode = payload.mode
+        input_key = payload.input_key
 
-        video_path = save_upload_file(video_file, UPLOAD_DIR)
-        image_path = save_upload_file(image_file, UPLOAD_DIR)
-        input_video_url = f"/static/data/uploads/{video_path.name}"
-        input_image_url = f"/static/data/uploads/{image_path.name}"
-        metadata = probe_video(video_path)
-        thumb_path = generate_thumbnail(video_path, THUMB_DIR)
+    resolved_service = service or "swap"
+    resolved_mode = mode or "baseline"
+
+    if video_file or image_file:
+        if video_file and not video_file.filename:
+            raise HTTPException(status_code=400, detail="video_file is invalid.")
+        if image_file and not image_file.filename:
+            raise HTTPException(status_code=400, detail="image_file is invalid.")
+
+        input_video_url = None
+        input_image_url = None
         thumb_url = None
-        if thumb_path:
-            thumb_url = f"/static/data/thumbnails/{thumb_path.name}"
+        metadata_dict = {}
+        video_path = None
+        image_path = None
+
+        if video_file and video_file.filename:
+            video_path = save_upload_file(video_file, UPLOAD_DIR)
+            input_video_url = f"/static/data/uploads/{video_path.name}"
+            metadata = probe_video(video_path)
+            metadata_dict = metadata.dict() if metadata else {}
+            thumb_path = generate_thumbnail(video_path, THUMB_DIR)
+            if thumb_path:
+                thumb_url = f"/static/data/thumbnails/{thumb_path.name}"
+
+        if image_file and image_file.filename:
+            image_path = save_upload_file(image_file, UPLOAD_DIR)
+            input_image_url = f"/static/data/uploads/{image_path.name}"
 
         task_id = uuid.uuid4().hex
-        metadata_dict = metadata.dict() if metadata else {}
         if face_enhancer is not None:
             metadata_dict["face_enhancer"] = face_enhancer
         store.create_task(
             task_id,
-            service,
-            mode,
+            resolved_service,
+            resolved_mode,
             metadata_dict,
             thumb_url,
             input_video_url,
@@ -119,24 +182,30 @@ async def create_task(
         task_manager.start(task_id)
         return {"task_id": task_id}
 
-    if not req:
-        raise HTTPException(status_code=400, detail="input_key is required.")
+    if not input_key:
+        if not is_supported(resolved_service, resolved_mode):
+            raise HTTPException(status_code=400, detail="Unsupported service/mode")
+        input_key = resolve_input_key(resolved_service, resolved_mode, input_key)
+
+    if not input_key:
+        raise HTTPException(
+            status_code=400,
+            detail="one of input_key/video_file/image_file is required",
+        )
 
     task_id = uuid.uuid4().hex
     store.create_task(
         task_id,
-        req.service,
-        req.mode,
+        resolved_service,
+        resolved_mode,
         {},
         None,
         None,
         None,
-        input_key=req.input_key,
+        input_key=input_key,
     )
     store.set_stage(task_id, "running", 5)
-
-    preset_key = os.getenv("R2_PRESET_KEY", "presets/demo_perfect.mp4")
-    background_tasks.add_task(_mock_copy_result_to_outputs, task_id, preset_key)
+    background_tasks.add_task(_mock_copy_result_to_outputs, task_id, input_key)
     return {"task_id": task_id}
 
 
