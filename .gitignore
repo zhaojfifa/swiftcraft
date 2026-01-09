@@ -5,3 +5,6 @@ backend/.venv/
 frontend/.next/
 frontend/node_modules/
 *.pyc
+
+# Preset MP4s are stored in R2; do not commit to git
+presets/**/*.mp4
