@@ -31,6 +31,7 @@ class TaskStore:
         thumb_url: Optional[str],
         input_video_url: Optional[str],
         input_image_url: Optional[str],
+        input_key: Optional[str] = None,
     ) -> TaskRecord:
         record = TaskRecord(
             task_id=task_id,
@@ -45,6 +46,7 @@ class TaskStore:
             thumb_url=thumb_url,
             input_video_url=input_video_url,
             input_image_url=input_image_url,
+            input_key=input_key,
         )
         with self._lock:
             self._tasks[task_id] = record
@@ -98,6 +100,18 @@ class TaskStore:
                 "status": "done",
                 "stage": "completed",
                 "progress": 100,
+                "output_url": output_url,
+            },
+        )
+
+    def set_output(self, task_id: str, output_key: str, output_url: str) -> None:
+        self._update(
+            task_id,
+            {
+                "status": "done",
+                "stage": "completed",
+                "progress": 100,
+                "output_key": output_key,
                 "output_url": output_url,
             },
         )

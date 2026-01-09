@@ -70,3 +70,13 @@ class R2Client:
             "headers": {"Content-Type": content_type},
             "expires_in": expires_in,
         }
+
+    def copy_object(self, src_key: str, dst_key: str) -> None:
+        src_key = src_key.lstrip("/")
+        dst_key = dst_key.lstrip("/")
+        copy_source = {"Bucket": self.cfg.bucket, "Key": src_key}
+        self.s3.copy_object(
+            Bucket=self.cfg.bucket,
+            Key=dst_key,
+            CopySource=copy_source,
+        )
