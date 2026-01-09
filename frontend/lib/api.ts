@@ -1,7 +1,16 @@
 ﻿export type CreateTaskPayload = {
   service: string;
   mode: string;
-  input_key: string;
+
+  // Preset/R2 mock mode
+  input_key?: string;
+
+  // Upload mode (WorkspaceClient uses these)
+  videoFile?: File | null;
+  imageFile?: File | null;
+
+  // Allow forward-compatible extra fields
+  [k: string]: any;
 };
 
 export type CreateTaskResponse = {
@@ -16,11 +25,14 @@ export type TaskRecord = {
   service?: string;
   mode?: string;
   status?: TaskStatus | string;
+  stage?: string;
   progress?: number;
+  thumb_url?: string | null;
   output_key?: string | null;
   output_url?: string | null;
   error?: string | null;
   logs?: string[] | null;
+  metadata?: Record<string, unknown>;
   created_at?: string;
   updated_at?: string;
 };
@@ -44,21 +56,55 @@ export async function createTask(payload: CreateTaskPayload): Promise<CreateTask
   const base = getApiBase();
   if (!base) throw new Error('NEXT_PUBLIC_API_BASE is not set');
 
-  const res = await fetch(`${base}/api/v1/tasks`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    cache: 'no-store',
-  });
+  const hasFiles = !!payload.videoFile || !!payload.imageFile;
 
-  if (!res.ok) {
-    const err = await readJson<{ detail?: any }>(res).catch(() => ({ detail: 'Unknown error' }));
-    throw new Error(`createTask failed (HTTP ${res.status}): ${JSON.stringify(err.detail ?? err)}`);
+  let res: Response;
+
+  if (hasFiles) {
+    const fd = new FormData();
+    fd.append('service', payload.service);
+    fd.append('mode', payload.mode);
+
+    if (payload.videoFile) fd.append('video_file', payload.videoFile);
+    if (payload.imageFile) fd.append('image_file', payload.imageFile);
+
+    for (const [key, value] of Object.entries(payload)) {
+      if (['service', 'mode', 'videoFile', 'imageFile'].includes(key)) continue;
+      if (value === undefined || value === null) continue;
+      fd.append(key, typeof value === 'string' ? value : JSON.stringify(value));
+    }
+
+    res = await fetch(`${base}/api/v1/tasks`, {
+      method: 'POST',
+      body: fd,
+      cache: 'no-store',
+    });
+  } else {
+    res = await fetch(`${base}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      cache: 'no-store',
+    });
   }
 
-  const data = await readJson<CreateTaskResponse>(res);
-  if (!data?.task_id) throw new Error('createTask: missing task_id');
-  return data;
+  const text = await res.text();
+  let json: any = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = null;
+  }
+
+  if (!res.ok) {
+    const detail = json?.detail ?? text ?? 'Unknown error';
+    throw new Error(
+      `createTask failed (HTTP ${res.status}): ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`
+    );
+  }
+
+  if (!json?.task_id) throw new Error('createTask: missing task_id');
+  return json as CreateTaskResponse;
 }
 
 export async function getTask(taskId: string): Promise<TaskRecord> {
