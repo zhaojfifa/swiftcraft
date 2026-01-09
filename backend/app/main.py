@@ -30,6 +30,10 @@ task_manager = TaskManager(store, profile=os.getenv("SWIFTCRAFT_PROFILE", "dev")
 
 app = FastAPI(title="SwiftCraft Demo API")
 
+from app.api.v1.upload import router as upload_router
+
+app.include_router(upload_router, prefix="/api/v1")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
