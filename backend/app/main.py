@@ -12,7 +12,6 @@ from pydantic import BaseModel, Field
 
 from app.models.task import TaskRecord
 from app.services.r2_client import R2Client
-from app.services.preset_resolver import is_supported, resolve_input_key
 from app.services.task_manager import TaskManager
 from app.services.task_store import TaskStore
 from app.utils.media import generate_thumbnail, probe_video, save_upload_file
@@ -63,7 +62,11 @@ class CreateTaskRequest(BaseModel):
     content_type: str | None = Field(default=None)
 
 
-def _mock_copy_result_to_outputs(task_id: str, preset_key: str) -> None:
+def _public_cdn_base() -> str:
+    return os.getenv("PUBLIC_CDN_BASE_URL", "https://cdn.swiftcraft.ai").rstrip("/")
+
+
+def _mock_copy_result_to_outputs(task_id: str, input_key: str) -> None:
     """
     Mock pipeline:
       Copy a preset video in R2 to outputs/{task_id}/result.mp4,
@@ -71,8 +74,8 @@ def _mock_copy_result_to_outputs(task_id: str, preset_key: str) -> None:
     """
     r2 = R2Client()
     output_key = f"outputs/{task_id}/result.mp4"
-    r2.copy_object(src_key=preset_key, dst_key=output_key)
-    output_url = r2.public_url(output_key)
+    r2.copy_object(src_key=input_key, dst_key=output_key)
+    output_url = f"{_public_cdn_base()}/{output_key}"
     store.set_output(task_id, output_key, output_url)
 
 
@@ -89,7 +92,7 @@ def _mock_copy_result_to_outputs(task_id: str, preset_key: str) -> None:
                             "mode": {"type": "string", "example": "baseline"},
                             "input_key": {"type": "string", "example": "presets/swap/baseline.mp4"},
                         },
-                        "required": ["service", "mode"],
+                        "required": ["service", "mode", "input_key"],
                     },
                     "description": "JSON mode for R2 preset/mock input.",
                 },
@@ -133,6 +136,8 @@ async def create_task(
         service = payload.service
         mode = payload.mode
         input_key = payload.input_key
+        if not input_key:
+            raise HTTPException(status_code=400, detail="input_key is required.")
 
     resolved_service = service or "swap"
     resolved_mode = mode or "baseline"
@@ -166,7 +171,7 @@ async def create_task(
         task_id = uuid.uuid4().hex
         if face_enhancer is not None:
             metadata_dict["face_enhancer"] = face_enhancer
-        store.create_task(
+        record = store.create_task(
             task_id,
             resolved_service,
             resolved_mode,
@@ -180,12 +185,7 @@ async def create_task(
             {"video_path": video_path, "image_path": image_path},
         )
         task_manager.start(task_id)
-        return {"task_id": task_id}
-
-    if not input_key:
-        if not is_supported(resolved_service, resolved_mode):
-            raise HTTPException(status_code=400, detail="Unsupported service/mode")
-        input_key = resolve_input_key(resolved_service, resolved_mode, input_key)
+        return record
 
     if not input_key:
         raise HTTPException(
@@ -194,7 +194,7 @@ async def create_task(
         )
 
     task_id = uuid.uuid4().hex
-    store.create_task(
+    record = store.create_task(
         task_id,
         resolved_service,
         resolved_mode,
@@ -206,7 +206,7 @@ async def create_task(
     )
     store.set_stage(task_id, "running", 5)
     background_tasks.add_task(_mock_copy_result_to_outputs, task_id, input_key)
-    return {"task_id": task_id}
+    return record
 
 
 @app.get("/api/v1/tasks/{task_id}", response_model=TaskRecord)
