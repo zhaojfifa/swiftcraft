@@ -11,7 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.models.task import TaskRecord
+from app.routes.presets import router as presets_router
 from app.services.r2_client import R2Client
+from app.services.presets import resolve_input_key
 from app.services.task_manager import TaskManager
 from app.services.task_store import TaskStore
 from app.utils.media import generate_thumbnail, probe_video, save_upload_file
@@ -35,6 +37,7 @@ app = FastAPI(title="SwiftCraft Demo API")
 from app.api.v1.upload import router as upload_router
 
 app.include_router(upload_router, prefix="/api/v1")
+app.include_router(presets_router, prefix="/api/v1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -92,7 +95,7 @@ def _mock_copy_result_to_outputs(task_id: str, input_key: str) -> None:
                             "mode": {"type": "string", "example": "baseline"},
                             "input_key": {"type": "string", "example": "presets/swap/baseline.mp4"},
                         },
-                        "required": ["service", "mode", "input_key"],
+                        "required": ["service", "mode"],
                     },
                     "description": "JSON mode for R2 preset/mock input.",
                 },
@@ -137,7 +140,9 @@ async def create_task(
         mode = payload.mode
         input_key = payload.input_key
         if not input_key:
-            raise HTTPException(status_code=400, detail="input_key is required.")
+            input_key = resolve_input_key(service, mode)
+        if not input_key:
+            raise HTTPException(status_code=400, detail="unknown service/mode")
 
     resolved_service = service or "swap"
     resolved_mode = mode or "baseline"
@@ -188,10 +193,10 @@ async def create_task(
         return record
 
     if not input_key:
-        raise HTTPException(
-            status_code=400,
-            detail="one of input_key/video_file/image_file is required",
-        )
+        input_key = resolve_input_key(resolved_service, resolved_mode)
+
+    if not input_key:
+        raise HTTPException(status_code=400, detail="unknown service/mode")
 
     task_id = uuid.uuid4().hex
     record = store.create_task(
