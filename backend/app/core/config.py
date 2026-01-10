@@ -20,6 +20,8 @@ class Settings:
     AKOOL_POLL_INTERVAL_SEC: int = int(os.getenv("AKOOL_POLL_INTERVAL_SEC", "3"))
     AKOOL_TIMEOUT_SEC: int = int(os.getenv("AKOOL_TIMEOUT_SEC", "180"))
     AKOOL_DRY_RUN: bool = _get_bool(os.getenv("AKOOL_DRY_RUN"), True)
+    PRESET_MAP_JSON: str = os.getenv("PRESET_MAP_JSON", "")
+    PUBLIC_CDN_BASE_URL: str = os.getenv("PUBLIC_CDN_BASE_URL", "https://cdn.swiftcraft.ai")
 
 
 settings = Settings()
