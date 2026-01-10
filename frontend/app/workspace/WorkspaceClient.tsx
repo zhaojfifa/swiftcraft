@@ -5,14 +5,16 @@ import { useSearchParams } from "next/navigation";
 import { UploadCloud, Play, Terminal } from "lucide-react";
 import Link from "next/link";
 
-import { createTask, getTask, TaskRecord } from "../../lib/api";
+import { createTask, getTask, getUploadUrl, TaskRecord } from "../../lib/api";
+import { PRESETS, SwapMode } from "../../lib/presets";
 import { resolveAssetUrl } from "../../lib/url";
 
 export default function WorkspaceClient() {
   const searchParams = useSearchParams();
   const serviceType = searchParams.get("service") || "swap";
 
-  const [mode, setMode] = useState<"baseline" | "intelligent">("intelligent");
+  const [mode, setMode] = useState<SwapMode>("intelligent");
+  const [inputSource, setInputSource] = useState<"preset" | "upload">("preset");
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [inputVideoUrl, setInputVideoUrl] = useState<string | null>(null);
@@ -62,9 +64,29 @@ export default function WorkspaceClient() {
     };
   }, [imageFile]);
 
+  const presetKey = PRESETS.swap[mode] ?? `presets/${serviceType}/${mode}.mp4`;
+
+  const uploadVideoToR2 = async (file: File) => {
+    const contentType = file.type || "application/octet-stream";
+    const upload = await getUploadUrl({
+      filename: file.name,
+      content_type: contentType,
+      purpose: "uploads"
+    });
+    const putRes = await fetch(upload.upload_url, {
+      method: "PUT",
+      headers: upload.headers,
+      body: file
+    });
+    if (!putRes.ok) {
+      throw new Error(`Upload failed (HTTP ${putRes.status})`);
+    }
+    return upload.file_key;
+  };
+
   const handleRun = async () => {
-    if (!videoFile || !imageFile) {
-      setError("Please upload both a source video and a target image.");
+    if (inputSource === "upload" && !videoFile) {
+      setError("Please upload a source video for upload mode.");
       return;
     }
     setError(null);
@@ -72,12 +94,12 @@ export default function WorkspaceClient() {
     setTask(null);
 
     try {
+      const input_key =
+        inputSource === "preset" ? presetKey : await uploadVideoToR2(videoFile as File);
       const result = await createTask({
-        videoFile,
-        imageFile,
-        mode,
         service: serviceType,
-        faceEnhancer
+        mode,
+        input_key
       });
       const taskId = result.task_id;
       let ticks = 0;
@@ -109,23 +131,22 @@ export default function WorkspaceClient() {
       }, 800);
     } catch (err) {
       setIsRunning(false);
-      setError("Failed to start task.");
+      setError(err instanceof Error ? err.message : "Failed to start task.");
     }
   };
 
   const isDone = (task?.status || "").toLowerCase() === "done";
   const outputUrl = isDone ? resolveAssetUrl(task?.output_url ?? null) : null;
-  // Preview priority: output (done) -> local upload -> empty placeholder.
-  const previewUrl = outputUrl ?? inputVideoUrl;
+  // Preview priority: output (done) -> local upload (upload mode) -> empty placeholder.
+  const previewUrl = outputUrl ?? (inputSource === "upload" ? inputVideoUrl : null);
   const logs = task?.logs ?? [];
   const taskId = task?.task_id ?? task?.id ?? "";
-  const canRun = Boolean(videoFile && imageFile) && !isRunning;
+  const canRun = (inputSource === "preset" || Boolean(videoFile)) && !isRunning;
   const payloadPreview = {
     service: serviceType,
     mode,
-    faceEnhancer,
-    video: videoFile ? { name: videoFile.name, size: videoFile.size } : null,
-    image: imageFile ? { name: imageFile.name, size: imageFile.size } : null
+    input_key: inputSource === "preset" ? presetKey : "(uploaded key)",
+    source: inputSource
   };
   const jsonPreview = {
     request: payloadPreview,
@@ -134,11 +155,8 @@ export default function WorkspaceClient() {
   const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:10000";
   const curlSnippet = [
     `curl -X POST \"${apiBase}/api/v1/tasks\"`,
-    "  -F \"video_file=@<path/to/video.mp4>\"",
-    "  -F \"image_file=@<path/to/image.jpg>\"",
-    `  -F \"mode=${mode}\"`,
-    `  -F \"service=${serviceType}\"`,
-    `  -F \"face_enhancer=${faceEnhancer}\"`
+    "  -H \"Content-Type: application/json\"",
+    `  -d '{\"service\":\"${serviceType}\",\"mode\":\"${mode}\",\"input_key\":\"${presetKey}\"}'`
   ].join(" \\\n");
 
   return (
@@ -242,6 +260,44 @@ export default function WorkspaceClient() {
             {activeTab === "playground" ? (
               <div className="space-y-8">
                 <div className="space-y-3">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    Input Source
+                  </label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setInputSource("preset")}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                        inputSource === "preset"
+                          ? "border-blue-600 text-blue-600 bg-blue-50"
+                          : "border-slate-200 text-slate-500 bg-white"
+                      }`}
+                    >
+                      Preset
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setInputSource("upload")}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                        inputSource === "upload"
+                          ? "border-blue-600 text-blue-600 bg-blue-50"
+                          : "border-slate-200 text-slate-500 bg-white"
+                      }`}
+                    >
+                      Upload
+                    </button>
+                  </div>
+                  {inputSource === "preset" ? (
+                    <div className="text-xs text-slate-500">
+                      Using preset input_key: <span className="font-mono">{presetKey}</span>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-500">Upload a source video to generate input_key.</div>
+                  )}
+                </div>
+                {inputSource === "upload" ? (
+                  <>
+                    <div className="space-y-3">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex justify-between">
                     Source Video
                     <span className="text-[10px] font-normal text-slate-400">MP4, 4-8s</span>
@@ -292,7 +348,7 @@ export default function WorkspaceClient() {
                   </div>
                 </div>
 
-                <div className="space-y-3">
+                    <div className="space-y-3">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                     {serviceType === "swap" ? "Target Face" : "Character Reference"}
                   </label>
@@ -340,24 +396,26 @@ export default function WorkspaceClient() {
                   </div>
                 </div>
 
-                <div className="pt-6 border-t border-slate-100">
-                  <div className="flex justify-between items-center py-2">
-                    <span className="text-sm font-medium text-slate-700">Face Enhancer</span>
-                    <button
-                      type="button"
-                      onClick={() => setFaceEnhancer((prev) => !prev)}
-                      className={`w-10 h-6 rounded-full relative cursor-pointer shadow-inner ${
-                        faceEnhancer ? "bg-blue-600" : "bg-slate-300"
-                      }`}
-                    >
-                      <div
-                        className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${
-                          faceEnhancer ? "right-1" : "left-1"
-                        }`}
-                      ></div>
-                    </button>
-                  </div>
-                </div>
+                    <div className="pt-6 border-t border-slate-100">
+                      <div className="flex justify-between items-center py-2">
+                        <span className="text-sm font-medium text-slate-700">Face Enhancer</span>
+                        <button
+                          type="button"
+                          onClick={() => setFaceEnhancer((prev) => !prev)}
+                          className={`w-10 h-6 rounded-full relative cursor-pointer shadow-inner ${
+                            faceEnhancer ? "bg-blue-600" : "bg-slate-300"
+                          }`}
+                        >
+                          <div
+                            className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${
+                              faceEnhancer ? "right-1" : "left-1"
+                            }`}
+                          ></div>
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                ) : null}
                 {error ? <p className="text-xs text-rose-500">{error}</p> : null}
                 {taskId ? (
                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">

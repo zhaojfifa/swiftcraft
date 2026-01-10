@@ -37,6 +37,20 @@ export type TaskRecord = {
   updated_at?: string;
 };
 
+export type UploadUrlRequest = {
+  filename: string;
+  content_type: string;
+  purpose?: string;
+};
+
+export type UploadUrlResponse = {
+  file_key: string;
+  upload_url: string;
+  public_url: string;
+  expires_in: number;
+  headers: Record<string, string>;
+};
+
 function getApiBase(): string {
   const base = process.env.NEXT_PUBLIC_API_BASE || '';
   return base.replace(/\/+$/, '');
@@ -123,4 +137,23 @@ export async function getTask(taskId: string): Promise<TaskRecord> {
 
   const data = await readJson<TaskRecord>(res);
   return data;
+}
+
+export async function getUploadUrl(payload: UploadUrlRequest): Promise<UploadUrlResponse> {
+  const base = getApiBase();
+  if (!base) throw new Error('NEXT_PUBLIC_API_BASE is not set');
+
+  const res = await fetch(`${base}/api/v1/upload-url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    cache: 'no-store',
+  });
+
+  if (!res.ok) {
+    const err = await readJson<{ detail?: any }>(res).catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(`getUploadUrl failed (HTTP ${res.status}): ${JSON.stringify(err.detail ?? err)}`);
+  }
+
+  return readJson<UploadUrlResponse>(res);
 }
