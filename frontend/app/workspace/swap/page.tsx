@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { createTask, getTask, TaskRecord } from '../../../lib/api';
-import { PRESETS, SwapMode } from '../../../lib/presets';
+import { PRESETS, SwapMode, resolvePresetInputKey } from '../../../lib/presets';
 
 type UiState =
   | { kind: 'idle' }
@@ -19,7 +19,10 @@ export default function SwapWorkspacePage() {
 
   const pollTimer = useRef<number | null>(null);
 
-  const inputKey = useMemo(() => PRESETS.swap[mode], [mode]);
+  const inputKey = useMemo(
+    () => resolvePresetInputKey('swap', mode.toLowerCase()),
+    [mode]
+  );
 
   useEffect(() => {
     return () => {
@@ -34,7 +37,7 @@ export default function SwapWorkspacePage() {
 
       const resp = await createTask({
         service: 'swap',
-        mode,
+        mode: mode.toLowerCase(),
         input_key: inputKey,
       });
 
