@@ -17,6 +17,7 @@ from app.services.presets import resolve_input_key
 from app.services.task_manager import TaskManager
 from app.services.task_store import TaskStore
 from app.utils.media import generate_thumbnail, probe_video, save_upload_file
+from app.utils.serialize import to_jsonable_dict
 
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parents[1]
@@ -186,7 +187,7 @@ async def create_task(
             {"video_path": video_path, "image_path": image_path},
         )
         task_manager.start(task_id)
-        return record
+        return to_jsonable_dict(record)
     if not input_key:
         try:
             input_key = resolve_input_key(resolved_service, resolved_mode)
@@ -209,7 +210,7 @@ async def create_task(
     )
     store.set_stage(task_id, "running", 5)
     background_tasks.add_task(_mock_copy_result_to_outputs, task_id, input_key)
-    return record
+    return to_jsonable_dict(record)
 
 
 @app.get("/api/v1/tasks/{task_id}", response_model=TaskRecord)
@@ -217,9 +218,9 @@ async def get_task(task_id: str) -> TaskRecord:
     record = store.get_task(task_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Task not found.")
-    return record
+    return to_jsonable_dict(record)
 
 
 @app.get("/api/v1/tasks", response_model=List[TaskRecord])
 async def list_tasks(limit: int = 20) -> List[TaskRecord]:
-    return store.list_tasks(limit=limit)
+    return [to_jsonable_dict(task) for task in store.list_tasks(limit=limit)]
