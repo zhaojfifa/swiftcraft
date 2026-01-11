@@ -1,17 +1,10 @@
 ﻿export type CreateTaskPayload = {
   service: string;
   mode: string;
-
-  // Preset/R2 mock mode
   input_key?: string;
-
-  // Upload mode (WorkspaceClient uses these)
-  videoFile?: File | null;
-  imageFile?: File | null;
-
-  // Allow forward-compatible extra fields
-  [k: string]: any;
+  face_enhancer?: string | null;
 };
+
 
 export type CreateTaskResponse = {
   task_id: string;
@@ -70,39 +63,25 @@ export async function createTask(payload: CreateTaskPayload): Promise<CreateTask
   const base = getApiBase();
   if (!base) throw new Error('NEXT_PUBLIC_API_BASE is not set');
 
-  const hasFiles = !!payload.videoFile || !!payload.imageFile;
+  const service = (payload.service || '').toLowerCase();
+  const mode = (payload.mode || '').toLowerCase();
 
-  let res: Response;
+  const body: Record<string, unknown> = { service, mode };
+  if (payload.input_key) body.input_key = payload.input_key;
+  if (payload.face_enhancer !== undefined) body.face_enhancer = payload.face_enhancer;
 
-  if (hasFiles) {
-    const fd = new FormData();
-    fd.append('service', payload.service);
-    fd.append('mode', payload.mode);
-
-    if (payload.videoFile) fd.append('video_file', payload.videoFile);
-    if (payload.imageFile) fd.append('image_file', payload.imageFile);
-
-    for (const [key, value] of Object.entries(payload)) {
-      if (['service', 'mode', 'videoFile', 'imageFile'].includes(key)) continue;
-      if (value === undefined || value === null) continue;
-      fd.append(key, typeof value === 'string' ? value : JSON.stringify(value));
-    }
-
-    res = await fetch(`${base}/api/v1/tasks`, {
-      method: 'POST',
-      body: fd,
-      cache: 'no-store',
-    });
-  } else {
-    res = await fetch(`${base}/api/v1/tasks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      cache: 'no-store',
-    });
-  }
+  const res = await fetch(`${base}/api/v1/tasks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
+    cache: 'no-store',
+  });
 
   const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`POST /api/v1/tasks failed (${res.status}): ${text}`);
+  }
+
   let json: any = null;
   try {
     json = text ? JSON.parse(text) : null;
@@ -110,16 +89,10 @@ export async function createTask(payload: CreateTaskPayload): Promise<CreateTask
     json = null;
   }
 
-  if (!res.ok) {
-    const detail = json?.detail ?? text ?? 'Unknown error';
-    throw new Error(
-      `createTask failed (HTTP ${res.status}): ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`
-    );
-  }
-
   if (!json?.task_id) throw new Error('createTask: missing task_id');
   return json as CreateTaskResponse;
 }
+
 
 export async function getTask(taskId: string): Promise<TaskRecord> {
   const base = getApiBase();

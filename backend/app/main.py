@@ -139,13 +139,9 @@ async def create_task(
         service = payload.service
         mode = payload.mode
         input_key = payload.input_key
-        if not input_key:
-            input_key = resolve_input_key(service, mode)
-        if not input_key:
-            raise HTTPException(status_code=400, detail="unknown service/mode")
 
-    resolved_service = service or "swap"
-    resolved_mode = mode or "baseline"
+    resolved_service = (service or "swap").lower()
+    resolved_mode = (mode or "baseline").lower()
 
     if video_file or image_file:
         if video_file and not video_file.filename:
@@ -191,12 +187,14 @@ async def create_task(
         )
         task_manager.start(task_id)
         return record
+    if not input_key:
+        try:
+            input_key = resolve_input_key(resolved_service, resolved_mode)
+        except Exception:
+            raise HTTPException(status_code=400, detail="preset not found for service/mode")
 
     if not input_key:
-        input_key = resolve_input_key(resolved_service, resolved_mode)
-
-    if not input_key:
-        raise HTTPException(status_code=400, detail="unknown service/mode")
+        raise HTTPException(status_code=400, detail="input_key is required.")
 
     task_id = uuid.uuid4().hex
     record = store.create_task(
