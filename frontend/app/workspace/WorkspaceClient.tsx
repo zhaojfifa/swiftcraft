@@ -6,7 +6,7 @@ import { UploadCloud, Play, Terminal } from "lucide-react";
 import Link from "next/link";
 
 import { createTask, getTask, getUploadUrl, TaskRecord } from "../../lib/api";
-import { PRESETS, SwapMode } from "../../lib/presets";
+import { SwapMode, resolvePresetInputKey } from "../../lib/presets";
 import { resolveAssetUrl } from "../../lib/url";
 
 export default function WorkspaceClient() {
@@ -64,7 +64,10 @@ export default function WorkspaceClient() {
     };
   }, [imageFile]);
 
-  const presetKey = PRESETS.swap[mode] ?? `presets/${serviceType}/${mode}.mp4`;
+  const serviceApi = String(serviceType || "swap").toLowerCase();
+  const modeApi = String(mode || "baseline").toLowerCase() as SwapMode;
+  const presetKey = resolvePresetInputKey(serviceApi, modeApi);
+  const cdnBase = (process.env.NEXT_PUBLIC_CDN_BASE_URL || "").replace(/\/+$/, "");
 
   const uploadVideoToR2 = async (file: File) => {
     const contentType = file.type || "application/octet-stream";
@@ -97,8 +100,8 @@ export default function WorkspaceClient() {
       const input_key =
         inputSource === "preset" ? presetKey : await uploadVideoToR2(videoFile as File);
       const result = await createTask({
-        service: serviceType,
-        mode,
+        service: serviceApi,
+        mode: modeApi,
         input_key
       });
       const taskId = result.task_id;
@@ -136,15 +139,18 @@ export default function WorkspaceClient() {
   };
 
   const isDone = (task?.status || "").toLowerCase() === "done";
-  const outputUrl = isDone ? resolveAssetUrl(task?.output_url ?? null) : null;
+  const outputUrl = isDone
+    ? resolveAssetUrl(task?.output_url ?? null) ??
+      (task?.output_key && cdnBase ? `${cdnBase}/${task.output_key}` : null)
+    : null;
   // Preview priority: output (done) -> local upload (upload mode) -> empty placeholder.
   const previewUrl = outputUrl ?? (inputSource === "upload" ? inputVideoUrl : null);
   const logs = task?.logs ?? [];
   const taskId = task?.task_id ?? task?.id ?? "";
   const canRun = (inputSource === "preset" || Boolean(videoFile)) && !isRunning;
   const payloadPreview = {
-    service: serviceType,
-    mode,
+    service: serviceApi,
+    mode: modeApi,
     input_key: inputSource === "preset" ? presetKey : "(uploaded key)",
     source: inputSource
   };
@@ -156,7 +162,7 @@ export default function WorkspaceClient() {
   const curlSnippet = [
     `curl -X POST \"${apiBase}/api/v1/tasks\"`,
     "  -H \"Content-Type: application/json\"",
-    `  -d '{\"service\":\"${serviceType}\",\"mode\":\"${mode}\",\"input_key\":\"${presetKey}\"}'`
+    `  -d '{\"service\":\"${serviceApi}\",\"mode\":\"${modeApi}\",\"input_key\":\"${presetKey}\"}'`
   ].join(" \\\n");
 
   return (
