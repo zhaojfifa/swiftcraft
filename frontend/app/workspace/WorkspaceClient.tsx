@@ -35,13 +35,17 @@ export default function WorkspaceClient() {
   const [activeTab, setActiveTab] = useState<"playground" | "json" | "api">("playground");
   const pollRef = useRef<number | null>(null);
   const pollTokenRef = useRef(0);
+  const cancelPolling = () => {
+    if (pollRef.current) {
+      window.clearTimeout(pollRef.current);
+      pollRef.current = null;
+    }
+    pollTokenRef.current += 1;
+  };
 
   useEffect(() => {
     return () => {
-      if (pollRef.current) {
-        window.clearTimeout(pollRef.current);
-      }
-      pollTokenRef.current += 1;
+      cancelPolling();
     };
   }, []);
 
@@ -50,10 +54,7 @@ export default function WorkspaceClient() {
       setInputVideoUrl(null);
       return;
     }
-    if (pollRef.current) {
-      window.clearTimeout(pollRef.current);
-      pollRef.current = null;
-    }
+    cancelPolling();
     setIsRunning(false);
     setTask(null);
     const previewUrl = URL.createObjectURL(videoFile);
@@ -99,6 +100,7 @@ export default function WorkspaceClient() {
   };
 
   const handleRun = async () => {
+    cancelPolling();
     if (inputSource === "upload" && !videoFile) {
       setError("Please upload a source video for upload mode.");
       return;
@@ -142,6 +144,10 @@ export default function WorkspaceClient() {
           setTask(latest);
           if (shouldStopPolling(latest)) {
             setIsRunning(false);
+            if (pollRef.current) {
+              window.clearTimeout(pollRef.current);
+              pollRef.current = null;
+            }
             return;
           }
         } catch (err) {
@@ -152,6 +158,10 @@ export default function WorkspaceClient() {
 
         if (Date.now() - startAt > MAX_POLL_MS) {
           setIsRunning(false);
+          if (pollRef.current) {
+            window.clearTimeout(pollRef.current);
+            pollRef.current = null;
+          }
           return;
         }
 
@@ -165,12 +175,10 @@ export default function WorkspaceClient() {
     }
   };
 
-  const isDone = (task?.status || "").toLowerCase() === "done";
-  const outputUrl = isDone
-    ? resolveAssetUrl(task?.output_url ?? null) ??
-      (task?.output_key && cdnBase ? `${cdnBase}/${task.output_key}` : null)
-    : null;
-  // Preview priority: output (done) -> local upload (upload mode) -> empty placeholder.
+  const outputUrl =
+    resolveAssetUrl(task?.output_url ?? null) ??
+    (task?.output_key && cdnBase ? `${cdnBase}/${task.output_key}` : null);
+  // Preview priority: output -> local upload (upload mode) -> empty placeholder.
   const previewUrl = outputUrl ?? (inputSource === "upload" ? inputVideoUrl : null);
   const logs = task?.logs ?? [];
   const taskId = task?.task_id ?? task?.id ?? "";
