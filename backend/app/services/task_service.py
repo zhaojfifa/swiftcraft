@@ -13,6 +13,7 @@ from app.engines.akool_engine import AkoolEngine
 from app.engines.mock_engine import MockEngine
 from app.models.task import TaskRecord
 from app.schemas.task import (
+    AvatarRequest,
     CreateTaskRequest,
     LegacySwapRequest,
     ServiceType,
@@ -98,6 +99,8 @@ class TaskService:
             service_type = parsed.service_type
             mode = parsed.mode
             service = "swap" if service_type == ServiceType.face_swap else "avatar"
+            if isinstance(parsed, AvatarRequest):
+                input_key = parsed.input_key
         else:
             legacy = LegacySwapRequest.model_validate(payload)
             service = legacy.service
