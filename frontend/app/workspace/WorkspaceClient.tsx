@@ -9,6 +9,15 @@ import { createTask, getTask, getUploadUrl, TaskRecord } from "../../lib/api";
 import { SwapMode, resolvePresetInputKey } from "../../lib/presets";
 import { resolveAssetUrl } from "../../lib/url";
 
+const TERMINAL_STATUSES = new Set(["succeeded", "failed", "done"]);
+const POLL_BACKOFF = [1000, 1500, 2000, 3000, 5000];
+const MAX_POLL_MS = 3 * 60 * 1000;
+
+function shouldStopPolling(current: TaskRecord | null) {
+  const status = (current?.status || "").toLowerCase();
+  return Boolean(current?.output_url) || TERMINAL_STATUSES.has(status);
+}
+
 export default function WorkspaceClient() {
   const searchParams = useSearchParams();
   const serviceType = searchParams.get("service") || "swap";
@@ -24,13 +33,15 @@ export default function WorkspaceClient() {
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"playground" | "json" | "api">("playground");
-  const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const pollRef = useRef<number | null>(null);
+  const pollTokenRef = useRef(0);
 
   useEffect(() => {
     return () => {
       if (pollRef.current) {
-        clearInterval(pollRef.current);
+        window.clearTimeout(pollRef.current);
       }
+      pollTokenRef.current += 1;
     };
   }, []);
 
@@ -40,7 +51,7 @@ export default function WorkspaceClient() {
       return;
     }
     if (pollRef.current) {
-      clearInterval(pollRef.current);
+      window.clearTimeout(pollRef.current);
       pollRef.current = null;
     }
     setIsRunning(false);
@@ -105,33 +116,49 @@ export default function WorkspaceClient() {
         input_key
       });
       const taskId = result.task_id;
-      let ticks = 0;
+      let attempt = 0;
+      const startAt = Date.now();
+      pollTokenRef.current += 1;
+      const token = pollTokenRef.current;
 
       if (pollRef.current) {
-        clearInterval(pollRef.current);
+        window.clearTimeout(pollRef.current);
       }
 
-      pollRef.current = setInterval(async () => {
-        ticks += 1;
+      const scheduleNext = () => {
+        const delay = POLL_BACKOFF[Math.min(attempt, POLL_BACKOFF.length - 1)];
+        attempt += 1;
+        pollRef.current = window.setTimeout(tick, delay);
+      };
+
+      const tick = async () => {
+        if (pollTokenRef.current !== token) return;
+        if (document.visibilityState !== "visible") {
+          scheduleNext();
+          return;
+        }
         try {
           const latest = await getTask(taskId);
           setTask(latest);
-          const status = (latest.status || "").toLowerCase();
-          const done = status === "done" || status === "failed";
-          if (done || ticks >= 60) {
-            if (pollRef.current) {
-              clearInterval(pollRef.current);
-            }
+          if (shouldStopPolling(latest)) {
             setIsRunning(false);
+            return;
           }
         } catch (err) {
-          if (pollRef.current) {
-            clearInterval(pollRef.current);
-          }
           setIsRunning(false);
           setError("Polling failed. Is the backend running?");
+          return;
         }
-      }, 800);
+
+        if (Date.now() - startAt > MAX_POLL_MS) {
+          setIsRunning(false);
+          return;
+        }
+
+        scheduleNext();
+      };
+
+      tick();
     } catch (err) {
       setIsRunning(false);
       setError(err instanceof Error ? err.message : "Failed to start task.");
