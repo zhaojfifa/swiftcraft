@@ -8,6 +8,9 @@ from typing import Any, Dict, Optional
 from fastapi import BackgroundTasks, HTTPException, UploadFile
 from pydantic import TypeAdapter
 
+from app.core.config import settings
+from app.engines.akool_engine import AkoolEngine
+from app.engines.mock_engine import MockEngine
 from app.models.task import TaskRecord
 from app.schemas.task import (
     CreateTaskRequest,
@@ -18,7 +21,6 @@ from app.schemas.task import (
     TaskStatus,
 )
 from app.services.presets import resolve_input_key
-from app.services.r2_client import R2Client
 from app.services.task_manager import TaskManager
 from app.services.task_store import TaskStore
 from app.utils.media import generate_thumbnail, probe_video, save_upload_file
@@ -32,12 +34,6 @@ THUMB_DIR = DATA_DIR / "thumbnails"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 THUMB_DIR.mkdir(parents=True, exist_ok=True)
-
-
-
-def _public_cdn_base() -> str:
-    return os.getenv("PUBLIC_CDN_BASE_URL", "https://cdn.swiftcraft.ai").rstrip("/")
-
 
 def _service_type_from_legacy(service: str) -> ServiceType:
     if service == "avatar":
@@ -80,7 +76,10 @@ def _stage_from_record(record: TaskRecord) -> TaskStage:
 class TaskService:
     def __init__(self, store: Optional[TaskStore] = None, manager: Optional[TaskManager] = None) -> None:
         self.store = store or TaskStore()
-        self.manager = manager or TaskManager(self.store, profile=os.getenv("SWIFTCRAFT_PROFILE", "dev"))
+        if manager is None:
+            engine = MockEngine() if settings.USE_MOCK_AI or settings.AKOOL_DRY_RUN else AkoolEngine()
+            manager = TaskManager(self.store, engine, profile=os.getenv("SWIFTCRAFT_PROFILE", "dev"))
+        self.manager = manager
 
     def create_task(
         self,
@@ -138,6 +137,7 @@ class TaskService:
             task_id = uuid.uuid4().hex
             if face_enhancer is not None:
                 metadata_dict["face_enhancer"] = face_enhancer
+            resolved_input_key = resolve_input_key(resolved_service, resolved_mode)
             record = self.store.create_task(
                 task_id,
                 resolved_service,
@@ -149,7 +149,11 @@ class TaskService:
             )
             self.store.set_artifacts(
                 task_id,
-                {"video_path": video_path, "image_path": image_path},
+                {
+                    "video_path": video_path,
+                    "image_path": image_path,
+                    "input_key": resolved_input_key,
+                },
             )
             self.manager.start(task_id)
             return self._to_response(record, resolved_service_type)
@@ -171,8 +175,7 @@ class TaskService:
             None,
             input_key=input_key,
         )
-        self.store.set_stage(task_id, "running", 5)
-        background_tasks.add_task(self._mock_copy_result_to_outputs, task_id, input_key)
+        self.manager.start(task_id)
         return self._to_response(record, resolved_service_type)
 
     def get_task(self, task_id: str) -> TaskResponseOut:
@@ -181,13 +184,6 @@ class TaskService:
             raise HTTPException(status_code=404, detail="Task not found.")
         service_type = _service_type_from_legacy(record.service)
         return self._to_response(record, service_type)
-
-    def _mock_copy_result_to_outputs(self, task_id: str, input_key: str) -> None:
-        r2 = R2Client()
-        output_key = f"outputs/{task_id}/result.mp4"
-        r2.copy_object(src_key=input_key, dst_key=output_key)
-        output_url = f"{_public_cdn_base()}/{output_key}"
-        self.store.set_output(task_id, output_key, output_url)
 
     def _to_response(self, record: TaskRecord, service_type: ServiceType) -> TaskResponseOut:
         return TaskResponseOut(

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any, Dict
 
-from app.core.config import settings
-from app.engines.mock_engine import MockEngine
+from app.engines.base import EngineAdapter, EngineRunError
 from app.services.task_store import TaskStore
 
 
 class TaskManager:
-    def __init__(self, store: TaskStore, profile: str = "dev") -> None:
+    def __init__(self, store: TaskStore, engine: EngineAdapter, profile: str = "dev") -> None:
         self.store = store
+        self.engine = engine
         self.profile = profile
 
     def start(self, task_id: str) -> None:
@@ -19,57 +20,26 @@ class TaskManager:
         record = self.store.get_task(task_id)
         if record is None:
             return
+        artifacts = self.store.get_artifacts(task_id)
+        inputs: Dict[str, Any] = {"input_key": record.input_key, **artifacts}
+        self.store.set_stage(task_id, "running", 1)
 
-        engine_mode = "mock" if settings.USE_MOCK_AI else "akool_dry_run" if settings.AKOOL_DRY_RUN else "akool"
-        if engine_mode == "akool":
-            self.store.append_log(task_id, "Akool real call not implemented.")
-            self.store.fail(task_id, "Akool real call not implemented.")
+        try:
+            result = await self.engine.run(
+                task_id,
+                record,
+                inputs,
+                on_log=lambda message: self.store.append_log(task_id, message),
+                on_stage=lambda stage, progress: self.store.set_stage(task_id, stage, progress),
+            )
+        except EngineRunError as exc:
+            self.store.fail(task_id, str(exc))
             return
-        if engine_mode == "akool_dry_run":
-            self.store.append_log(task_id, "Akool dry-run: using preset output.")
+        except Exception as exc:
+            self.store.fail(task_id, f"Engine failed: {exc}")
+            return
 
-        # Sandbox demo: always return a preset output_url as the mock swap result.
-        # Sandbox demo: always return a preset output URL when work completes.
-        output_url = self._preset_url(record.service, record.mode)
-        if record.mode == "baseline":
-            await self._run_baseline(task_id, output_url)
-        else:
-            await self._run_intelligent(task_id, output_url)
-
-    async def _run_baseline(self, task_id: str, output_url: str) -> None:
-        self.store.set_stage(task_id, "rendering", 5)
-        self.store.append_log(task_id, "Dispatching baseline request...")
-        await asyncio.sleep(0.8)
-        for progress in (20, 40, 60, 80, 95):
-            self.store.set_stage(task_id, "rendering", progress)
-            self.store.append_log(task_id, f"Inference running... ({progress}%)")
-            await asyncio.sleep(0.6)
-        self.store.set_result(task_id, output_url)
-        self.store.append_log(task_id, "Completed.")
-
-    async def _run_intelligent(self, task_id: str, output_url: str) -> None:
-        self.store.set_stage(task_id, "analyzing", 5)
-        self.store.append_log(task_id, "AI Analyzing Scene...")
-        await asyncio.sleep(0.8)
-
-        self.store.set_stage(task_id, "slicing", 20)
-        self.store.append_log(task_id, "Smart Slicing (3 Segments)...")
-        await asyncio.sleep(0.8)
-
-        self.store.set_stage(task_id, "rendering", 45)
-        self.store.append_log(task_id, "Parallel Rendering (GPU Cluster)...")
-        await asyncio.sleep(0.8)
-
-        self.store.set_stage(task_id, "merging", 75)
-        self.store.append_log(task_id, "Optical Flow Merging...")
-        await asyncio.sleep(0.8)
-
-        self.store.set_stage(task_id, "merging", 92)
-        self.store.append_log(task_id, "Finalizing output...")
-        await asyncio.sleep(0.6)
-
-        self.store.set_result(task_id, output_url)
-        self.store.append_log(task_id, "Completed.")
-
-    def _preset_url(self, service: str, mode: str) -> str:
-        return f"/static/presets/{service}/{mode}_demo.mp4"
+        if result.output_key and result.output_url:
+            self.store.set_output(task_id, result.output_key, result.output_url)
+        elif result.output_url:
+            self.store.set_result(task_id, result.output_url)
