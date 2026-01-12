@@ -9,8 +9,7 @@ from fastapi import BackgroundTasks, HTTPException, UploadFile
 from pydantic import TypeAdapter
 
 from app.core.config import settings
-from app.engines.akool_engine import AkoolEngine
-from app.engines.mock_engine import MockEngine
+from app.engines.registry import get_engine
 from app.models.task import TaskRecord
 from app.schemas.task import (
     AvatarRequest,
@@ -78,7 +77,8 @@ class TaskService:
     def __init__(self, store: Optional[TaskStore] = None, manager: Optional[TaskManager] = None) -> None:
         self.store = store or TaskStore()
         if manager is None:
-            engine = MockEngine() if settings.USE_MOCK_AI or settings.AKOOL_DRY_RUN else AkoolEngine()
+            provider = settings.MODEL_PROVIDER or ("mock" if settings.USE_MOCK_AI or settings.AKOOL_DRY_RUN else "akool")
+            engine = get_engine(provider)
             manager = TaskManager(self.store, engine, profile=os.getenv("SWIFTCRAFT_PROFILE", "dev"))
         self.manager = manager
 

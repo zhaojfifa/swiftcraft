@@ -22,6 +22,9 @@ class Settings:
     AKOOL_DRY_RUN: bool = _get_bool(os.getenv("AKOOL_DRY_RUN"), True)
     PRESET_MAP_JSON: str = os.getenv("PRESET_MAP_JSON", "")
     PUBLIC_CDN_BASE_URL: str = os.getenv("PUBLIC_CDN_BASE_URL", "https://cdn.swiftcraft.ai")
+    MODEL_PROVIDER: str = os.getenv("MODEL_PROVIDER", "mock")
+    MODEL_API_KEY: str = os.getenv("MODEL_API_KEY", "")
+    MODEL_TIMEOUT_MS: int = int(os.getenv("MODEL_TIMEOUT_MS", "180000"))
 
 
 settings = Settings()
