@@ -16,7 +16,13 @@ const MAX_POLL_MS = 3 * 60 * 1000;
 
 function shouldStopPolling(current: TaskRecord | null) {
   const status = (current?.status || "").toLowerCase();
-  return Boolean(current?.output_url) || TERMINAL_STATUSES.has(status);
+  const stage = (current?.stage || "").toLowerCase();
+  return (
+    Boolean(current?.output_url || current?.output_key) ||
+    TERMINAL_STATUSES.has(status) ||
+    stage === "done" ||
+    stage === "failed"
+  );
 }
 
 export default function WorkspaceClient() {
