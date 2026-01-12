@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import os
 from enum import Enum
 from typing import Annotated, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ServiceType(str, Enum):
@@ -69,9 +70,19 @@ class AvatarInputs(BaseModel):
 
 class AvatarRequest(BaseModel):
     service_type: Literal["avatar_transfer"] = "avatar_transfer"
+    input_key: Optional[str] = None
     model_id: str = Field(default="kling-v2.6-std-motion")
     mode: str
     inputs: AvatarInputs
+
+    @model_validator(mode="after")
+    def normalize_input_key(self) -> "AvatarRequest":
+        if not self.input_key:
+            motion_video = self.inputs.motion_video
+            if not motion_video:
+                raise ValueError("inputs.motion_video is required for avatar_transfer.")
+            self.input_key = _strip_cdn_prefix(motion_video)
+        return self
 
 
 class LocalizationRequest(BaseModel):
@@ -84,3 +95,13 @@ CreateTaskRequest = Annotated[
     Union[SwapRequest, AvatarRequest, LocalizationRequest],
     Field(discriminator="service_type"),
 ]
+
+
+def _strip_cdn_prefix(value: str) -> str:
+    value = value.strip()
+    base = os.getenv("PUBLIC_CDN_BASE_URL", "").rstrip("/")
+    if base and value.startswith(f"{base}/"):
+        return value[len(base) + 1 :]
+    if value.startswith("/"):
+        return value.lstrip("/")
+    return value
