@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Dict, List, Optional, Union
+from typing import Annotated, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -55,7 +55,7 @@ class SwapInputs(BaseModel):
 
 
 class SwapRequest(BaseModel):
-    service_type: ServiceType = Field(default=ServiceType.face_swap)
+    service_type: Literal["face_swap"] = "face_swap"
     mode: str
     inputs: SwapInputs
 
@@ -68,14 +68,14 @@ class AvatarInputs(BaseModel):
 
 
 class AvatarRequest(BaseModel):
-    service_type: ServiceType = Field(default=ServiceType.avatar_transfer)
+    service_type: Literal["avatar_transfer"] = "avatar_transfer"
     model_id: str = Field(default="kling-v2.6-std-motion")
     mode: str
     inputs: AvatarInputs
 
 
 class LocalizationRequest(BaseModel):
-    service_type: ServiceType = Field(default=ServiceType.localization)
+    service_type: Literal["localization"] = "localization"
     mode: str
     inputs: dict = Field(default_factory=dict)
 

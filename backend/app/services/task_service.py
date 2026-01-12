@@ -33,7 +33,6 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 THUMB_DIR.mkdir(parents=True, exist_ok=True)
 
-_CREATE_TASK_ADAPTER = TypeAdapter(CreateTaskRequest)
 
 
 def _public_cdn_base() -> str:
@@ -96,7 +95,7 @@ class TaskService:
         input_key = None
 
         if "service_type" in payload:
-            parsed = _CREATE_TASK_ADAPTER.validate_python(payload)
+            parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
             service_type = parsed.service_type
             mode = parsed.mode
             service = "swap" if service_type == ServiceType.face_swap else "avatar"
