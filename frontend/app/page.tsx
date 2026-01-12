@@ -50,7 +50,7 @@ export default function Home() {
               </p>
 
               <div className={service.ui?.ctaClass || ""}>
-                {service.ui?.ctaLabel || "Enter Workspace"} <span className="ml-2">-></span>
+                {service.ui?.ctaLabel || "Enter Workspace"} <span className="ml-2">{"→"}</span>
               </div>
             </Link>
           ))}
