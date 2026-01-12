@@ -59,16 +59,19 @@ async function readJson<T>(res: Response): Promise<T> {
   }
 }
 
-export async function createTask(payload: CreateTaskPayload): Promise<CreateTaskResponse> {
+export async function createTask(payload: any): Promise<CreateTaskResponse> {
   const base = getApiBase();
   if (!base) throw new Error('NEXT_PUBLIC_API_BASE is not set');
 
-  const service = (payload.service || '').toLowerCase();
-  const mode = (payload.mode || '').toLowerCase();
+  const isTyped = payload && typeof payload === 'object' && 'service_type' in payload;
+  const service = (payload?.service || '').toLowerCase();
+  const mode = (payload?.mode || '').toLowerCase();
 
-  const body: Record<string, unknown> = { service, mode };
-  if (payload.input_key) body.input_key = payload.input_key;
-  if (payload.face_enhancer !== undefined) body.face_enhancer = payload.face_enhancer;
+  const body: Record<string, unknown> = isTyped ? payload : { service, mode };
+  if (!isTyped) {
+    if (payload?.input_key) body.input_key = payload.input_key;
+    if (payload?.face_enhancer !== undefined) body.face_enhancer = payload.face_enhancer;
+  }
 
   const res = await fetch(`${base}/api/v1/tasks`, {
     method: 'POST',
