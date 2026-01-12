@@ -135,15 +135,14 @@ export default function WorkspaceClient() {
       if (isAvatar) {
         const characterKey = await uploadFileToR2(imageFile as File);
         const motionKey = await uploadFileToR2(videoFile as File);
-        const characterUrl = cdnBase ? `${cdnBase}/${characterKey}` : characterKey;
-        const motionUrl = cdnBase ? `${cdnBase}/${motionKey}` : motionKey;
         result = await createTask({
           service_type: "avatar_transfer",
           model_id: "kling-v2.6-std-motion",
           mode: modeApi,
+          input_key: motionKey,
           inputs: {
-            character_image: characterUrl,
-            motion_video: motionUrl,
+            character_image: characterKey,
+            motion_video: motionKey,
             character_orientation: orientation,
             prompt: prompt.trim() ? prompt.trim() : undefined
           }
@@ -198,6 +197,7 @@ export default function WorkspaceClient() {
 
         if (Date.now() - startAt > MAX_POLL_MS) {
           setIsRunning(false);
+          setError("Polling timed out. Please retry.");
           if (pollRef.current) {
             window.clearTimeout(pollRef.current);
             pollRef.current = null;
@@ -233,9 +233,10 @@ export default function WorkspaceClient() {
         service_type: "avatar_transfer",
         model_id: "kling-v2.6-std-motion",
         mode: modeApi,
+        input_key: "(motion key)",
         inputs: {
-          character_image: cdnBase ? `${cdnBase}/(uploaded key)` : "(uploaded key)",
-          motion_video: cdnBase ? `${cdnBase}/(uploaded key)` : "(uploaded key)",
+          character_image: "(character key)",
+          motion_video: "(motion key)",
           character_orientation: orientation,
           prompt: prompt ? "(optional)" : ""
         }
@@ -257,7 +258,7 @@ export default function WorkspaceClient() {
     ? [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"avatar_transfer\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${modeApi}\",\"inputs\":{\"character_image\":\"${cdnBase}/<character>\",\"motion_video\":\"${cdnBase}/<motion>\",\"character_orientation\":\"${orientation}\"}}'`
+        `  -d '{\"service_type\":\"avatar_transfer\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${modeApi}\",\"input_key\":\"<motion_key>\",\"inputs\":{\"character_image\":\"<character_key>\",\"motion_video\":\"<motion_key>\",\"character_orientation\":\"${orientation}\"}}'`
       ].join(" \\\n")
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
