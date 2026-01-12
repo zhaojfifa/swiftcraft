@@ -7,6 +7,7 @@ import Link from "next/link";
 
 import { createTask, getTask, getUploadUrl, TaskRecord } from "../../lib/api";
 import { SwapMode, resolvePresetInputKey } from "../../lib/presets";
+import { SERVICE_REGISTRY } from "../../lib/services/registry";
 import { resolveAssetUrl } from "../../lib/url";
 
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "done"]);
@@ -20,7 +21,12 @@ function shouldStopPolling(current: TaskRecord | null) {
 
 export default function WorkspaceClient() {
   const searchParams = useSearchParams();
-  const serviceType = searchParams.get("service") || "swap";
+  const serviceType = (searchParams.get("service") || "swap").toLowerCase();
+  const serviceConfig =
+    SERVICE_REGISTRY.find((service) => service.id === serviceType) ?? SERVICE_REGISTRY[0];
+  const isSwap = serviceConfig.id === "swap";
+  const isAvatar = serviceConfig.id === "avatar";
+  const isLocalization = serviceConfig.id === "localization";
 
   const [mode, setMode] = useState<SwapMode>("intelligent");
   const [inputSource, setInputSource] = useState<"preset" | "upload">("preset");
@@ -29,6 +35,8 @@ export default function WorkspaceClient() {
   const [inputVideoUrl, setInputVideoUrl] = useState<string | null>(null);
   const [inputImageUrl, setInputImageUrl] = useState<string | null>(null);
   const [faceEnhancer, setFaceEnhancer] = useState(true);
+  const [orientation, setOrientation] = useState<"front" | "side" | "back">("front");
+  const [prompt, setPrompt] = useState<string>("");
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +56,12 @@ export default function WorkspaceClient() {
       cancelPolling();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isSwap) {
+      setInputSource("upload");
+    }
+  }, [isSwap]);
 
   useEffect(() => {
     if (!videoFile) {
@@ -81,7 +95,7 @@ export default function WorkspaceClient() {
   const presetKey = resolvePresetInputKey(serviceApi, modeApi);
   const cdnBase = (process.env.NEXT_PUBLIC_CDN_BASE_URL || "").replace(/\/+$/, "");
 
-  const uploadVideoToR2 = async (file: File) => {
+  const uploadFileToR2 = async (file: File) => {
     const contentType = file.type || "application/octet-stream";
     const upload = await getUploadUrl({
       filename: file.name,
@@ -101,8 +115,15 @@ export default function WorkspaceClient() {
 
   const handleRun = async () => {
     cancelPolling();
+    if (isLocalization) {
+      return;
+    }
     if (inputSource === "upload" && !videoFile) {
       setError("Please upload a source video for upload mode.");
+      return;
+    }
+    if (isAvatar && (!imageFile || !videoFile)) {
+      setError("Please upload a character image and motion video for avatar mode.");
       return;
     }
     setError(null);
@@ -110,13 +131,32 @@ export default function WorkspaceClient() {
     setTask(null);
 
     try {
-      const input_key =
-        inputSource === "preset" ? presetKey : await uploadVideoToR2(videoFile as File);
-      const result = await createTask({
-        service: serviceApi,
-        mode: modeApi,
-        input_key
-      });
+      let result;
+      if (isAvatar) {
+        const characterKey = await uploadFileToR2(imageFile as File);
+        const motionKey = await uploadFileToR2(videoFile as File);
+        const characterUrl = cdnBase ? `${cdnBase}/${characterKey}` : characterKey;
+        const motionUrl = cdnBase ? `${cdnBase}/${motionKey}` : motionKey;
+        result = await createTask({
+          service_type: "avatar_transfer",
+          model_id: "kling-v2.6-std-motion",
+          mode: modeApi,
+          inputs: {
+            character_image: characterUrl,
+            motion_video: motionUrl,
+            character_orientation: orientation,
+            prompt: prompt.trim() ? prompt.trim() : undefined
+          }
+        });
+      } else {
+        const input_key =
+          inputSource === "preset" ? presetKey : await uploadFileToR2(videoFile as File);
+        result = await createTask({
+          service: serviceApi,
+          mode: modeApi,
+          input_key
+        });
+      }
       const taskId = result.task_id;
       let attempt = 0;
       const startAt = Date.now();
@@ -182,23 +222,48 @@ export default function WorkspaceClient() {
   const previewUrl = outputUrl ?? (inputSource === "upload" ? inputVideoUrl : null);
   const logs = task?.logs ?? [];
   const taskId = task?.task_id ?? task?.id ?? "";
-  const canRun = (inputSource === "preset" || Boolean(videoFile)) && !isRunning;
-  const payloadPreview = {
-    service: serviceApi,
-    mode: modeApi,
-    input_key: inputSource === "preset" ? presetKey : "(uploaded key)",
-    source: inputSource
-  };
+  const showUploadBlocks = (isSwap && inputSource === "upload") || isAvatar;
+  const canRun = isLocalization
+    ? false
+    : isAvatar
+      ? Boolean(videoFile && imageFile) && !isRunning
+      : (inputSource === "preset" || Boolean(videoFile)) && !isRunning;
+  const payloadPreview = isAvatar
+    ? {
+        service_type: "avatar_transfer",
+        model_id: "kling-v2.6-std-motion",
+        mode: modeApi,
+        inputs: {
+          character_image: cdnBase ? `${cdnBase}/(uploaded key)` : "(uploaded key)",
+          motion_video: cdnBase ? `${cdnBase}/(uploaded key)` : "(uploaded key)",
+          character_orientation: orientation,
+          prompt: prompt ? "(optional)" : ""
+        }
+      }
+    : isLocalization
+      ? { service: serviceApi, mode: modeApi, preview: true }
+      : {
+          service: serviceApi,
+          mode: modeApi,
+          input_key: inputSource === "preset" ? presetKey : "(uploaded key)",
+          source: inputSource
+        };
   const jsonPreview = {
     request: payloadPreview,
     task: task ?? null
   };
   const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:10000";
-  const curlSnippet = [
-    `curl -X POST \"${apiBase}/api/v1/tasks\"`,
-    "  -H \"Content-Type: application/json\"",
-    `  -d '{\"service\":\"${serviceApi}\",\"mode\":\"${modeApi}\",\"input_key\":\"${presetKey}\"}'`
-  ].join(" \\\n");
+  const curlSnippet = isAvatar
+    ? [
+        `curl -X POST \"${apiBase}/api/v1/tasks\"`,
+        "  -H \"Content-Type: application/json\"",
+        `  -d '{\"service_type\":\"avatar_transfer\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${modeApi}\",\"inputs\":{\"character_image\":\"${cdnBase}/<character>\",\"motion_video\":\"${cdnBase}/<motion>\",\"character_orientation\":\"${orientation}\"}}'`
+      ].join(" \\\n")
+    : [
+        `curl -X POST \"${apiBase}/api/v1/tasks\"`,
+        "  -H \"Content-Type: application/json\"",
+        `  -d '{\"service\":\"${serviceApi}\",\"mode\":\"${modeApi}\",\"input_key\":\"${presetKey}\"}'`
+      ].join(" \\\n");
 
   return (
     <div className="h-screen bg-white text-slate-900 flex flex-col font-sans overflow-hidden">
@@ -300,161 +365,314 @@ export default function WorkspaceClient() {
             ) : null}
             {activeTab === "playground" ? (
               <div className="space-y-8">
-                <div className="space-y-3">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    Input Source
-                  </label>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setInputSource("preset")}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
-                        inputSource === "preset"
-                          ? "border-blue-600 text-blue-600 bg-blue-50"
-                          : "border-slate-200 text-slate-500 bg-white"
-                      }`}
-                    >
-                      Preset
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setInputSource("upload")}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
-                        inputSource === "upload"
-                          ? "border-blue-600 text-blue-600 bg-blue-50"
-                          : "border-slate-200 text-slate-500 bg-white"
-                      }`}
-                    >
-                      Upload
-                    </button>
-                  </div>
-                  {inputSource === "preset" ? (
-                    <div className="text-xs text-slate-500">
-                      Using preset input_key: <span className="font-mono">{presetKey}</span>
+                {isLocalization ? (
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 text-xs text-slate-600">
+                    <div className="text-sm font-semibold text-slate-900">
+                      Video Localization (Preview)
                     </div>
-                  ) : (
-                    <div className="text-xs text-slate-500">Upload a source video to generate input_key.</div>
-                  )}
-                </div>
-                {inputSource === "upload" ? (
+                    <div className="text-xs text-slate-500 mt-2">
+                      Coming soon. This is a placeholder for future expansion.
+                    </div>
+                  </div>
+                ) : null}
+                {isSwap ? (
+                  <div className="space-y-3">
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      Input Source
+                    </label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setInputSource("preset")}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                          inputSource === "preset"
+                            ? "border-blue-600 text-blue-600 bg-blue-50"
+                            : "border-slate-200 text-slate-500 bg-white"
+                        }`}
+                      >
+                        Preset
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setInputSource("upload")}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                          inputSource === "upload"
+                            ? "border-blue-600 text-blue-600 bg-blue-50"
+                            : "border-slate-200 text-slate-500 bg-white"
+                        }`}
+                      >
+                        Upload
+                      </button>
+                    </div>
+                    {inputSource === "preset" ? (
+                      <div className="text-xs text-slate-500">
+                        Using preset input_key: <span className="font-mono">{presetKey}</span>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-slate-500">Upload a source video to generate input_key.</div>
+                    )}
+                  </div>
+                ) : null}
+                {showUploadBlocks ? (
                   <>
-                    <div className="space-y-3">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex justify-between">
-                    Source Video
-                    <span className="text-[10px] font-normal text-slate-400">MP4, 4-8s</span>
-                  </label>
-                  <div className="flex items-center justify-between text-[11px] text-slate-400">
-                    <span>{videoFile ? videoFile.name : "No file selected"}</span>
-                    {videoFile ? (
-                      <button
-                        type="button"
-                        className="text-slate-500 hover:text-slate-700"
-                        onClick={() => setVideoFile(null)}
-                      >
-                        Clear
-                      </button>
-                    ) : null}
-                  </div>
-                  <div className="group relative grid h-48 grid-rows-[1fr_auto] gap-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-3 transition hover:bg-slate-100 hover:border-slate-400">
-                    <div className="relative flex flex-col items-center justify-center">
-                      <input
-                        type="file"
-                        accept="video/*"
-                        onChange={(event) => setVideoFile(event.target.files?.[0] || null)}
-                        className="absolute inset-0 opacity-0 cursor-pointer"
-                      />
-                      <div className="p-3 bg-white rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform border border-slate-100">
-                        <UploadCloud className="w-5 h-5 text-slate-600" />
-                      </div>
-                      <span className="text-xs font-medium text-slate-600">Click to upload video</span>
-                      <span className="text-[10px] text-slate-400 mt-1">or drag and drop</span>
-                    </div>
-                    <div className="rounded-lg border border-slate-200 bg-white p-2">
-                      {inputVideoUrl ? (
-                        <div className="flex items-center gap-3">
-                          <video
-                            src={inputVideoUrl}
-                            muted
-                            playsInline
-                            className="h-10 w-14 rounded-md object-cover"
-                          />
-                          <span className="text-[11px] text-slate-500">Video preview ready</span>
+                    {isAvatar ? (
+                      <>
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Character Image
+                          </label>
+                          <div className="flex items-center justify-between text-[11px] text-slate-400">
+                            <span>{imageFile ? imageFile.name : "No file selected"}</span>
+                            {imageFile ? (
+                              <button
+                                type="button"
+                                className="text-slate-500 hover:text-slate-700"
+                                onClick={() => setImageFile(null)}
+                              >
+                                Clear
+                              </button>
+                            ) : null}
+                          </div>
+                          <div className="group relative grid h-48 grid-rows-[1fr_auto] gap-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-3 transition hover:bg-slate-100 hover:border-slate-400">
+                            <div className="relative flex flex-col items-center justify-center">
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(event) => setImageFile(event.target.files?.[0] || null)}
+                                className="absolute inset-0 opacity-0 cursor-pointer"
+                              />
+                              <div className="p-3 bg-white rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform border border-slate-100">
+                                <UploadCloud className="w-5 h-5 text-slate-600" />
+                              </div>
+                              <span className="text-xs font-medium text-slate-600">Click to upload image</span>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 bg-white p-2">
+                              {inputImageUrl ? (
+                                <div className="flex items-center gap-3">
+                                  <img
+                                    src={inputImageUrl}
+                                    alt="Character preview"
+                                    className="h-10 w-10 rounded-md object-cover"
+                                  />
+                                  <span className="text-[11px] text-slate-500">Character preview ready</span>
+                                </div>
+                              ) : (
+                                <div className="flex items-center justify-center text-[11px] text-slate-400">
+                                  Preview will appear here
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      ) : (
-                        <div className="flex items-center justify-center text-[11px] text-slate-400">
-                          Preview will appear here
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
 
-                    <div className="space-y-3">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    {serviceType === "swap" ? "Target Face" : "Character Reference"}
-                  </label>
-                  <div className="flex items-center justify-between text-[11px] text-slate-400">
-                    <span>{imageFile ? imageFile.name : "No file selected"}</span>
-                    {imageFile ? (
-                      <button
-                        type="button"
-                        className="text-slate-500 hover:text-slate-700"
-                        onClick={() => setImageFile(null)}
-                      >
-                        Clear
-                      </button>
-                    ) : null}
-                  </div>
-                  <div className="group relative grid h-48 grid-rows-[1fr_auto] gap-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-3 transition hover:bg-slate-100 hover:border-slate-400">
-                    <div className="relative flex flex-col items-center justify-center">
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(event) => setImageFile(event.target.files?.[0] || null)}
-                        className="absolute inset-0 opacity-0 cursor-pointer"
-                      />
-                      <div className="p-3 bg-white rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform border border-slate-100">
-                        <UploadCloud className="w-5 h-5 text-slate-600" />
-                      </div>
-                      <span className="text-xs font-medium text-slate-600">Click to upload image</span>
-                    </div>
-                    <div className="rounded-lg border border-slate-200 bg-white p-2">
-                      {inputImageUrl ? (
-                        <div className="flex items-center gap-3">
-                          <img
-                            src={inputImageUrl}
-                            alt="Target preview"
-                            className="h-10 w-10 rounded-md object-cover"
-                          />
-                          <span className="text-[11px] text-slate-500">Target preview ready</span>
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex justify-between">
+                            Motion Reference (Video)
+                            <span className="text-[10px] font-normal text-slate-400">MP4, 4-8s</span>
+                          </label>
+                          <div className="flex items-center justify-between text-[11px] text-slate-400">
+                            <span>{videoFile ? videoFile.name : "No file selected"}</span>
+                            {videoFile ? (
+                              <button
+                                type="button"
+                                className="text-slate-500 hover:text-slate-700"
+                                onClick={() => setVideoFile(null)}
+                              >
+                                Clear
+                              </button>
+                            ) : null}
+                          </div>
+                          <div className="group relative grid h-48 grid-rows-[1fr_auto] gap-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-3 transition hover:bg-slate-100 hover:border-slate-400">
+                            <div className="relative flex flex-col items-center justify-center">
+                              <input
+                                type="file"
+                                accept="video/*"
+                                onChange={(event) => setVideoFile(event.target.files?.[0] || null)}
+                                className="absolute inset-0 opacity-0 cursor-pointer"
+                              />
+                              <div className="p-3 bg-white rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform border border-slate-100">
+                                <UploadCloud className="w-5 h-5 text-slate-600" />
+                              </div>
+                              <span className="text-xs font-medium text-slate-600">Click to upload video</span>
+                              <span className="text-[10px] text-slate-400 mt-1">or drag and drop</span>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 bg-white p-2">
+                              {inputVideoUrl ? (
+                                <div className="flex items-center gap-3">
+                                  <video
+                                    src={inputVideoUrl}
+                                    muted
+                                    playsInline
+                                    className="h-10 w-14 rounded-md object-cover"
+                                  />
+                                  <span className="text-[11px] text-slate-500">Video preview ready</span>
+                                </div>
+                              ) : (
+                                <div className="flex items-center justify-center text-[11px] text-slate-400">
+                                  Preview will appear here
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      ) : (
-                        <div className="flex items-center justify-center text-[11px] text-slate-400">
-                          Preview will appear here
+                      </>
+                    ) : (
+                      <>
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex justify-between">
+                            Source Video
+                            <span className="text-[10px] font-normal text-slate-400">MP4, 4-8s</span>
+                          </label>
+                          <div className="flex items-center justify-between text-[11px] text-slate-400">
+                            <span>{videoFile ? videoFile.name : "No file selected"}</span>
+                            {videoFile ? (
+                              <button
+                                type="button"
+                                className="text-slate-500 hover:text-slate-700"
+                                onClick={() => setVideoFile(null)}
+                              >
+                                Clear
+                              </button>
+                            ) : null}
+                          </div>
+                          <div className="group relative grid h-48 grid-rows-[1fr_auto] gap-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-3 transition hover:bg-slate-100 hover:border-slate-400">
+                            <div className="relative flex flex-col items-center justify-center">
+                              <input
+                                type="file"
+                                accept="video/*"
+                                onChange={(event) => setVideoFile(event.target.files?.[0] || null)}
+                                className="absolute inset-0 opacity-0 cursor-pointer"
+                              />
+                              <div className="p-3 bg-white rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform border border-slate-100">
+                                <UploadCloud className="w-5 h-5 text-slate-600" />
+                              </div>
+                              <span className="text-xs font-medium text-slate-600">Click to upload video</span>
+                              <span className="text-[10px] text-slate-400 mt-1">or drag and drop</span>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 bg-white p-2">
+                              {inputVideoUrl ? (
+                                <div className="flex items-center gap-3">
+                                  <video
+                                    src={inputVideoUrl}
+                                    muted
+                                    playsInline
+                                    className="h-10 w-14 rounded-md object-cover"
+                                  />
+                                  <span className="text-[11px] text-slate-500">Video preview ready</span>
+                                </div>
+                              ) : (
+                                <div className="flex items-center justify-center text-[11px] text-slate-400">
+                                  Preview will appear here
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
 
-                    <div className="pt-6 border-t border-slate-100">
-                      <div className="flex justify-between items-center py-2">
-                        <span className="text-sm font-medium text-slate-700">Face Enhancer</span>
-                        <button
-                          type="button"
-                          onClick={() => setFaceEnhancer((prev) => !prev)}
-                          className={`w-10 h-6 rounded-full relative cursor-pointer shadow-inner ${
-                            faceEnhancer ? "bg-blue-600" : "bg-slate-300"
-                          }`}
-                        >
-                          <div
-                            className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${
-                              faceEnhancer ? "right-1" : "left-1"
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Target Face
+                          </label>
+                          <div className="flex items-center justify-between text-[11px] text-slate-400">
+                            <span>{imageFile ? imageFile.name : "No file selected"}</span>
+                            {imageFile ? (
+                              <button
+                                type="button"
+                                className="text-slate-500 hover:text-slate-700"
+                                onClick={() => setImageFile(null)}
+                              >
+                                Clear
+                              </button>
+                            ) : null}
+                          </div>
+                          <div className="group relative grid h-48 grid-rows-[1fr_auto] gap-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-3 transition hover:bg-slate-100 hover:border-slate-400">
+                            <div className="relative flex flex-col items-center justify-center">
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(event) => setImageFile(event.target.files?.[0] || null)}
+                                className="absolute inset-0 opacity-0 cursor-pointer"
+                              />
+                              <div className="p-3 bg-white rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform border border-slate-100">
+                                <UploadCloud className="w-5 h-5 text-slate-600" />
+                              </div>
+                              <span className="text-xs font-medium text-slate-600">Click to upload image</span>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 bg-white p-2">
+                              {inputImageUrl ? (
+                                <div className="flex items-center gap-3">
+                                  <img
+                                    src={inputImageUrl}
+                                    alt="Target preview"
+                                    className="h-10 w-10 rounded-md object-cover"
+                                  />
+                                  <span className="text-[11px] text-slate-500">Target preview ready</span>
+                                </div>
+                              ) : (
+                                <div className="flex items-center justify-center text-[11px] text-slate-400">
+                                  Preview will appear here
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {isAvatar ? (
+                      <>
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Orientation
+                          </label>
+                          <select
+                            value={orientation}
+                            onChange={(event) =>
+                              setOrientation(event.target.value as "front" | "side" | "back")
+                            }
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <option value="front">Front</option>
+                            <option value="side">Side</option>
+                            <option value="back">Back</option>
+                          </select>
+                        </div>
+
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Prompt
+                          </label>
+                          <input
+                            type="text"
+                            value={prompt}
+                            onChange={(event) => setPrompt(event.target.value)}
+                            placeholder="Optional prompt for style or motion"
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400"
+                          />
+                        </div>
+                      </>
+                    ) : null}
+
+                    {isSwap && inputSource === "upload" ? (
+                      <div className="pt-6 border-t border-slate-100">
+                        <div className="flex justify-between items-center py-2">
+                          <span className="text-sm font-medium text-slate-700">Face Enhancer</span>
+                          <button
+                            type="button"
+                            onClick={() => setFaceEnhancer((prev) => !prev)}
+                            className={`w-10 h-6 rounded-full relative cursor-pointer shadow-inner ${
+                              faceEnhancer ? "bg-blue-600" : "bg-slate-300"
                             }`}
-                          ></div>
-                        </button>
+                          >
+                            <div
+                              className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${
+                                faceEnhancer ? "right-1" : "left-1"
+                              }`}
+                            ></div>
+                          </button>
+                        </div>
                       </div>
-                    </div>
+                    ) : null}
                   </>
                 ) : null}
                 {error ? <p className="text-xs text-rose-500">{error}</p> : null}
@@ -481,7 +699,11 @@ export default function WorkspaceClient() {
               } ${!canRun ? "opacity-60 cursor-not-allowed" : ""}`}
             >
               <Play className="w-4 h-4" />
-              {isRunning ? "Running..." : `Run ${mode === "intelligent" ? "SwiftFlow" : "Basic"}`}
+              {isLocalization
+                ? "Preview"
+                : isRunning
+                  ? "Running..."
+                  : `Run ${mode === "intelligent" ? "SwiftFlow" : "Basic"}`}
             </button>
             <div className="text-center mt-3 text-[10px] text-slate-400 font-medium">
               Estimated Cost: {mode === "intelligent" ? "$0.15" : "$0.05"}

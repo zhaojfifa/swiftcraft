@@ -1,0 +1,100 @@
+export type ServiceId = "swap" | "avatar" | "localization";
+export type InputFieldType = "video" | "image" | "select" | "text";
+
+export type ServiceInput = {
+  id: string;
+  type: InputFieldType;
+  label: string;
+};
+
+export type ServiceConfig = {
+  id: ServiceId;
+  title: string;
+  description: string;
+  badge: "Active" | "Preview";
+  route: string;
+  enabled: boolean;
+  inputs: ServiceInput[];
+  ui?: {
+    cardClass?: string;
+    glowClass?: string;
+    badgeClass?: string;
+    titleClass?: string;
+    ctaClass?: string;
+    ctaLabel?: string;
+  };
+};
+
+export const SERVICE_REGISTRY: ServiceConfig[] = [
+  {
+    id: "swap",
+    title: "Swap",
+    description: "Replace subject with target identity while preserving motion.",
+    badge: "Active",
+    route: "/workspace?service=swap",
+    enabled: true,
+    inputs: [
+      { id: "source_video", type: "video", label: "Source Video" },
+      { id: "target_image", type: "image", label: "Target Face" }
+    ],
+    ui: {
+      cardClass:
+        "group relative block rounded-2xl border border-emerald-200/20 bg-gradient-to-br from-emerald-950 via-slate-950 to-slate-950 p-8 overflow-hidden shadow-[0_18px_60px_rgba(16,185,129,0.18)] hover:shadow-[0_22px_80px_rgba(16,185,129,0.24)] hover:-translate-y-1 transition-all duration-300",
+      glowClass:
+        "pointer-events-none absolute -top-24 -left-24 h-56 w-56 rounded-full bg-emerald-400/20 blur-3xl opacity-60 group-hover:opacity-80 transition-opacity",
+      badgeClass:
+        "text-[10px] font-bold text-emerald-200 bg-white/5 px-2 py-1 rounded border border-white/10 uppercase tracking-wider",
+      titleClass: "text-2xl font-bold text-white mb-2 group-hover:text-emerald-200 transition-colors",
+      ctaClass:
+        "relative z-10 flex items-center text-emerald-200 font-medium text-sm group-hover:underline underline-offset-4",
+      ctaLabel: "Enter Workspace"
+    }
+  },
+  {
+    id: "avatar",
+    title: "Avatar",
+    description: "Generate a stylized avatar track with adaptive lighting.",
+    badge: "Active",
+    route: "/workspace?service=avatar",
+    enabled: true,
+    inputs: [
+      { id: "character_image", type: "image", label: "Character Image" },
+      { id: "motion_video", type: "video", label: "Motion Reference (Video)" },
+      { id: "orientation", type: "select", label: "Orientation" },
+      { id: "prompt", type: "text", label: "Prompt" }
+    ],
+    ui: {
+      cardClass:
+        "group relative block rounded-2xl border border-rose-200/20 bg-gradient-to-br from-rose-950 via-slate-950 to-slate-950 p-8 overflow-hidden shadow-[0_18px_60px_rgba(244,63,94,0.18)] hover:shadow-[0_22px_80px_rgba(244,63,94,0.24)] hover:-translate-y-1 transition-all duration-300",
+      glowClass:
+        "pointer-events-none absolute -top-24 -left-24 h-56 w-56 rounded-full bg-rose-400/20 blur-3xl opacity-60 group-hover:opacity-80 transition-opacity",
+      badgeClass:
+        "text-[10px] font-bold text-rose-200 bg-white/5 px-2 py-1 rounded border border-white/10 uppercase tracking-wider",
+      titleClass: "text-2xl font-bold text-white mb-2 group-hover:text-rose-200 transition-colors",
+      ctaClass:
+        "relative z-10 flex items-center text-rose-200 font-medium text-sm group-hover:underline underline-offset-4",
+      ctaLabel: "Enter Workspace"
+    }
+  },
+  {
+    id: "localization",
+    title: "Video Localization",
+    description: "Localize dialogue and lip-sync for new languages.",
+    badge: "Preview",
+    route: "/workspace?service=localization",
+    enabled: false,
+    inputs: [],
+    ui: {
+      cardClass:
+        "group relative block rounded-2xl border border-slate-200/20 bg-gradient-to-br from-slate-950 via-slate-950 to-slate-950 p-8 overflow-hidden shadow-[0_18px_60px_rgba(15,23,42,0.18)] hover:shadow-[0_22px_80px_rgba(15,23,42,0.24)] hover:-translate-y-1 transition-all duration-300",
+      glowClass:
+        "pointer-events-none absolute -top-24 -left-24 h-56 w-56 rounded-full bg-slate-400/20 blur-3xl opacity-60 group-hover:opacity-80 transition-opacity",
+      badgeClass:
+        "text-[10px] font-bold text-slate-200 bg-white/5 px-2 py-1 rounded border border-white/10 uppercase tracking-wider",
+      titleClass: "text-2xl font-bold text-white mb-2 group-hover:text-slate-200 transition-colors",
+      ctaClass:
+        "relative z-10 flex items-center text-slate-200 font-medium text-sm group-hover:underline underline-offset-4",
+      ctaLabel: "Preview"
+    }
+  }
+];
