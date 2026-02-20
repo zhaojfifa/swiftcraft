@@ -4,12 +4,22 @@ import asyncio
 import os
 from typing import Any, Callable, Dict
 
-import fal_client
 import httpx
 
 from app.engines.base import EngineResult, EngineRunError
 from app.models.task import TaskRecord
 from app.services.r2_client import R2Client
+
+
+def _get_fal_client():
+    try:
+        import fal_client  # type: ignore
+
+        return fal_client
+    except ModuleNotFoundError as e:
+        raise RuntimeError(
+            "fal-client is not installed. Add 'fal-client' to backend/requirements.txt and redeploy."
+        ) from e
 
 
 class FalWan26FlashEngine:
@@ -31,6 +41,8 @@ class FalWan26FlashEngine:
         on_log: Callable[[str], None],
         on_stage: Callable[[str, int], None],
     ) -> EngineResult:
+        fal_client = _get_fal_client()
+
         image_url = inputs.get("input_image_url") or record.input_image_url
         if not image_url:
             raise EngineRunError("missing input_image_url for avatar")
