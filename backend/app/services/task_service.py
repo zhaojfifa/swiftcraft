@@ -77,10 +77,21 @@ class TaskService:
     def __init__(self, store: Optional[TaskStore] = None, manager: Optional[TaskManager] = None) -> None:
         self.store = store or TaskStore()
         if manager is None:
-            provider = settings.MODEL_PROVIDER or ("mock" if settings.USE_MOCK_AI or settings.AKOOL_DRY_RUN else "akool")
+            provider = self._default_provider()
             engine = get_engine(provider)
             manager = TaskManager(self.store, engine, profile=os.getenv("SWIFTCRAFT_PROFILE", "dev"))
         self.manager = manager
+
+    def _default_provider(self) -> str:
+        return settings.MODEL_PROVIDER or ("mock" if settings.USE_MOCK_AI or settings.AKOOL_DRY_RUN else "akool")
+
+    def _avatar_enabled(self) -> bool:
+        return os.getenv("SWIFT_AVATAR_ENABLED", "0").strip().lower() in ("1", "true", "yes")
+
+    def _resolve_provider(self, service: str, payload: Dict[str, Any]) -> str:
+        if service == "avatar":
+            return "fal" if self._avatar_enabled() else "mock"
+        return str(payload.get("provider") or self._default_provider()).strip().lower()
 
     def create_task(
         self,
@@ -138,6 +149,8 @@ class TaskService:
                 input_image_url = f"/static/data/uploads/{image_path.name}"
 
             task_id = uuid.uuid4().hex
+            provider = self._resolve_provider(resolved_service, payload)
+            metadata_dict["provider"] = provider
             if face_enhancer is not None:
                 metadata_dict["face_enhancer"] = face_enhancer
             resolved_input_key = resolve_input_key(resolved_service, resolved_mode)
@@ -156,6 +169,8 @@ class TaskService:
                     "video_path": video_path,
                     "image_path": image_path,
                     "input_key": resolved_input_key,
+                    "input_image_url": input_image_url,
+                    "input_video_url": input_video_url,
                 },
             )
             self.manager.start(task_id)
@@ -168,11 +183,12 @@ class TaskService:
             raise HTTPException(status_code=400, detail="input_key is required.")
 
         task_id = uuid.uuid4().hex
+        provider = self._resolve_provider(resolved_service, payload)
         record = self.store.create_task(
             task_id,
             resolved_service,
             resolved_mode,
-            {},
+            {"provider": provider},
             None,
             None,
             None,

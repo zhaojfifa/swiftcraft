@@ -80,3 +80,13 @@ class R2Client:
             Key=dst_key,
             CopySource=copy_source,
         )
+
+    def upload_bytes(self, key: str, content: bytes, content_type: str = "application/octet-stream") -> str:
+        key = key.lstrip("/")
+        self.s3.put_object(
+            Bucket=self.cfg.bucket,
+            Key=key,
+            Body=content,
+            ContentType=content_type,
+        )
+        return self.public_url(key)

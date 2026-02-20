@@ -4,6 +4,7 @@ import asyncio
 from typing import Any, Dict
 
 from app.engines.base import EngineAdapter, EngineRunError
+from app.engines.registry import get_engine
 from app.services.task_store import TaskStore
 
 
@@ -22,10 +23,12 @@ class TaskManager:
             return
         artifacts = self.store.get_artifacts(task_id)
         inputs: Dict[str, Any] = {"input_key": record.input_key, **artifacts}
+        provider = str((record.metadata or {}).get("provider") or "").strip().lower()
+        engine = get_engine(provider) if provider else self.engine
         self.store.set_stage(task_id, "running", 1)
 
         try:
-            result = await self.engine.run(
+            result = await engine.run(
                 task_id,
                 record,
                 inputs,
