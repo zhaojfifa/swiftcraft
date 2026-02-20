@@ -33,6 +33,7 @@ class TaskStore:
         input_video_url: Optional[str],
         input_image_url: Optional[str],
         input_key: Optional[str] = None,
+        input_image_key: Optional[str] = None,
     ) -> TaskRecord:
         record = TaskRecord(
             task_id=task_id,
@@ -48,6 +49,7 @@ class TaskStore:
             input_video_url=input_video_url,
             input_image_url=input_image_url,
             input_key=input_key,
+            input_image_key=input_image_key,
         )
         with self._lock:
             self._tasks[task_id] = record

@@ -47,11 +47,11 @@ class FalWan26FlashEngine:
             raise EngineRunError("missing FAL_KEY/FAL_API_KEY for fal provider")
         fal_client = _get_fal_client()
 
-        image_url = inputs.get("input_image_url") or record.input_image_url
+        image_url = record.input_image_url
         if not image_url:
-            raise EngineRunError("missing input_image_url for avatar")
+            raise EngineRunError(f"task_id={task_id} missing required field: input_image_url")
 
-        prompt = inputs.get("prompt") or "High quality, coherent main character, no subtitles."
+        prompt = "High quality, coherent main character, no subtitles."
 
         on_stage("running", 5)
         on_log("[fal] submit start")

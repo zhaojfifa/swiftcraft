@@ -39,6 +39,7 @@ class TaskResponseOut(BaseModel):
     status: TaskStatus
     stage: TaskStage
     output_url: Optional[str] = None
+    input_image_url: Optional[str] = None
     logs: List[str] = Field(default_factory=list)
     metadata: Dict[str, object] = Field(default_factory=dict)
 

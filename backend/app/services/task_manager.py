@@ -43,6 +43,14 @@ class TaskManager:
             if isinstance(exc, EngineRunError):
                 where = "engine_run"
             trace_line = traceback.format_exception_only(type(exc), exc)[-1].strip()
+            trace_loc = ""
+            tb_frames = traceback.extract_tb(exc.__traceback__) if exc.__traceback__ is not None else []
+            if tb_frames:
+                frame = tb_frames[-1]
+                trace_loc = f"{frame.filename}:{frame.lineno}"
+            self.store.append_log(task_id, f"[failed] {type(exc).__name__}: {exc}")
+            if trace_loc:
+                self.store.append_log(task_id, f"[failed] traceback: {trace_loc}")
             self.store.fail_task(task_id, error_msg=trace_line, where=where, exc=exc)
             return
 

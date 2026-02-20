@@ -22,6 +22,7 @@ class TaskRecord(BaseModel):
 
     created_at: str = Field(default_factory=_now_iso)
     input_key: Optional[str] = None
+    input_image_key: Optional[str] = None
     input_video_url: Optional[str] = None
     input_image_url: Optional[str] = None
     thumb_url: Optional[str] = None

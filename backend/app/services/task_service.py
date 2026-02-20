@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import BackgroundTasks, HTTPException, UploadFile
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from app.core.config import settings
 from app.engines.registry import get_engine
@@ -21,6 +22,7 @@ from app.schemas.task import (
     TaskStatus,
 )
 from app.services.presets import resolve_input_key
+from app.services.r2_client import R2Client
 from app.services.task_manager import TaskManager
 from app.services.task_store import TaskStore
 from app.utils.media import generate_thumbnail, probe_video, save_upload_file
@@ -34,6 +36,17 @@ THUMB_DIR = DATA_DIR / "thumbnails"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 THUMB_DIR.mkdir(parents=True, exist_ok=True)
+logger = logging.getLogger(__name__)
+
+
+def _extract_avatar_image_key(payload: Dict[str, Any]) -> Optional[str]:
+    inputs = payload.get("inputs")
+    if not isinstance(inputs, dict):
+        return None
+    raw = inputs.get("character_image") or inputs.get("character_image_key")
+    if not raw:
+        return None
+    return str(raw).strip() or None
 
 def _service_type_from_legacy(service: str) -> ServiceType:
     if service == "avatar":
@@ -93,6 +106,13 @@ class TaskService:
             return "fal" if self._avatar_enabled() else "mock"
         return str(payload.get("provider") or self._default_provider()).strip().lower()
 
+    def _public_url_from_key(self, key: str) -> str:
+        try:
+            return R2Client().public_url(key)
+        except Exception:
+            base = settings.PUBLIC_CDN_BASE_URL.rstrip("/")
+            return f"{base}/{key.lstrip('/')}"
+
     def create_task(
         self,
         payload: Dict[str, Any],
@@ -106,7 +126,24 @@ class TaskService:
         input_key = None
 
         if "service_type" in payload:
-            parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
+            try:
+                parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
+            except ValidationError as exc:
+                service_type_raw = str(payload.get("service_type") or "").strip().lower()
+                avatar_inputs = payload.get("inputs")
+                has_avatar_image = (
+                    isinstance(avatar_inputs, dict)
+                    and bool(
+                        str(avatar_inputs.get("character_image") or avatar_inputs.get("character_image_key") or "").strip()
+                    )
+                )
+                has_input_image_url = bool(str(payload.get("input_image_url") or "").strip())
+                if service_type_raw == "avatar_transfer" and not has_avatar_image and not has_input_image_url:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="avatar requires inputs.character_image (or input_image_url)",
+                    ) from exc
+                raise HTTPException(status_code=400, detail=f"Invalid task payload: {exc.errors()}") from exc
             service_type = parsed.service_type
             mode = parsed.mode
             service = "swap" if service_type == ServiceType.face_swap else "avatar"
@@ -121,6 +158,7 @@ class TaskService:
         resolved_service = (service or "swap").lower()
         resolved_mode = (mode or "baseline").lower()
         resolved_service_type = _service_type_from_legacy(resolved_service)
+        avatar_image_key = _extract_avatar_image_key(payload) if resolved_service == "avatar" else None
 
         if video_file or image_file:
             if video_file and not video_file.filename:
@@ -148,6 +186,15 @@ class TaskService:
                 image_path = save_upload_file(image_file, UPLOAD_DIR)
                 input_image_url = f"/static/data/uploads/{image_path.name}"
 
+            if resolved_service == "avatar" and not input_image_url:
+                if avatar_image_key:
+                    input_image_url = self._public_url_from_key(avatar_image_key)
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="avatar requires inputs.character_image (or input_image_url)",
+                    )
+
             task_id = uuid.uuid4().hex
             provider = self._resolve_provider(resolved_service, payload)
             metadata_dict["provider"] = provider
@@ -162,7 +209,14 @@ class TaskService:
                 thumb_url,
                 input_video_url,
                 input_image_url,
+                input_image_key=avatar_image_key,
             )
+            if resolved_service == "avatar":
+                logger.info(
+                    "[inputs] avatar input_image_key=%s input_image_url=%s",
+                    record.input_image_key,
+                    record.input_image_url,
+                )
             self.store.set_artifacts(
                 task_id,
                 {
@@ -184,6 +238,15 @@ class TaskService:
 
         task_id = uuid.uuid4().hex
         provider = self._resolve_provider(resolved_service, payload)
+        input_image_url = str(payload.get("input_image_url") or "").strip() or None
+        if resolved_service == "avatar" and not input_image_url:
+            if avatar_image_key:
+                input_image_url = self._public_url_from_key(avatar_image_key)
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="avatar requires inputs.character_image (or input_image_url)",
+                )
         record = self.store.create_task(
             task_id,
             resolved_service,
@@ -191,9 +254,16 @@ class TaskService:
             {"provider": provider},
             None,
             None,
-            None,
+            input_image_url,
             input_key=input_key,
+            input_image_key=avatar_image_key,
         )
+        if resolved_service == "avatar":
+            logger.info(
+                "[inputs] avatar input_image_key=%s input_image_url=%s",
+                record.input_image_key,
+                record.input_image_url,
+            )
         self.manager.start(task_id)
         return self._to_response(record, resolved_service_type)
 
@@ -213,6 +283,7 @@ class TaskService:
             status=_status_from_record(record),
             stage=_stage_from_record(record),
             output_url=record.output_url,
+            input_image_url=record.input_image_url,
             logs=list(record.logs or []),
             metadata=dict(record.metadata or {}),
         )
