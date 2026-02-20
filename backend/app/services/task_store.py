@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from threading import Lock
+import traceback
 from typing import Any, Dict, List, Optional
 
 from app.models.task import TaskRecord
@@ -117,14 +118,44 @@ class TaskStore:
         )
 
     def fail(self, task_id: str, error: str) -> None:
-        self._update(
-            task_id,
-            {
-                "status": "failed",
-                "stage": "failed",
-                "error": error,
-            },
-        )
+        self.fail_task(task_id=task_id, error_msg=error, where="unknown")
+
+    def fail_task(
+        self,
+        task_id: str,
+        error_msg: str,
+        where: str | None = None,
+        exc: Exception | None = None,
+    ) -> None:
+        location = (where or "unknown").strip() or "unknown"
+        details = error_msg.strip() if error_msg else "task failed"
+        if exc is not None:
+            details = f"{type(exc).__name__}: {exc}"
+
+        trace_snippet = ""
+        if exc is not None and exc.__traceback__ is not None:
+            frames = traceback.extract_tb(exc.__traceback__)
+            if frames:
+                frame = frames[-1]
+                trace_snippet = f" at {frame.filename}:{frame.lineno} in {frame.name}"
+
+        with self._lock:
+            record = self._tasks.get(task_id)
+            if not record:
+                return
+            logs = list(record.logs or [])
+            logs.append(f"[failed] where={location} error={details}")
+            if trace_snippet:
+                logs.append(f"[failed] traceback{trace_snippet}")
+            self._update(
+                task_id,
+                {
+                    "status": "failed",
+                    "stage": "FAILED",
+                    "error": details,
+                    "logs": logs,
+                },
+            )
 
     def _update(self, task_id: str, fields: Dict[str, Any]) -> None:
         record = self._tasks.get(task_id)

@@ -41,6 +41,10 @@ class FalWan26FlashEngine:
         on_log: Callable[[str], None],
         on_stage: Callable[[str, int], None],
     ) -> EngineResult:
+        has_fal_key = bool((os.getenv("FAL_KEY") or os.getenv("FAL_API_KEY") or "").strip())
+        on_log(f"[preflight] has_fal_key={str(has_fal_key).lower()} duration={self.duration_sec}")
+        if not has_fal_key:
+            raise EngineRunError("missing FAL_KEY/FAL_API_KEY for fal provider")
         fal_client = _get_fal_client()
 
         image_url = inputs.get("input_image_url") or record.input_image_url
@@ -50,7 +54,7 @@ class FalWan26FlashEngine:
         prompt = inputs.get("prompt") or "High quality, coherent main character, no subtitles."
 
         on_stage("running", 5)
-        on_log(f"AVATAR_FAL_SUBMIT model={self.model_id} duration={self.duration_sec}")
+        on_log("[fal] submit start")
 
         fal_logs: list[str] = []
 
@@ -76,7 +80,7 @@ class FalWan26FlashEngine:
                 on_queue_update=on_queue_update,
             )
         except Exception as exc:
-            on_log(f"AVATAR_FAL_SUBMIT retry_without_duration reason={type(exc).__name__}")
+            on_log(f"[fal] submit retry_without_duration reason={type(exc).__name__}")
             res = await asyncio.to_thread(
                 fal_client.subscribe,
                 self.model_id,
@@ -84,6 +88,8 @@ class FalWan26FlashEngine:
                 with_logs=True,
                 on_queue_update=on_queue_update,
             )
+        request_id = res.get("request_id") or res.get("id") or res.get("requestId")
+        on_log(f"[fal] submit ok request_id={request_id or 'n/a'}")
 
         video_url = res.get("video_url") or res.get("video") or res.get("url")
         if isinstance(video_url, dict):
@@ -92,16 +98,17 @@ class FalWan26FlashEngine:
             raise EngineRunError(f"fal result missing video url: {res}")
 
         on_stage("rendering", 85)
-        on_log("AVATAR_FAL_DOWNLOAD start")
+        on_log("[fal] download start")
         content = await self._download_bytes(str(video_url))
-        on_log(f"AVATAR_FAL_DOWNLOAD ok bytes={len(content)}")
+        on_log(f"[fal] download ok bytes={len(content)}")
 
         output_key = f"outputs/{task_id}/result.mp4"
-        on_log(f"AVATAR_R2_UPLOAD key={output_key}")
+        on_log(f"[r2] upload start key={output_key}")
         output_url = self.r2.upload_bytes(key=output_key, content=content, content_type="video/mp4")
+        on_log(f"[r2] upload success key={output_key}")
 
         on_stage("completed", 100)
-        on_log("AVATAR_DONE")
+        on_log(f"[done] output_url={output_url}")
 
         return EngineResult(
             output_key=output_key,
