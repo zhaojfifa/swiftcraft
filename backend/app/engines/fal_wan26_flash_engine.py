@@ -29,7 +29,35 @@ class FalWan26FlashEngine:
 
     def __init__(self) -> None:
         self.model_id = os.getenv("SWIFT_AVATAR_FAL_MODEL", "wan/v2.6/image-to-video/flash").strip()
-        self.duration_sec = int(os.getenv("SWIFT_AVATAR_DEMO_DURATION_SEC", "15"))
+        duration_default_raw = os.getenv("SWIFT_AVATAR_DURATION_DEFAULT", "5").strip()
+        allowed_raw = os.getenv("SWIFT_AVATAR_DURATION_ALLOWED", "5,10").strip()
+        legacy_demo_raw = os.getenv("SWIFT_AVATAR_DEMO_DURATION_SEC", "").strip()
+
+        try:
+            duration_default = int(duration_default_raw)
+        except ValueError:
+            duration_default = 5
+
+        allowed_set: set[int] = set()
+        for token in allowed_raw.split(","):
+            value = token.strip()
+            if not value:
+                continue
+            try:
+                allowed_set.add(int(value))
+            except ValueError:
+                continue
+        if not allowed_set:
+            allowed_set = {5, 10}
+
+        source_duration = legacy_demo_raw or str(duration_default)
+        try:
+            requested = int(source_duration)
+        except ValueError:
+            requested = duration_default
+        if requested not in allowed_set:
+            requested = duration_default
+        self.duration_sec = requested
         self.timeout_sec = int(os.getenv("WAN26_TIMEOUT_SEC", "900"))
         self.r2 = R2Client()
 
