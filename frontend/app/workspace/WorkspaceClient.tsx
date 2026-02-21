@@ -727,9 +727,13 @@ export default function WorkspaceClient() {
             }}
           ></div>
 
-          <div className="w-full max-w-4xl aspect-video bg-black rounded-2xl shadow-2xl border border-slate-300/50 flex flex-col items-center justify-center relative overflow-hidden group">
+          <div
+            className={`w-full bg-black rounded-2xl shadow-2xl border border-slate-300/50 flex flex-col items-center justify-center relative overflow-hidden group ${
+              isAvatar ? "max-w-md aspect-[9/16]" : "max-w-4xl aspect-video"
+            }`}
+          >
             {previewUrl ? (
-              <video controls className="w-full h-full object-cover" src={previewUrl} />
+              <video controls className="w-full h-full object-contain" src={previewUrl} />
             ) : (
               <div className="text-slate-500 font-medium flex flex-col items-center gap-3">
                 <div className="w-16 h-16 rounded-full bg-slate-800/50 flex items-center justify-center backdrop-blur">

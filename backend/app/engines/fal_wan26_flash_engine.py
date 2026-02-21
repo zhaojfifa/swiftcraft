@@ -95,27 +95,39 @@ class FalWan26FlashEngine:
                         on_log(f"AVATAR_FAL_LOG {msg}")
 
         args = {"prompt": prompt, "image_url": image_url}
-        args_with_duration = dict(args)
-        args_with_duration["duration"] = self.duration_sec
+        base_args: Dict[str, Any] = {**args, "duration": self.duration_sec}
+        full_args: Dict[str, Any] = {**base_args, "aspect_ratio": "9:16", "width": 720, "height": 1280}
+        aspect_only_args: Dict[str, Any] = {**base_args, "aspect_ratio": "9:16"}
+        fallback_args: Dict[str, Any] = dict(base_args)
+
+        on_log("[fal][args] aspect_ratio=9:16 width=720 height=1280 duration=" + str(self.duration_sec))
 
         res: Dict[str, Any]
-        try:
-            res = await asyncio.to_thread(
-                fal_client.subscribe,
-                self.model_id,
-                arguments=args_with_duration,
-                with_logs=True,
-                on_queue_update=on_queue_update,
-            )
-        except Exception as exc:
-            on_log(f"[fal] submit retry_without_duration reason={type(exc).__name__}")
-            res = await asyncio.to_thread(
-                fal_client.subscribe,
-                self.model_id,
-                arguments=args,
-                with_logs=True,
-                on_queue_update=on_queue_update,
-            )
+        last_exc: Exception | None = None
+        attempt_plan = [
+            ("full", full_args),
+            ("drop_width_height", aspect_only_args),
+            ("drop_aspect_ratio", fallback_args),
+        ]
+        for idx, (label, submit_args) in enumerate(attempt_plan):
+            try:
+                res = await asyncio.to_thread(
+                    fal_client.subscribe,
+                    self.model_id,
+                    arguments=submit_args,
+                    with_logs=True,
+                    on_queue_update=on_queue_update,
+                )
+                break
+            except Exception as exc:
+                last_exc = exc
+                on_log(f"[fal] submit {label} failed: {type(exc).__name__}: {exc}")
+                if idx < len(attempt_plan) - 1:
+                    on_log(f"[fal] submit retry={attempt_plan[idx + 1][0]}")
+                continue
+        else:
+            raise EngineRunError(f"fal submit failed after schema fallback: {last_exc}") from last_exc
+
         request_id = res.get("request_id") or res.get("id") or res.get("requestId")
         on_log(f"[fal] submit ok request_id={request_id or 'n/a'}")
 
