@@ -7,6 +7,10 @@ from app.engines.real_engine import RealEngine
 
 def get_engine(provider: str):
     normalized = (provider or "mock").strip().lower()
+    if normalized in ("wan26_r2v", "wan26-r2v", "r2v"):
+        from app.engines.fal_wan26_r2v_engine import FalWan26R2VEngine
+
+        return FalWan26R2VEngine()
     if normalized in ("fal", "wan26", "wan26_flash", "wan26-flash"):
         from app.engines.fal_wan26_flash_engine import FalWan26FlashEngine
 

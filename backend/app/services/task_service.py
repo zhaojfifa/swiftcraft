@@ -48,6 +48,18 @@ def _extract_avatar_image_key(payload: Dict[str, Any]) -> Optional[str]:
         return None
     return str(raw).strip() or None
 
+
+def _extract_avatar_prompt(payload: Dict[str, Any]) -> Optional[str]:
+    inputs = payload.get("inputs")
+    if not isinstance(inputs, dict):
+        return None
+    raw = inputs.get("prompt")
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
+
+
 def _service_type_from_legacy(service: str) -> ServiceType:
     if service == "avatar":
         return ServiceType.avatar_transfer
@@ -101,9 +113,11 @@ class TaskService:
     def _avatar_enabled(self) -> bool:
         return os.getenv("SWIFT_AVATAR_ENABLED", "0").strip().lower() in ("1", "true", "yes")
 
-    def _resolve_provider(self, service: str, payload: Dict[str, Any]) -> str:
+    def _resolve_provider(self, service: str, payload: Dict[str, Any], mode: str) -> str:
         if service == "avatar":
-            return "fal" if self._avatar_enabled() else "mock"
+            if not self._avatar_enabled():
+                return "mock"
+            return "wan26_r2v" if mode == "intelligent" else "wan26_flash"
         return str(payload.get("provider") or self._default_provider()).strip().lower()
 
     def _public_url_from_key(self, key: str) -> str:
@@ -159,6 +173,7 @@ class TaskService:
         resolved_mode = (mode or "baseline").lower()
         resolved_service_type = _service_type_from_legacy(resolved_service)
         avatar_image_key = _extract_avatar_image_key(payload) if resolved_service == "avatar" else None
+        avatar_prompt = _extract_avatar_prompt(payload) if resolved_service == "avatar" else None
 
         if video_file or image_file:
             if video_file and not video_file.filename:
@@ -194,9 +209,11 @@ class TaskService:
                         status_code=400,
                         detail="avatar requires inputs.character_image (or input_image_url)",
                     )
+            if resolved_service == "avatar" and not input_video_url and input_key:
+                input_video_url = self._public_url_from_key(input_key)
 
             task_id = uuid.uuid4().hex
-            provider = self._resolve_provider(resolved_service, payload)
+            provider = self._resolve_provider(resolved_service, payload, resolved_mode)
             metadata_dict["provider"] = provider
             if face_enhancer is not None:
                 metadata_dict["face_enhancer"] = face_enhancer
@@ -217,6 +234,7 @@ class TaskService:
                     record.input_image_key,
                     record.input_image_url,
                 )
+                logger.info("[inputs] input_video_url=%s", record.input_video_url)
             self.store.set_artifacts(
                 task_id,
                 {
@@ -225,6 +243,7 @@ class TaskService:
                     "input_key": resolved_input_key,
                     "input_image_url": input_image_url,
                     "input_video_url": input_video_url,
+                    "prompt": avatar_prompt,
                 },
             )
             self.manager.start(task_id)
@@ -237,8 +256,9 @@ class TaskService:
             raise HTTPException(status_code=400, detail="input_key is required.")
 
         task_id = uuid.uuid4().hex
-        provider = self._resolve_provider(resolved_service, payload)
+        provider = self._resolve_provider(resolved_service, payload, resolved_mode)
         input_image_url = str(payload.get("input_image_url") or "").strip() or None
+        input_video_url = str(payload.get("input_video_url") or "").strip() or None
         if resolved_service == "avatar" and not input_image_url:
             if avatar_image_key:
                 input_image_url = self._public_url_from_key(avatar_image_key)
@@ -247,13 +267,15 @@ class TaskService:
                     status_code=400,
                     detail="avatar requires inputs.character_image (or input_image_url)",
                 )
+        if resolved_service == "avatar" and not input_video_url and input_key:
+            input_video_url = self._public_url_from_key(input_key)
         record = self.store.create_task(
             task_id,
             resolved_service,
             resolved_mode,
             {"provider": provider},
             None,
-            None,
+            input_video_url,
             input_image_url,
             input_key=input_key,
             input_image_key=avatar_image_key,
@@ -264,6 +286,16 @@ class TaskService:
                 record.input_image_key,
                 record.input_image_url,
             )
+            logger.info("[inputs] input_video_url=%s", record.input_video_url)
+        self.store.set_artifacts(
+            task_id,
+            {
+                "input_key": input_key,
+                "input_video_url": input_video_url,
+                "input_image_url": input_image_url,
+                "prompt": avatar_prompt,
+            },
+        )
         self.manager.start(task_id)
         return self._to_response(record, resolved_service_type)
 
