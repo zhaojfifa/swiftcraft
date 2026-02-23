@@ -46,6 +46,7 @@ export default function WorkspaceClient() {
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uiPollingWarning, setUiPollingWarning] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"playground" | "json" | "api">("playground");
   const pollRef = useRef<number | null>(null);
   const pollTokenRef = useRef(0);
@@ -146,6 +147,9 @@ export default function WorkspaceClient() {
       try {
         const latest = await getTask(taskId);
         setTask(latest);
+        if (uiPollingWarning) {
+          setUiPollingWarning(null);
+        }
         if (shouldStopPolling(latest)) {
           setIsRunning(false);
           if (pollRef.current) {
@@ -155,19 +159,16 @@ export default function WorkspaceClient() {
           return;
         }
       } catch (err) {
-        setIsRunning(false);
-        setError("Polling failed. Is the backend running?");
+        const name = (err as { name?: string } | null)?.name || "";
+        if (name !== "AbortError") {
+          setUiPollingWarning("Temporary polling issue, retrying...");
+        }
+        scheduleNext();
         return;
       }
 
       if (Date.now() - startAt > MAX_POLL_MS) {
-        setIsRunning(false);
-        setError("Polling timed out. Please retry.");
-        if (pollRef.current) {
-          window.clearTimeout(pollRef.current);
-          pollRef.current = null;
-        }
-        return;
+        setUiPollingWarning("Polling is taking longer than expected, still retrying...");
       }
 
       scheduleNext();
@@ -207,6 +208,7 @@ export default function WorkspaceClient() {
       return;
     }
     setError(null);
+    setUiPollingWarning(null);
     setIsRunning(true);
     setTask(null);
 
@@ -294,6 +296,7 @@ export default function WorkspaceClient() {
       return;
     }
     setError(null);
+    setUiPollingWarning(null);
     setIsRunning(true);
     setTask(null);
     cancelPolling();
@@ -309,6 +312,7 @@ export default function WorkspaceClient() {
   const handleUseSafeDemoClip = async () => {
     if (!isAvatar || isRunning || !safeDemoMotionKey || !safeDemoCharacterKey) return;
     setError(null);
+    setUiPollingWarning(null);
     setIsRunning(true);
     setTask(null);
     cancelPolling();
@@ -736,6 +740,11 @@ export default function WorkspaceClient() {
                   </>
                 ) : null}
                 {error ? <p className="text-xs text-rose-500">{error}</p> : null}
+                {uiPollingWarning ? (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                    {uiPollingWarning}
+                  </div>
+                ) : null}
                 {showPolicyPanel ? (
                   <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 space-y-2">
                     <div className="font-semibold">Safety policy blocked this input.</div>
