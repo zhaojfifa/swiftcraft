@@ -100,6 +100,8 @@ export default function WorkspaceClient() {
   const modeApi = String(mode || "baseline").toLowerCase() as SwapMode;
   const presetKey = resolvePresetInputKey(serviceApi, modeApi);
   const cdnBase = (process.env.NEXT_PUBLIC_CDN_BASE_URL || "").replace(/\/+$/, "");
+  const safeDemoMotionKey = (process.env.NEXT_PUBLIC_SAFE_DEMO_MOTION_KEY || "").trim();
+  const safeDemoCharacterKey = (process.env.NEXT_PUBLIC_SAFE_DEMO_CHARACTER_KEY || "").trim();
 
   const uploadFileToR2 = async (file: File) => {
     const contentType = file.type || "application/octet-stream";
@@ -117,6 +119,78 @@ export default function WorkspaceClient() {
       throw new Error(`Upload failed (HTTP ${putRes.status})`);
     }
     return upload.file_key;
+  };
+
+  const startTaskPolling = (taskId: string) => {
+    let attempt = 0;
+    const startAt = Date.now();
+    pollTokenRef.current += 1;
+    const token = pollTokenRef.current;
+
+    if (pollRef.current) {
+      window.clearTimeout(pollRef.current);
+    }
+
+    const scheduleNext = () => {
+      const delay = POLL_BACKOFF[Math.min(attempt, POLL_BACKOFF.length - 1)];
+      attempt += 1;
+      pollRef.current = window.setTimeout(tick, delay);
+    };
+
+    const tick = async () => {
+      if (pollTokenRef.current !== token) return;
+      if (document.visibilityState !== "visible") {
+        scheduleNext();
+        return;
+      }
+      try {
+        const latest = await getTask(taskId);
+        setTask(latest);
+        if (shouldStopPolling(latest)) {
+          setIsRunning(false);
+          if (pollRef.current) {
+            window.clearTimeout(pollRef.current);
+            pollRef.current = null;
+          }
+          return;
+        }
+      } catch (err) {
+        setIsRunning(false);
+        setError("Polling failed. Is the backend running?");
+        return;
+      }
+
+      if (Date.now() - startAt > MAX_POLL_MS) {
+        setIsRunning(false);
+        setError("Polling timed out. Please retry.");
+        if (pollRef.current) {
+          window.clearTimeout(pollRef.current);
+          pollRef.current = null;
+        }
+        return;
+      }
+
+      scheduleNext();
+    };
+
+    tick();
+  };
+
+  const runAvatarTask = async (overrides?: { motionKey?: string; characterKey?: string; modeOverride?: SwapMode }) => {
+    const characterKey = overrides?.characterKey || (await uploadFileToR2(imageFile as File));
+    const motionKey = overrides?.motionKey || (await uploadFileToR2(videoFile as File));
+    return createTask({
+      service_type: "avatar_transfer",
+      model_id: "kling-v2.6-std-motion",
+      mode: overrides?.modeOverride || modeApi,
+      input_key: motionKey,
+      inputs: {
+        character_image: characterKey,
+        motion_video: motionKey,
+        character_orientation: orientation,
+        prompt: prompt.trim() ? prompt.trim() : undefined
+      }
+    });
   };
 
   const handleRun = async () => {
@@ -139,20 +213,7 @@ export default function WorkspaceClient() {
     try {
       let result;
       if (isAvatar) {
-        const characterKey = await uploadFileToR2(imageFile as File);
-        const motionKey = await uploadFileToR2(videoFile as File);
-        result = await createTask({
-          service_type: "avatar_transfer",
-          model_id: "kling-v2.6-std-motion",
-          mode: modeApi,
-          input_key: motionKey,
-          inputs: {
-            character_image: characterKey,
-            motion_video: motionKey,
-            character_orientation: orientation,
-            prompt: prompt.trim() ? prompt.trim() : undefined
-          }
-        });
+        result = await runAvatarTask();
       } else {
         const input_key =
           inputSource === "preset" ? presetKey : await uploadFileToR2(videoFile as File);
@@ -162,59 +223,7 @@ export default function WorkspaceClient() {
           input_key
         });
       }
-      const taskId = result.task_id;
-      let attempt = 0;
-      const startAt = Date.now();
-      pollTokenRef.current += 1;
-      const token = pollTokenRef.current;
-
-      if (pollRef.current) {
-        window.clearTimeout(pollRef.current);
-      }
-
-      const scheduleNext = () => {
-        const delay = POLL_BACKOFF[Math.min(attempt, POLL_BACKOFF.length - 1)];
-        attempt += 1;
-        pollRef.current = window.setTimeout(tick, delay);
-      };
-
-      const tick = async () => {
-        if (pollTokenRef.current !== token) return;
-        if (document.visibilityState !== "visible") {
-          scheduleNext();
-          return;
-        }
-        try {
-          const latest = await getTask(taskId);
-          setTask(latest);
-          if (shouldStopPolling(latest)) {
-            setIsRunning(false);
-            if (pollRef.current) {
-              window.clearTimeout(pollRef.current);
-              pollRef.current = null;
-            }
-            return;
-          }
-        } catch (err) {
-          setIsRunning(false);
-          setError("Polling failed. Is the backend running?");
-          return;
-        }
-
-        if (Date.now() - startAt > MAX_POLL_MS) {
-          setIsRunning(false);
-          setError("Polling timed out. Please retry.");
-          if (pollRef.current) {
-            window.clearTimeout(pollRef.current);
-            pollRef.current = null;
-          }
-          return;
-        }
-
-        scheduleNext();
-      };
-
-      tick();
+      startTaskPolling(result.task_id);
     } catch (err) {
       setIsRunning(false);
       setError(err instanceof Error ? err.message : "Failed to start task.");
@@ -229,6 +238,12 @@ export default function WorkspaceClient() {
   const logs = task?.logs ?? [];
   const taskId = task?.task_id ?? task?.id ?? "";
   const showUploadBlocks = (isSwap && inputSource === "upload") || isAvatar;
+  const lowerError = (task?.error || "").toLowerCase();
+  const hasPolicyViolation =
+    lowerError.includes("content_policy_violation") ||
+    logs.some((line) => line.toLowerCase().includes("content_policy_violation"));
+  const showPolicyPanel = isAvatar && modeApi === "intelligent" && hasPolicyViolation;
+  const canUseSafeDemo = Boolean(safeDemoMotionKey && safeDemoCharacterKey) && !isRunning;
   const canRun = isLocalization
     ? false
     : isAvatar
@@ -271,6 +286,44 @@ export default function WorkspaceClient() {
         "  -H \"Content-Type: application/json\"",
         `  -d '{\"service\":\"${serviceApi}\",\"mode\":\"${modeApi}\",\"input_key\":\"${presetKey}\"}'`
       ].join(" \\\n");
+
+  const handleRetrySafeSlicing = async () => {
+    if (!isAvatar || isRunning) return;
+    if (!videoFile || !imageFile) {
+      setError("Retry requires character image and motion video files.");
+      return;
+    }
+    setError(null);
+    setIsRunning(true);
+    setTask(null);
+    cancelPolling();
+    try {
+      const result = await runAvatarTask({ modeOverride: "intelligent" });
+      startTaskPolling(result.task_id);
+    } catch (err) {
+      setIsRunning(false);
+      setError(err instanceof Error ? err.message : "Retry failed.");
+    }
+  };
+
+  const handleUseSafeDemoClip = async () => {
+    if (!isAvatar || isRunning || !safeDemoMotionKey || !safeDemoCharacterKey) return;
+    setError(null);
+    setIsRunning(true);
+    setTask(null);
+    cancelPolling();
+    try {
+      const result = await runAvatarTask({
+        motionKey: safeDemoMotionKey,
+        characterKey: safeDemoCharacterKey,
+        modeOverride: "intelligent"
+      });
+      startTaskPolling(result.task_id);
+    } catch (err) {
+      setIsRunning(false);
+      setError(err instanceof Error ? err.message : "Safe demo retry failed.");
+    }
+  };
 
   return (
     <div className="h-screen bg-white text-slate-900 flex flex-col font-sans overflow-hidden">
@@ -683,6 +736,34 @@ export default function WorkspaceClient() {
                   </>
                 ) : null}
                 {error ? <p className="text-xs text-rose-500">{error}</p> : null}
+                {showPolicyPanel ? (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 space-y-2">
+                    <div className="font-semibold">Safety policy blocked this input.</div>
+                    <div>
+                      Intelligent mode detected a content policy violation. Try safe slicing retry or switch to a safe demo clip.
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleRetrySafeSlicing}
+                        disabled={isRunning}
+                        className="rounded-md border border-amber-400 bg-white px-3 py-1.5 text-[11px] font-semibold text-amber-800 disabled:opacity-60"
+                      >
+                        Retry (safe slicing)
+                      </button>
+                      {canUseSafeDemo ? (
+                        <button
+                          type="button"
+                          onClick={handleUseSafeDemoClip}
+                          disabled={isRunning}
+                          className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-[11px] font-semibold text-blue-700 disabled:opacity-60"
+                        >
+                          Use Safe Demo Clip
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
                 {taskId ? (
                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
                     <div>Task ID: {taskId}</div>
@@ -758,7 +839,15 @@ export default function WorkspaceClient() {
                     <span className="text-slate-400 w-12 select-none">
                       [{String(index + 1).padStart(2, "0")}]
                     </span>
-                    <span className="text-slate-700">{line}</span>
+                    <span
+                      className={
+                        line.startsWith("[slice]") || line.startsWith("[safety]") || line.startsWith("[fallback]")
+                          ? "text-amber-700 font-semibold"
+                          : "text-slate-700"
+                      }
+                    >
+                      {line}
+                    </span>
                   </div>
                 ))
               ) : (
