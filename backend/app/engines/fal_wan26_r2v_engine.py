@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
+import subprocess
 from typing import Any, Callable, Dict
 
 import httpx
@@ -54,6 +56,8 @@ class FalWan26R2VEngine:
         self.enable_prompt_expansion = _env_bool("SWIFT_AVATAR_ENABLE_PROMPT_EXPANSION", True)
         self.multi_shots = _env_bool("SWIFT_AVATAR_MULTI_SHOTS", False)
         self.enable_safety_checker = _env_bool("SWIFT_AVATAR_ENABLE_SAFETY_CHECKER", True)
+        self.fixed_slice_enabled = _env_bool("SWIFT_R2V_FIXED_SLICE_ENABLED", False)
+        self.fixed_slice_start_sec = int(os.getenv("SWIFT_R2V_FIXED_SLICE_START_SEC", "0"))
         self.timeout_sec = int(os.getenv("WAN26_TIMEOUT_SEC", "900"))
         self.r2 = R2Client()
 
@@ -78,10 +82,30 @@ class FalWan26R2VEngine:
             str(inputs.get("prompt") or "").strip()
             or "Keep identity and motion intent. High quality, stable character and consistent style."
         )
+        submit_video_url = record.input_video_url
+        slice_meta: Dict[str, Any] = {}
+        if self.fixed_slice_enabled:
+            duration_sec = int(self.duration)
+            ref_clip_url = await asyncio.to_thread(
+                self._slice_and_upload_ref_clip,
+                task_id,
+                record.input_video_url,
+                self.fixed_slice_start_sec,
+                duration_sec,
+            )
+            submit_video_url = ref_clip_url
+            slice_meta = {
+                "ref_clip_1_url": ref_clip_url,
+                "slice_offset_sec": self.fixed_slice_start_sec,
+                "slice_duration_sec": duration_sec,
+            }
+            on_log(
+                f"[slice] start={self.fixed_slice_start_sec} dur={duration_sec} ref_clip_1_url={ref_clip_url}"
+            )
 
         args: Dict[str, Any] = {
             "prompt": prompt,
-            "video_urls": [record.input_video_url],
+            "video_urls": [submit_video_url],
             "aspect_ratio": self.aspect_ratio,
             "resolution": self.resolution,
             "duration": self.duration,
@@ -152,6 +176,7 @@ class FalWan26R2VEngine:
                 "aspect_ratio": self.aspect_ratio,
                 "resolution": self.resolution,
                 "r2v_logs": r2v_logs,
+                **slice_meta,
             },
         )
 
@@ -161,3 +186,51 @@ class FalWan26R2VEngine:
             response = await client.get(url)
             response.raise_for_status()
             return response.content
+
+    def _slice_and_upload_ref_clip(
+        self,
+        task_id: str,
+        input_video_url: str,
+        start_sec: int,
+        duration_sec: int,
+    ) -> str:
+        repo_root = Path(__file__).resolve().parents[3]
+        workdir = repo_root / "video_workspace" / "tasks" / task_id / "recraft"
+        workdir.mkdir(parents=True, exist_ok=True)
+
+        src_path = workdir / "source.mp4"
+        ref_path = workdir / "ref_clip_1.mp4"
+
+        with httpx.Client(timeout=self.timeout_sec, follow_redirects=True) as client:
+            response = client.get(input_video_url)
+            response.raise_for_status()
+            src_path.write_bytes(response.content)
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            str(start_sec),
+            "-i",
+            str(src_path),
+            "-t",
+            str(duration_sec),
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            str(ref_path),
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except FileNotFoundError as exc:
+            raise EngineRunError("ffmpeg is not installed on runtime image") from exc
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            raise EngineRunError(f"ffmpeg slicing failed: {stderr[-400:]}") from exc
+
+        key = f"inputs/{task_id}/ref_clip_1.mp4"
+        content = ref_path.read_bytes()
+        return self.r2.upload_bytes(key=key, content=content, content_type="video/mp4")
