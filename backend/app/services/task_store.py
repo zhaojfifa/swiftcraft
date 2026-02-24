@@ -43,12 +43,13 @@ class TaskStore:
         if self._r2 is not None:
             key = self._task_key(record.task_id)
             payload = record.model_dump(mode="json")
-            payload_bytes = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+            payload_data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            payload_bytes = len(payload_data)
             start = time.time()
             print(f"[task_store][put] pid={os.getpid()} task_id={record.task_id} start")
             logger.info("[task_store][put] start task_id=%s key=%s bytes=%s", record.task_id, key, payload_bytes)
             try:
-                self._r2.put_json(key, payload)
+                self._r2.put_bytes(key, payload_data, content_type="application/json")
                 elapsed_ms = int((time.time() - start) * 1000)
                 print(f"[task_store][put] pid={os.getpid()} task_id={record.task_id} ms={elapsed_ms} bytes={payload_bytes} ok")
                 logger.info(
@@ -93,7 +94,7 @@ class TaskStore:
         print(f"[task_store][get] pid={os.getpid()} task_id={task_id} start")
         logger.info("[task_store][get] start task_id=%s key=%s", task_id, key)
         try:
-            data = self._r2.get_json(key)
+            raw = self._r2.get_bytes(key)
         except Exception as exc:
             elapsed_ms = int((time.time() - start) * 1000)
             print(
@@ -102,12 +103,13 @@ class TaskStore:
             )
             logger.exception("[task_store][get] fail task_id=%s key=%s elapsed_ms=%s error=%s", task_id, key, elapsed_ms, exc)
             raise
-        if not data:
+        if not raw:
             elapsed_ms = int((time.time() - start) * 1000)
             print(f"[task_store][get] pid={os.getpid()} task_id={task_id} ms={elapsed_ms} bytes=0 ok found=false")
             logger.info("[task_store][get] ok task_id=%s key=%s elapsed_ms=%s bytes=0 found=false", task_id, key, elapsed_ms)
             return None
-        payload_bytes = len(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+        payload_bytes = len(raw)
+        data = json.loads(raw.decode("utf-8"))
         elapsed_ms = int((time.time() - start) * 1000)
         print(f"[task_store][get] pid={os.getpid()} task_id={task_id} ms={elapsed_ms} bytes={payload_bytes} ok")
         logger.info(
