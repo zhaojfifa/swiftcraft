@@ -84,7 +84,8 @@ class FalWan26R2VEngine:
         self.retry_offsets_10s = _parse_offsets(os.getenv("SWIFT_R2V_RETRY_SLICE_OFFSETS_10S", "0,3,6"), [0, 3, 6])
         self.safe_ref_video_url = os.getenv("SWIFT_R2V_SAFE_REF_VIDEO_URL", "").strip()
         self.timeout_sec = int(os.getenv("WAN26_TIMEOUT_SEC", "900"))
-        self.step_timeout_sec = max(5, int(os.getenv("SWIFT_R2V_STEP_TIMEOUT_SEC", str(self.timeout_sec))))
+        self.step_timeout_sec = max(5, int(os.getenv("SWIFT_R2V_STEP_TIMEOUT_SEC", "60")))
+        self.prepare_timeout_sec = max(5, int(os.getenv("SWIFT_R2V_PREPARE_TIMEOUT_SEC", "60")))
         self.r2 = R2Client()
 
     async def _run_step(
@@ -133,7 +134,8 @@ class FalWan26R2VEngine:
             on_log(
                 "[preflight] policy_retry_enabled="
                 f"{self.policy_retry_enabled} fixed_slice_enabled={self.fixed_slice_enabled} "
-                f"fixed_slice_start_sec={self.fixed_slice_start_sec} step_timeout_sec={self.step_timeout_sec}"
+                f"fixed_slice_start_sec={self.fixed_slice_start_sec} step_timeout_sec={self.step_timeout_sec} "
+                f"prepare_timeout_sec={self.prepare_timeout_sec}"
             )
             on_log(
                 "[preflight] raw_flags "
@@ -203,6 +205,7 @@ class FalWan26R2VEngine:
                             offset,
                             duration_sec,
                         ),
+                        timeout_sec=self.prepare_timeout_sec,
                     )
                     submit_video_url = ref_clip_url
                     slice_meta = {
@@ -270,6 +273,7 @@ class FalWan26R2VEngine:
                         self.fixed_slice_start_sec,
                         duration_sec,
                     ),
+                    timeout_sec=self.prepare_timeout_sec,
                 )
                 submit_video_url = ref_clip_url
                 slice_meta = {
