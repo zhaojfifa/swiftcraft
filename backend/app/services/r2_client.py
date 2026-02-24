@@ -47,7 +47,7 @@ def load_r2_config() -> R2Config:
 class R2Client:
     def __init__(self, cfg: Optional[R2Config] = None) -> None:
         self.cfg = cfg or load_r2_config()
-        self._retry_delays = (0.0, 0.2, 0.5)
+        self._retry_delays = (0.0, 0.2)
         self.s3 = boto3.client(
             "s3",
             endpoint_url=self.cfg.endpoint,
@@ -55,8 +55,8 @@ class R2Client:
             aws_secret_access_key=self.cfg.secret_access_key,
             region_name="auto",
             config=Config(
-                connect_timeout=5,
-                read_timeout=10,
+                connect_timeout=2,
+                read_timeout=2,
                 retries={"max_attempts": 1, "mode": "standard"},
             ),
         )
@@ -126,10 +126,17 @@ class R2Client:
         payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.put_bytes(key, payload, content_type="application/json")
 
-    def put_bytes(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
+    def put_bytes(
+        self,
+        key: str,
+        data: bytes,
+        content_type: str = "application/octet-stream",
+        retries: int = 1,
+    ) -> None:
         key = key.lstrip("/")
         last_exc: Exception | None = None
-        for attempt, delay in enumerate(self._retry_delays):
+        retry_delays = self._retry_delays[: max(1, retries + 1)]
+        for attempt, delay in enumerate(retry_delays):
             if delay:
                 time.sleep(delay)
             try:
@@ -142,7 +149,7 @@ class R2Client:
                 return
             except Exception as exc:
                 last_exc = exc
-                if attempt >= len(self._retry_delays) - 1 or not self._is_retryable(exc):
+                if attempt >= len(retry_delays) - 1 or not self._is_retryable(exc):
                     raise
         if last_exc is not None:
             raise last_exc
@@ -153,10 +160,12 @@ class R2Client:
             return None
         return json.loads(body.decode("utf-8"))
 
-    def get_bytes(self, key: str) -> Optional[bytes]:
+    def get_bytes(self, key: str, timeout_sec: int = 2, retries: int = 1) -> Optional[bytes]:
         key = key.lstrip("/")
         last_exc: Exception | None = None
-        for attempt, delay in enumerate(self._retry_delays):
+        retry_delays = self._retry_delays[: max(1, retries + 1)]
+        started = time.time()
+        for attempt, delay in enumerate(retry_delays):
             if delay:
                 time.sleep(delay)
             try:
@@ -169,11 +178,13 @@ class R2Client:
                 if self._is_not_found(exc):
                     return None
                 last_exc = exc
-                if attempt >= len(self._retry_delays) - 1 or not self._is_retryable(exc):
+                elapsed = time.time() - started
+                if elapsed >= timeout_sec or attempt >= len(retry_delays) - 1 or not self._is_retryable(exc):
                     raise
             except Exception as exc:
                 last_exc = exc
-                if attempt >= len(self._retry_delays) - 1 or not self._is_retryable(exc):
+                elapsed = time.time() - started
+                if elapsed >= timeout_sec or attempt >= len(retry_delays) - 1 or not self._is_retryable(exc):
                     raise
         if last_exc is not None:
             raise last_exc

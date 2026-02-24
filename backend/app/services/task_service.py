@@ -4,6 +4,7 @@ import logging
 import os
 import asyncio
 import threading
+import time
 import traceback
 import uuid
 from pathlib import Path
@@ -398,11 +399,44 @@ class TaskService:
         return result_holder.get("result")
 
     def get_task(self, task_id: str) -> TaskResponseOut:
-        record = self.store.get_task(task_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail="Task not found.")
-        service_type = _service_type_from_legacy(record.service)
-        return self._to_response(record, service_type)
+        request_id = uuid.uuid4().hex[:12]
+        start = time.time()
+        try:
+            record = self.store.get_task(task_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail="Task not found.")
+            service_type = _service_type_from_legacy(record.service)
+            elapsed_ms = int((time.time() - start) * 1000)
+            logger.info(
+                "[task_service.get_task] pid=%s request_id=%s task_id=%s elapsed_ms=%s outcome=success",
+                os.getpid(),
+                request_id,
+                task_id,
+                elapsed_ms,
+            )
+            return self._to_response(record, service_type)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            elapsed_ms = int((time.time() - start) * 1000)
+            logger.exception(
+                "[task_service.get_task] pid=%s request_id=%s task_id=%s elapsed_ms=%s outcome=error error=%s",
+                os.getpid(),
+                request_id,
+                task_id,
+                elapsed_ms,
+                exc,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "task_poll_unavailable",
+                    "task_id": task_id,
+                    "request_id": request_id,
+                    "pid": os.getpid(),
+                    "exception": f"{type(exc).__name__}: {exc}",
+                },
+            )
 
     def _to_response(self, record: TaskRecord, service_type: ServiceType) -> TaskResponseOut:
         return TaskResponseOut(

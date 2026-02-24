@@ -102,7 +102,11 @@ class TaskStore:
                 f"ms={elapsed_ms} bytes=0 fail error={type(exc).__name__}: {exc}"
             )
             logger.exception("[task_store][get] fail task_id=%s key=%s elapsed_ms=%s error=%s", task_id, key, elapsed_ms, exc)
-            raise
+            with self._lock:
+                stale = self._tasks.get(task_id)
+            if stale is not None:
+                return stale.copy()
+            return None
         if not raw:
             elapsed_ms = int((time.time() - start) * 1000)
             print(f"[task_store][get] pid={os.getpid()} task_id={task_id} ms={elapsed_ms} bytes=0 ok found=false")
