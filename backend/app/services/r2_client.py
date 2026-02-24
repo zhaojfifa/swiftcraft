@@ -123,8 +123,11 @@ class R2Client:
         return self.public_url(key)
 
     def put_json(self, key: str, data: Dict[str, object]) -> None:
-        key = key.lstrip("/")
         payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.put_bytes(key, payload, content_type="application/json")
+
+    def put_bytes(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
+        key = key.lstrip("/")
         last_exc: Exception | None = None
         for attempt, delay in enumerate(self._retry_delays):
             if delay:
@@ -133,8 +136,8 @@ class R2Client:
                 self.s3.put_object(
                     Bucket=self.cfg.bucket,
                     Key=key,
-                    Body=payload,
-                    ContentType="application/json",
+                    Body=data,
+                    ContentType=content_type,
                 )
                 return
             except Exception as exc:
@@ -145,6 +148,12 @@ class R2Client:
             raise last_exc
 
     def get_json(self, key: str) -> Optional[Dict[str, object]]:
+        body = self.get_bytes(key)
+        if body is None:
+            return None
+        return json.loads(body.decode("utf-8"))
+
+    def get_bytes(self, key: str) -> Optional[bytes]:
         key = key.lstrip("/")
         last_exc: Exception | None = None
         for attempt, delay in enumerate(self._retry_delays):
@@ -155,7 +164,7 @@ class R2Client:
                 body = response["Body"].read()
                 if not body:
                     return None
-                return json.loads(body.decode("utf-8"))
+                return body
             except ClientError as exc:
                 if self._is_not_found(exc):
                     return None
