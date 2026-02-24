@@ -10,7 +10,7 @@ import traceback
 from typing import Any, Dict, List, Optional
 
 from app.models.task import TaskRecord
-from app.services.r2_client import R2Client
+from app.services.r2_client import R2Client, R2ClientError
 
 
 logger = logging.getLogger(__name__)
@@ -59,13 +59,13 @@ class TaskStore:
                     elapsed_ms,
                     payload_bytes,
                 )
-            except Exception as exc:
+            except R2ClientError as exc:
                 elapsed_ms = int((time.time() - start) * 1000)
                 print(
                     f"[task_store][put] pid={os.getpid()} task_id={record.task_id} "
                     f"ms={elapsed_ms} bytes={payload_bytes} fail error={type(exc).__name__}: {exc}"
                 )
-                logger.exception(
+                logger.warning(
                     "[task_store][put] fail task_id=%s key=%s elapsed_ms=%s bytes=%s error=%s",
                     record.task_id,
                     key,
@@ -73,7 +73,16 @@ class TaskStore:
                     payload_bytes,
                     exc,
                 )
-                raise
+            except Exception as exc:
+                elapsed_ms = int((time.time() - start) * 1000)
+                logger.warning(
+                    "[task_store][put] unexpected fail task_id=%s key=%s elapsed_ms=%s bytes=%s error=%s",
+                    record.task_id,
+                    key,
+                    elapsed_ms,
+                    payload_bytes,
+                    exc,
+                )
         with self._lock:
             self._tasks[record.task_id] = record
             if record.task_id not in self._order:
@@ -95,13 +104,21 @@ class TaskStore:
         logger.info("[task_store][get] start task_id=%s key=%s", task_id, key)
         try:
             raw = self._r2.get_bytes(key)
-        except Exception as exc:
+        except R2ClientError as exc:
             elapsed_ms = int((time.time() - start) * 1000)
             print(
                 f"[task_store][get] pid={os.getpid()} task_id={task_id} "
                 f"ms={elapsed_ms} bytes=0 fail error={type(exc).__name__}: {exc}"
             )
-            logger.exception("[task_store][get] fail task_id=%s key=%s elapsed_ms=%s error=%s", task_id, key, elapsed_ms, exc)
+            logger.warning("[task_store][get] fail task_id=%s key=%s elapsed_ms=%s error=%s", task_id, key, elapsed_ms, exc)
+            with self._lock:
+                stale = self._tasks.get(task_id)
+            if stale is not None:
+                return stale.copy()
+            return None
+        except Exception as exc:
+            elapsed_ms = int((time.time() - start) * 1000)
+            logger.warning("[task_store][get] unexpected fail task_id=%s key=%s elapsed_ms=%s error=%s", task_id, key, elapsed_ms, exc)
             with self._lock:
                 stale = self._tasks.get(task_id)
             if stale is not None:
@@ -113,7 +130,12 @@ class TaskStore:
             logger.info("[task_store][get] ok task_id=%s key=%s elapsed_ms=%s bytes=0 found=false", task_id, key, elapsed_ms)
             return None
         payload_bytes = len(raw)
-        data = json.loads(raw.decode("utf-8"))
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except Exception as exc:
+            elapsed_ms = int((time.time() - start) * 1000)
+            logger.warning("[task_store][get] decode fail task_id=%s key=%s elapsed_ms=%s error=%s", task_id, key, elapsed_ms, exc)
+            return None
         elapsed_ms = int((time.time() - start) * 1000)
         print(f"[task_store][get] pid={os.getpid()} task_id={task_id} ms={elapsed_ms} bytes={payload_bytes} ok")
         logger.info(
@@ -123,7 +145,12 @@ class TaskStore:
             elapsed_ms,
             payload_bytes,
         )
-        record = TaskRecord.model_validate(data)
+        try:
+            record = TaskRecord.model_validate(data)
+        except Exception as exc:
+            elapsed_ms = int((time.time() - start) * 1000)
+            logger.warning("[task_store][get] validate fail task_id=%s key=%s elapsed_ms=%s error=%s", task_id, key, elapsed_ms, exc)
+            return None
         with self._lock:
             self._tasks[task_id] = record
             if task_id not in self._order:

@@ -18,6 +18,10 @@ from botocore.exceptions import (
 )
 
 
+class R2ClientError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class R2Config:
     endpoint: str
@@ -55,8 +59,8 @@ class R2Client:
             aws_secret_access_key=self.cfg.secret_access_key,
             region_name="auto",
             config=Config(
-                connect_timeout=2,
-                read_timeout=2,
+                connect_timeout=5,
+                read_timeout=5,
                 retries={"max_attempts": 1, "mode": "standard"},
             ),
         )
@@ -150,9 +154,9 @@ class R2Client:
             except Exception as exc:
                 last_exc = exc
                 if attempt >= len(retry_delays) - 1 or not self._is_retryable(exc):
-                    raise
+                    raise R2ClientError(f"put_bytes failed for key={key}: {type(exc).__name__}: {exc}") from exc
         if last_exc is not None:
-            raise last_exc
+            raise R2ClientError(f"put_bytes failed for key={key}: {type(last_exc).__name__}: {last_exc}") from last_exc
 
     def get_json(self, key: str) -> Optional[Dict[str, object]]:
         body = self.get_bytes(key)
@@ -180,14 +184,14 @@ class R2Client:
                 last_exc = exc
                 elapsed = time.time() - started
                 if elapsed >= timeout_sec or attempt >= len(retry_delays) - 1 or not self._is_retryable(exc):
-                    raise
+                    raise R2ClientError(f"get_bytes failed for key={key}: {type(exc).__name__}: {exc}") from exc
             except Exception as exc:
                 last_exc = exc
                 elapsed = time.time() - started
                 if elapsed >= timeout_sec or attempt >= len(retry_delays) - 1 or not self._is_retryable(exc):
-                    raise
+                    raise R2ClientError(f"get_bytes failed for key={key}: {type(exc).__name__}: {exc}") from exc
         if last_exc is not None:
-            raise last_exc
+            raise R2ClientError(f"get_bytes failed for key={key}: {type(last_exc).__name__}: {last_exc}") from last_exc
         return None
 
     def exists(self, key: str) -> bool:
