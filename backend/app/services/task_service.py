@@ -311,6 +311,28 @@ class TaskService:
             return "wan26_r2v" if record.mode == "intelligent" else "wan26_flash"
         return self._default_provider()
 
+    def launch_task_background(self, task_id: str) -> None:
+        thread = threading.Thread(
+            target=self._run_task_background_safe,
+            args=(task_id,),
+            daemon=True,
+            name=f"task-{task_id}",
+        )
+        thread.start()
+
+    def _run_task_background_safe(self, task_id: str) -> None:
+        try:
+            self.run_task_background(task_id)
+        except Exception as exc:
+            self.store.append_log(task_id, f"[failed] background thread crashed: {type(exc).__name__}: {exc}")
+            self.store.append_log(task_id, f"[failed] traceback: {traceback.format_exc().strip()}")
+            self.store.fail_task(
+                task_id,
+                error_msg=f"{type(exc).__name__}: {exc}",
+                where="task_service.background_thread",
+                exc=exc,
+            )
+
     def run_task_background(self, task_id: str) -> None:
         self.store.append_log(task_id, f"[runner] start task_id={task_id}")
         record = self.store.get_task(task_id)
@@ -330,7 +352,7 @@ class TaskService:
         self.store.set_stage(task_id, "running", 1)
 
         try:
-            self.store.append_log(task_id, "[runner] engine run start")
+            self.store.append_log(task_id, "[runner] engine submit start")
             result = self._run_engine(
                 engine=engine,
                 task_id=task_id,
@@ -339,6 +361,7 @@ class TaskService:
                 on_log=lambda message: self.store.append_log(task_id, message),
                 on_stage=lambda stage, progress: self.store.set_stage(task_id, stage, progress),
             )
+            self.store.append_log(task_id, "[runner] engine submit finished")
             self.store.append_log(task_id, "[runner] engine run finished")
         except Exception as exc:
             trace_line = traceback.format_exception_only(type(exc), exc)[-1].strip()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
 import time
 import traceback
@@ -7,6 +8,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 
 from app.schemas.task import TaskResponseOut
 from app.services.task_service import TaskService
@@ -93,7 +95,7 @@ async def create_task(
         image_file=image_file,
         face_enhancer=face_enhancer,
     )
-    background_tasks.add_task(service.run_task_background, result.task_id)
+    service.launch_task_background(result.task_id)
     return result
 
 
@@ -124,9 +126,9 @@ async def get_task(task_id: str) -> TaskResponseOut:
         )
         print(f"[get_task][traceback] pid={os.getpid()} request_id={request_id} task_id={task_id}")
         print(traceback.format_exc())
-        raise HTTPException(
+        return JSONResponse(
             status_code=503,
-            detail={
+            content={
                 "error": "task_poll_unavailable",
                 "task_id": task_id,
                 "request_id": request_id,
@@ -134,3 +136,12 @@ async def get_task(task_id: str) -> TaskResponseOut:
                 "exception": f"{type(e).__name__}: {e}",
             },
         )
+
+
+@router.get("/health")
+async def health() -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "pid": os.getpid(),
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
