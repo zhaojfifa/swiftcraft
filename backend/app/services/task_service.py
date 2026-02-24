@@ -310,6 +310,15 @@ class TaskService:
             return "wan26_r2v" if record.mode == "intelligent" else "wan26_flash"
         return self._default_provider()
 
+    def _engine_watchdog_timeout_sec(self) -> int:
+        base = int(os.getenv("WAN26_TIMEOUT_SEC", "900"))
+        buffer = int(os.getenv("SWIFT_RUNNER_TIMEOUT_BUFFER_SEC", "120"))
+        return max(30, base + buffer)
+
+    def _mark_failed_terminal(self, task_id: str, error_msg: str, where: str, exc: Exception | None = None) -> None:
+        self.store.set_stage(task_id, "failed", 100)
+        self.store.fail_task(task_id, error_msg=error_msg, where=where, exc=exc)
+
     def launch_task_background(self, task_id: str) -> None:
         thread = threading.Thread(
             target=self._run_task_background_safe,
@@ -325,7 +334,7 @@ class TaskService:
         except Exception as exc:
             self.store.append_log(task_id, f"[failed] background thread crashed: {type(exc).__name__}: {exc}")
             self.store.append_log(task_id, f"[failed] traceback: {traceback.format_exc().strip()}")
-            self.store.fail_task(
+            self._mark_failed_terminal(
                 task_id,
                 error_msg=f"{type(exc).__name__}: {exc}",
                 where="task_service.background_thread",
@@ -353,13 +362,14 @@ class TaskService:
 
         try:
             self.store.append_log(task_id, "[runner] engine submit start")
-            result = self._run_engine(
+            result = self._run_engine_with_watchdog(
                 engine=engine,
                 task_id=task_id,
                 record=record,
                 inputs=inputs,
                 on_log=lambda message: self.store.append_log(task_id, message),
                 on_stage=lambda stage, progress: self.store.set_stage(task_id, stage, progress),
+                timeout_sec=self._engine_watchdog_timeout_sec(),
             )
             self.store.append_log(task_id, "[runner] engine submit finished")
             self.store.append_log(task_id, "[runner] engine run finished")
@@ -373,7 +383,7 @@ class TaskService:
             self.store.append_log(task_id, f"[failed] pid={pid} {type(exc).__name__}: {exc}")
             if trace_loc:
                 self.store.append_log(task_id, f"[failed] traceback: {trace_loc}")
-            self.store.fail_task(task_id, error_msg=trace_line, where="task_service.background_runner", exc=exc)
+            self._mark_failed_terminal(task_id, error_msg=trace_line, where="task_service.background_runner", exc=exc)
             failed_record = self.store.get_task(task_id)
             failed_status = failed_record.status if failed_record is not None else "failed"
             self.store.append_log(task_id, f"[runner] thread done pid={pid} task_id={task_id} status={failed_status}")
@@ -386,7 +396,7 @@ class TaskService:
             self.store.append_log(task_id, f"[runner] thread done pid={pid} task_id={task_id} status={done_status}")
             return
 
-        self.store.fail_task(
+        self._mark_failed_terminal(
             task_id,
             error_msg="EngineRunError: engine returned no output_url",
             where="task_service.background_runner",
@@ -394,6 +404,34 @@ class TaskService:
         failed_record = self.store.get_task(task_id)
         failed_status = failed_record.status if failed_record is not None else "failed"
         self.store.append_log(task_id, f"[runner] thread done pid={pid} task_id={task_id} status={failed_status}")
+
+    def _run_engine_with_watchdog(
+        self,
+        engine: Any,
+        task_id: str,
+        record: TaskRecord,
+        inputs: Dict[str, Any],
+        on_log: Any,
+        on_stage: Any,
+        timeout_sec: int,
+    ) -> Any:
+        result_holder: Dict[str, Any] = {}
+        error_holder: Dict[str, Exception] = {}
+
+        def _runner() -> None:
+            try:
+                result_holder["result"] = self._run_engine(engine, task_id, record, inputs, on_log=on_log, on_stage=on_stage)
+            except Exception as exc:
+                error_holder["error"] = exc
+
+        thread = threading.Thread(target=_runner, name=f"task-watchdog-{task_id}", daemon=True)
+        thread.start()
+        thread.join(timeout=timeout_sec)
+        if thread.is_alive():
+            raise TimeoutError(f"engine watchdog timeout after {timeout_sec}s")
+        if "error" in error_holder:
+            raise error_holder["error"]
+        return result_holder.get("result")
 
     def _run_engine(
         self,
