@@ -30,7 +30,12 @@ def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
         return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off", ""}:
+        return False
+    return default
 
 
 def _parse_offsets(raw: str, default: list[int]) -> list[int]:
@@ -121,8 +126,20 @@ class FalWan26R2VEngine:
     ) -> EngineResult:
         try:
             has_fal_key = bool((os.getenv("FAL_KEY") or os.getenv("FAL_API_KEY") or "").strip())
+            policy_retry_raw = os.getenv("SWIFT_R2V_POLICY_RETRY_ENABLED")
+            fixed_slice_raw = os.getenv("SWIFT_R2V_FIXED_SLICE_ENABLED")
             on_log(f"[preflight] model_id={self.model_id}")
             on_log(f"[preflight] has_fal_key={str(has_fal_key).lower()} duration={self.duration}")
+            on_log(
+                "[preflight] policy_retry_enabled="
+                f"{self.policy_retry_enabled} fixed_slice_enabled={self.fixed_slice_enabled} "
+                f"fixed_slice_start_sec={self.fixed_slice_start_sec} step_timeout_sec={self.step_timeout_sec}"
+            )
+            on_log(
+                "[preflight] raw_flags "
+                f"SWIFT_R2V_POLICY_RETRY_ENABLED={policy_retry_raw!r} "
+                f"SWIFT_R2V_FIXED_SLICE_ENABLED={fixed_slice_raw!r}"
+            )
             if not has_fal_key:
                 raise EngineRunError("missing FAL_KEY/FAL_API_KEY for fal provider")
 
