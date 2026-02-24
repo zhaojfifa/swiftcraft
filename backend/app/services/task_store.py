@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 import logging
 from threading import Lock
+import time
 import traceback
 from typing import Any, Dict, List, Optional
 
@@ -38,7 +40,32 @@ class TaskStore:
 
     def save(self, record: TaskRecord) -> TaskRecord:
         if self._r2 is not None:
-            self._r2.put_json(self._task_key(record.task_id), record.model_dump(mode="json"))
+            key = self._task_key(record.task_id)
+            payload = record.model_dump(mode="json")
+            payload_bytes = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+            start = time.time()
+            logger.info("[task_store][put] start task_id=%s key=%s bytes=%s", record.task_id, key, payload_bytes)
+            try:
+                self._r2.put_json(key, payload)
+                elapsed_ms = int((time.time() - start) * 1000)
+                logger.info(
+                    "[task_store][put] ok task_id=%s key=%s elapsed_ms=%s bytes=%s",
+                    record.task_id,
+                    key,
+                    elapsed_ms,
+                    payload_bytes,
+                )
+            except Exception as exc:
+                elapsed_ms = int((time.time() - start) * 1000)
+                logger.exception(
+                    "[task_store][put] fail task_id=%s key=%s elapsed_ms=%s bytes=%s error=%s",
+                    record.task_id,
+                    key,
+                    elapsed_ms,
+                    payload_bytes,
+                    exc,
+                )
+                raise
         with self._lock:
             self._tasks[record.task_id] = record
             if record.task_id not in self._order:
@@ -54,9 +81,28 @@ class TaskStore:
         if self._r2 is None:
             return None
 
-        data = self._r2.get_json(self._task_key(task_id))
+        key = self._task_key(task_id)
+        start = time.time()
+        logger.info("[task_store][get] start task_id=%s key=%s", task_id, key)
+        try:
+            data = self._r2.get_json(key)
+        except Exception as exc:
+            elapsed_ms = int((time.time() - start) * 1000)
+            logger.exception("[task_store][get] fail task_id=%s key=%s elapsed_ms=%s error=%s", task_id, key, elapsed_ms, exc)
+            raise
         if not data:
+            elapsed_ms = int((time.time() - start) * 1000)
+            logger.info("[task_store][get] ok task_id=%s key=%s elapsed_ms=%s bytes=0 found=false", task_id, key, elapsed_ms)
             return None
+        payload_bytes = len(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+        elapsed_ms = int((time.time() - start) * 1000)
+        logger.info(
+            "[task_store][get] ok task_id=%s key=%s elapsed_ms=%s bytes=%s found=true",
+            task_id,
+            key,
+            elapsed_ms,
+            payload_bytes,
+        )
         record = TaskRecord.model_validate(data)
         with self._lock:
             self._tasks[task_id] = record
