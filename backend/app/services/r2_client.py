@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Dict, Optional
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.config import Config
+from botocore.exceptions import (
+    BotoCoreError,
+    ClientError,
+    ConnectTimeoutError,
+    ConnectionClosedError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+)
 
 
 @dataclass(frozen=True)
@@ -38,13 +47,33 @@ def load_r2_config() -> R2Config:
 class R2Client:
     def __init__(self, cfg: Optional[R2Config] = None) -> None:
         self.cfg = cfg or load_r2_config()
+        self._retry_delays = (0.0, 0.2, 0.5)
         self.s3 = boto3.client(
             "s3",
             endpoint_url=self.cfg.endpoint,
             aws_access_key_id=self.cfg.access_key_id,
             aws_secret_access_key=self.cfg.secret_access_key,
             region_name="auto",
+            config=Config(
+                connect_timeout=5,
+                read_timeout=10,
+                retries={"max_attempts": 1, "mode": "standard"},
+            ),
         )
+
+    @staticmethod
+    def _is_not_found(exc: ClientError) -> bool:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        return code in ("NoSuchKey", "404", "NotFound")
+
+    @staticmethod
+    def _is_retryable(exc: Exception) -> bool:
+        if isinstance(exc, (EndpointConnectionError, ConnectionClosedError, ReadTimeoutError, ConnectTimeoutError)):
+            return True
+        if isinstance(exc, ClientError):
+            status = int(exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0) or 0)
+            return status in (429, 500, 502, 503, 504)
+        return isinstance(exc, BotoCoreError)
 
     def public_url(self, key: str) -> str:
         key = key.lstrip("/")
@@ -96,26 +125,50 @@ class R2Client:
     def put_json(self, key: str, data: Dict[str, object]) -> None:
         key = key.lstrip("/")
         payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.s3.put_object(
-            Bucket=self.cfg.bucket,
-            Key=key,
-            Body=payload,
-            ContentType="application/json",
-        )
+        last_exc: Exception | None = None
+        for attempt, delay in enumerate(self._retry_delays):
+            if delay:
+                time.sleep(delay)
+            try:
+                self.s3.put_object(
+                    Bucket=self.cfg.bucket,
+                    Key=key,
+                    Body=payload,
+                    ContentType="application/json",
+                )
+                return
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= len(self._retry_delays) - 1 or not self._is_retryable(exc):
+                    raise
+        if last_exc is not None:
+            raise last_exc
 
     def get_json(self, key: str) -> Optional[Dict[str, object]]:
         key = key.lstrip("/")
-        try:
-            response = self.s3.get_object(Bucket=self.cfg.bucket, Key=key)
-        except ClientError as exc:
-            code = str(exc.response.get("Error", {}).get("Code", ""))
-            if code in ("NoSuchKey", "404", "NotFound"):
-                return None
-            raise
-        body = response["Body"].read()
-        if not body:
-            return None
-        return json.loads(body.decode("utf-8"))
+        last_exc: Exception | None = None
+        for attempt, delay in enumerate(self._retry_delays):
+            if delay:
+                time.sleep(delay)
+            try:
+                response = self.s3.get_object(Bucket=self.cfg.bucket, Key=key)
+                body = response["Body"].read()
+                if not body:
+                    return None
+                return json.loads(body.decode("utf-8"))
+            except ClientError as exc:
+                if self._is_not_found(exc):
+                    return None
+                last_exc = exc
+                if attempt >= len(self._retry_delays) - 1 or not self._is_retryable(exc):
+                    raise
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= len(self._retry_delays) - 1 or not self._is_retryable(exc):
+                    raise
+        if last_exc is not None:
+            raise last_exc
+        return None
 
     def exists(self, key: str) -> bool:
         key = key.lstrip("/")
