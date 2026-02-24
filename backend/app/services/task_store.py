@@ -230,14 +230,32 @@ class TaskStore:
             return dict(self._artifacts.get(task_id, {}))
 
     def append_log(self, task_id: str, message: str) -> None:
+        started = time.perf_counter()
         record = self.get(task_id)
         if not record:
             return
         logs = list(record.logs or [])
         logs.append(message)
         self._update(task_id, {"logs": logs})
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        step = "log"
+        if message.startswith("[") and "]" in message:
+            step = message[1 : message.find("]")] or step
+        print(
+            f"[task_store][append_log] pid={os.getpid()} task_id={task_id} "
+            f"step={step} ms={elapsed_ms} chars={len(message)}"
+        )
+        logger.info(
+            "[task_store][append_log] pid=%s task_id=%s step=%s elapsed_ms=%s chars=%s",
+            os.getpid(),
+            task_id,
+            step,
+            elapsed_ms,
+            len(message),
+        )
 
     def set_stage(self, task_id: str, stage: str, progress: int) -> None:
+        started = time.perf_counter()
         update: Dict[str, Any] = {"stage": stage, "progress": _clamp(progress)}
         if stage == "failed":
             update["status"] = "failed"
@@ -246,6 +264,19 @@ class TaskStore:
         else:
             update["status"] = "running"
         self._update(task_id, update)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        print(
+            f"[task_store][set_stage] pid={os.getpid()} task_id={task_id} "
+            f"stage={stage} progress={update['progress']} ms={elapsed_ms}"
+        )
+        logger.info(
+            "[task_store][set_stage] pid=%s task_id=%s stage=%s progress=%s elapsed_ms=%s",
+            os.getpid(),
+            task_id,
+            stage,
+            update["progress"],
+            elapsed_ms,
+        )
 
     def update_progress(self, task_id: str, progress: int) -> None:
         self._update(task_id, {"progress": _clamp(progress)})
