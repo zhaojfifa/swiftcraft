@@ -93,7 +93,7 @@ async def create_task(
         image_file=image_file,
         face_enhancer=face_enhancer,
     )
-    background_tasks.add_task(service.run_task_background, result.task_id)
+    service.launch_task_background(result.task_id)
     return result
 
 
