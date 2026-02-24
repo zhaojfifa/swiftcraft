@@ -84,6 +84,7 @@ class FalWan26R2VEngine:
         self.retry_offsets_10s = _parse_offsets(os.getenv("SWIFT_R2V_RETRY_SLICE_OFFSETS_10S", "0,3,6"), [0, 3, 6])
         self.safe_ref_video_url = os.getenv("SWIFT_R2V_SAFE_REF_VIDEO_URL", "").strip()
         self.timeout_sec = int(os.getenv("WAN26_TIMEOUT_SEC", "900"))
+        self.poll_timeout_sec = max(5, int(os.getenv("SWIFT_R2V_POLL_TIMEOUT_SEC", str(self.timeout_sec))))
         self.step_timeout_sec = max(5, int(os.getenv("SWIFT_R2V_STEP_TIMEOUT_SEC", "60")))
         self.prepare_timeout_sec = max(5, int(os.getenv("SWIFT_R2V_PREPARE_TIMEOUT_SEC", "60")))
         self.r2 = R2Client()
@@ -135,7 +136,7 @@ class FalWan26R2VEngine:
                 "[preflight] policy_retry_enabled="
                 f"{self.policy_retry_enabled} fixed_slice_enabled={self.fixed_slice_enabled} "
                 f"fixed_slice_start_sec={self.fixed_slice_start_sec} step_timeout_sec={self.step_timeout_sec} "
-                f"prepare_timeout_sec={self.prepare_timeout_sec}"
+                f"prepare_timeout_sec={self.prepare_timeout_sec} poll_timeout_sec={self.poll_timeout_sec}"
             )
             on_log(
                 "[preflight] raw_flags "
@@ -220,12 +221,25 @@ class FalWan26R2VEngine:
                     )
 
                     try:
-                        on_log("[r2v][step] name=fal_submit phase=start")
-                        result = await self._run_step(
-                            "poll",
+                        submit_info = await self._run_step(
+                            "fal_submit",
                             on_log,
-                            self._submit(fal_client, args, on_queue_update, on_log),
+                            self._submit_request(fal_client, args, on_queue_update, on_log),
                         )
+                        if "result" in submit_info:
+                            result = submit_info["result"]
+                        else:
+                            result = await self._run_step(
+                                "poll",
+                                on_log,
+                                self._poll_result(
+                                    fal_client,
+                                    str(submit_info.get("request_id") or ""),
+                                    on_queue_update=on_queue_update,
+                                    on_log=on_log,
+                                ),
+                                timeout_sec=self.poll_timeout_sec,
+                            )
                         break
                     except Exception as exc:
                         last_exc = exc
@@ -245,12 +259,25 @@ class FalWan26R2VEngine:
                             safe_args = dict(args)
                             safe_args["video_urls"] = [self.safe_ref_video_url]
                             try:
-                                on_log("[r2v][step] name=fal_submit phase=start")
-                                result = await self._run_step(
-                                    "poll",
+                                submit_info = await self._run_step(
+                                    "fal_submit",
                                     on_log,
-                                    self._submit(fal_client, safe_args, on_queue_update, on_log),
+                                    self._submit_request(fal_client, safe_args, on_queue_update, on_log),
                                 )
+                                if "result" in submit_info:
+                                    result = submit_info["result"]
+                                else:
+                                    result = await self._run_step(
+                                        "poll",
+                                        on_log,
+                                        self._poll_result(
+                                            fal_client,
+                                            str(submit_info.get("request_id") or ""),
+                                            on_queue_update=on_queue_update,
+                                            on_log=on_log,
+                                        ),
+                                        timeout_sec=self.poll_timeout_sec,
+                                    )
                                 slice_meta = {
                                     **slice_meta,
                                     "safe_ref_video_url": self.safe_ref_video_url,
@@ -288,23 +315,49 @@ class FalWan26R2VEngine:
                 on_log(
                     f"[r2v][args] videos={len(args['video_urls'])} aspect={self.aspect_ratio} res={self.resolution} duration={self.duration}"
                 )
-                on_log("[r2v][step] name=fal_submit phase=start")
-                result = await self._run_step(
-                    "poll",
+                submit_info = await self._run_step(
+                    "fal_submit",
                     on_log,
-                    self._submit(fal_client, args, on_queue_update, on_log),
+                    self._submit_request(fal_client, args, on_queue_update, on_log),
                 )
+                if "result" in submit_info:
+                    result = submit_info["result"]
+                else:
+                    result = await self._run_step(
+                        "poll",
+                        on_log,
+                        self._poll_result(
+                            fal_client,
+                            str(submit_info.get("request_id") or ""),
+                            on_queue_update=on_queue_update,
+                            on_log=on_log,
+                        ),
+                        timeout_sec=self.poll_timeout_sec,
+                    )
             else:
                 args = build_args(submit_video_url)
                 on_log(
                     f"[r2v][args] videos={len(args['video_urls'])} aspect={self.aspect_ratio} res={self.resolution} duration={self.duration}"
                 )
-                on_log("[r2v][step] name=fal_submit phase=start")
-                result = await self._run_step(
-                    "poll",
+                submit_info = await self._run_step(
+                    "fal_submit",
                     on_log,
-                    self._submit(fal_client, args, on_queue_update, on_log),
+                    self._submit_request(fal_client, args, on_queue_update, on_log),
                 )
+                if "result" in submit_info:
+                    result = submit_info["result"]
+                else:
+                    result = await self._run_step(
+                        "poll",
+                        on_log,
+                        self._poll_result(
+                            fal_client,
+                            str(submit_info.get("request_id") or ""),
+                            on_queue_update=on_queue_update,
+                            on_log=on_log,
+                        ),
+                        timeout_sec=self.poll_timeout_sec,
+                    )
 
             if result is None:
                 raise EngineRunError("r2v submit failed: empty result")
@@ -419,7 +472,38 @@ class FalWan26R2VEngine:
             return list(self.retry_offsets_10s)
         return list(self.retry_offsets_5s)
 
-    async def _submit(
+    def _to_dict(self, value: Any) -> Dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if value is None:
+            return {}
+        if hasattr(value, "model_dump"):
+            try:
+                dumped = value.model_dump()
+                if isinstance(dumped, dict):
+                    return dumped
+            except Exception:
+                pass
+        if hasattr(value, "__dict__"):
+            data = dict(getattr(value, "__dict__", {}) or {})
+            if isinstance(data, dict):
+                return data
+        return {}
+
+    def _extract_request_id(self, payload: Any) -> Optional[str]:
+        data = self._to_dict(payload)
+        for key in ("request_id", "id", "requestId"):
+            val = data.get(key)
+            if val:
+                return str(val)
+        return None
+
+    def _is_pending_payload(self, payload: Any) -> bool:
+        data = self._to_dict(payload)
+        status = str(data.get("status") or data.get("state") or "").lower()
+        return status in {"queued", "pending", "running", "in_progress", "processing", "submitted"}
+
+    async def _submit_request(
         self,
         fal_client: Any,
         args: Dict[str, Any],
@@ -427,13 +511,49 @@ class FalWan26R2VEngine:
         on_log: Callable[[str], None],
     ) -> Dict[str, Any]:
         on_log("[r2v] submit start")
-        return await asyncio.to_thread(
+        if hasattr(fal_client, "submit"):
+            submitted = await asyncio.to_thread(fal_client.submit, self.model_id, arguments=args)
+            request_id = self._extract_request_id(submitted)
+            on_log(f"[r2v] submit accepted request_id={request_id or 'n/a'}")
+            if request_id:
+                return {"request_id": request_id}
+            on_log("[r2v] submit missing request_id; falling back to subscribe")
+        result = await asyncio.to_thread(
             fal_client.subscribe,
             self.model_id,
             arguments=args,
             with_logs=True,
             on_queue_update=on_queue_update,
         )
+        request_id = self._extract_request_id(result)
+        on_log(f"[r2v] submit completed request_id={request_id or 'n/a'}")
+        return {"request_id": request_id, "result": result}
+
+    async def _poll_result(
+        self,
+        fal_client: Any,
+        request_id: str,
+        on_queue_update: Callable[[Any], None],
+        on_log: Callable[[str], None],
+    ) -> Dict[str, Any]:
+        if not request_id:
+            raise EngineRunError("poll failed: missing request_id")
+        started = time.perf_counter()
+        next_heartbeat = 10.0
+        while True:
+            elapsed = time.perf_counter() - started
+            if elapsed >= next_heartbeat:
+                on_log(f"[r2v][poll] heartbeat request_id={request_id} elapsed_sec={int(elapsed)}")
+                next_heartbeat += 10.0
+            try:
+                result = await asyncio.to_thread(fal_client.result, self.model_id, request_id)
+            except TypeError:
+                result = await asyncio.to_thread(fal_client.result, request_id)
+            data = self._to_dict(result)
+            if data and not self._is_pending_payload(data):
+                on_queue_update(data)
+                return data
+            await asyncio.sleep(2)
 
     def _extract_policy_violation(self, exc: Exception) -> tuple[bool, Optional[str], Optional[str]]:
         violation_type: Optional[str] = None
