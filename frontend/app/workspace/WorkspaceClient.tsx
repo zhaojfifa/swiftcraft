@@ -11,8 +11,10 @@ import { SERVICE_REGISTRY } from "../../lib/services/registry";
 import { resolveAssetUrl } from "../../lib/url";
 
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "done"]);
-const MAX_POLL_RETRIES = 12;
-const POLL_BACKOFF = [800, 1200, 2000, 3000, 5000, 8000];
+const POLL_FAST_ATTEMPTS = 10;
+const POLL_FAST_MS = 1000;
+const POLL_MAX_MS = 10000;
+const POLL_STILL_PROCESSING_MS = 180000;
 
 function shouldStopPolling(current: TaskRecord | null) {
   const status = (current?.status || "").toLowerCase();
@@ -124,9 +126,32 @@ export default function WorkspaceClient() {
     return upload.file_key;
   };
 
+  const getPollDelayMs = (attempt: number) => {
+    if (attempt < POLL_FAST_ATTEMPTS) return POLL_FAST_MS;
+    const backoffIndex = attempt - POLL_FAST_ATTEMPTS;
+    return Math.min(POLL_MAX_MS, 2000 * Math.pow(2, backoffIndex));
+  };
+
+  const fetchTaskFromCdn = async (taskId: string): Promise<TaskRecord> => {
+    const cdnUrl = `https://cdn.swiftcraft.ai/tasks/${encodeURIComponent(taskId)}.json`;
+    const res = await fetch(cdnUrl, { method: "GET", cache: "no-store" });
+    if (!res.ok) {
+      throw new ApiHttpError(`cdn getTask failed (${res.status})`, res.status);
+    }
+    const text = await res.text();
+    if (!text) {
+      throw new Error("CDN task response is empty");
+    }
+    try {
+      return JSON.parse(text) as TaskRecord;
+    } catch {
+      throw new Error("CDN task response is not valid JSON");
+    }
+  };
+
   const startTaskPolling = (taskId: string) => {
     let attempt = 0;
-    let consecutiveErrorCount = 0;
+    const startedAt = Date.now();
     pollTokenRef.current += 1;
     const token = pollTokenRef.current;
     setIsPollingPaused(false);
@@ -136,7 +161,7 @@ export default function WorkspaceClient() {
     }
 
     const scheduleNext = () => {
-      const delay = POLL_BACKOFF[Math.min(attempt, POLL_BACKOFF.length - 1)];
+      const delay = getPollDelayMs(attempt);
       attempt += 1;
       pollRef.current = window.setTimeout(tick, delay);
     };
@@ -148,10 +173,64 @@ export default function WorkspaceClient() {
         return;
       }
       try {
-        const latest = await getTask(taskId);
+        let latest: TaskRecord | null = null;
+        try {
+          latest = await fetchTaskFromCdn(taskId);
+        } catch (cdnErr) {
+          const cdnStatus = cdnErr instanceof ApiHttpError ? cdnErr.status : undefined;
+          if (cdnStatus === 404) {
+            setUiPollingWarning("Task record not yet available, retrying...");
+          }
+          try {
+            latest = await getTask(taskId);
+            if (cdnStatus === 404) {
+              setUiPollingWarning("Task record not yet available, retrying...");
+            }
+          } catch (apiErr) {
+            const apiStatus = apiErr instanceof ApiHttpError ? apiErr.status : undefined;
+            if (apiStatus === 502 || apiStatus === 503) {
+              setUiPollingWarning(
+                `Temporary gateway issue, retrying (fallback to CDN) (HTTP ${apiStatus}).`,
+              );
+              scheduleNext();
+              return;
+            }
+            if (apiStatus === 404) {
+              setUiPollingWarning("Task record not yet available, retrying...");
+              scheduleNext();
+              return;
+            }
+            throw apiErr;
+          }
+        }
+
+        if (!latest) {
+          scheduleNext();
+          return;
+        }
+
         setTask(latest);
-        consecutiveErrorCount = 0;
-        setUiPollingWarning(null);
+        if ((latest.status || "").toLowerCase() === "failed") {
+          const lastLog =
+            Array.isArray(latest.logs) && latest.logs.length > 0
+              ? latest.logs[latest.logs.length - 1]
+              : null;
+          setError(
+            latest.error ||
+              lastLog ||
+              "Task failed.",
+          );
+        } else {
+          setError(null);
+        }
+
+        const elapsed = Date.now() - startedAt;
+        if (elapsed > POLL_STILL_PROCESSING_MS && !shouldStopPolling(latest)) {
+          setUiPollingWarning("Still processing, you can keep this tab open or refresh later.");
+        } else if (!uiPollingWarning?.startsWith("Task record not yet available")) {
+          setUiPollingWarning(null);
+        }
+
         setIsPollingPaused(false);
         if (shouldStopPolling(latest)) {
           setIsRunning(false);
@@ -170,18 +249,20 @@ export default function WorkspaceClient() {
 
         const status = err instanceof ApiHttpError ? err.status : undefined;
         if (status === 404) {
-          setError("Task not found.");
-          setUiPollingWarning(null);
-          setIsPollingPaused(true);
-          setIsRunning(false);
-          if (pollRef.current) {
-            window.clearTimeout(pollRef.current);
-            pollRef.current = null;
-          }
+          setUiPollingWarning("Task record not yet available, retrying...");
+          scheduleNext();
           return;
         }
 
-        if (status !== undefined && status !== 502 && status !== 503) {
+        if (status === 502 || status === 503) {
+          setUiPollingWarning(
+            `Temporary gateway issue, retrying (fallback to CDN) (HTTP ${status}).`,
+          );
+          scheduleNext();
+          return;
+        }
+
+        if (status !== undefined) {
           setError(err instanceof Error ? err.message : "Polling failed unexpectedly.");
           setIsPollingPaused(true);
           setIsRunning(false);
@@ -192,17 +273,7 @@ export default function WorkspaceClient() {
           return;
         }
 
-        consecutiveErrorCount += 1;
-        if (consecutiveErrorCount >= MAX_POLL_RETRIES) {
-          if (pollRef.current) {
-            window.clearTimeout(pollRef.current);
-            pollRef.current = null;
-          }
-          setUiPollingWarning("Backend temporarily unavailable. Auto-retry stopped.");
-          setIsPollingPaused(true);
-          return;
-        }
-        setUiPollingWarning(`Backend temporarily unavailable, retrying (${consecutiveErrorCount}/${MAX_POLL_RETRIES})...`);
+        setUiPollingWarning("Task record not yet available, retrying...");
         scheduleNext();
         return;
       }
