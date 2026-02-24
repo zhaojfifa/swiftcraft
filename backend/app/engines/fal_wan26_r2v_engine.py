@@ -51,7 +51,7 @@ class FalWan26R2VEngine:
     """
 
     def __init__(self) -> None:
-        self.model_id = os.getenv("SWIFT_AVATAR_FAL_R2V_MODEL", "wan/v2.6/reference-to-video").strip()
+        self.model_id = os.getenv("SWIFT_AVATAR_FAL_MODEL_R2V", "wan/v2.6/reference-to-video").strip()
 
         allowed_durations = {"5", "10"}
         requested_duration = os.getenv("SWIFT_AVATAR_R2V_DURATION", "").strip() or os.getenv(
@@ -89,6 +89,7 @@ class FalWan26R2VEngine:
         on_stage: Callable[[str, int], None],
     ) -> EngineResult:
         has_fal_key = bool((os.getenv("FAL_KEY") or os.getenv("FAL_API_KEY") or "").strip())
+        on_log(f"[preflight] model_id={self.model_id}")
         on_log(f"[preflight] has_fal_key={str(has_fal_key).lower()} duration={self.duration}")
         if not has_fal_key:
             raise EngineRunError("missing FAL_KEY/FAL_API_KEY for fal provider")
