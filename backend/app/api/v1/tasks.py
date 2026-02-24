@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import traceback
 import uuid
 from typing import Any, Dict, Optional
 
@@ -108,14 +109,20 @@ async def get_task(task_id: str) -> TaskResponseOut:
         elapsed_ms = int((time.time() - start) * 1000)
         print(f"[tasks.get] request_id={request_id} task_id={task_id} elapsed_ms={elapsed_ms} outcome=http_exception")
         raise
-    except Exception:
+    except Exception as e:
         elapsed_ms = int((time.time() - start) * 1000)
-        print(f"[tasks.get] request_id={request_id} task_id={task_id} elapsed_ms={elapsed_ms} outcome=error")
+        print(
+            f"[tasks.get] request_id={request_id} task_id={task_id} elapsed_ms={elapsed_ms} "
+            f"outcome=error exception={type(e).__name__}: {e}"
+        )
+        print(f"[tasks.get][traceback] request_id={request_id} task_id={task_id}")
+        print(traceback.format_exc())
         raise HTTPException(
             status_code=503,
             detail={
-                "error": "task_store_unavailable",
+                "error": "task_poll_unavailable",
                 "task_id": task_id,
                 "request_id": request_id,
+                "exception": f"{type(e).__name__}: {e}",
             },
         )
