@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { UploadCloud, Play, Terminal } from "lucide-react";
+import { UploadCloud, Play, Terminal, CircleHelp } from "lucide-react";
 import Link from "next/link";
 
 import { ApiHttpError, createTask, getTask, getUploadUrl, TaskRecord } from "../../lib/api";
@@ -11,9 +11,7 @@ import { SERVICE_REGISTRY } from "../../lib/services/registry";
 import { resolveAssetUrl } from "../../lib/url";
 
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "done"]);
-const MAX_ACTIVE_POLL_MS = 120000;
-const MAX_CONSECUTIVE_ERRORS = 6;
-const ERROR_COOLDOWN_MS = 15000;
+const MAX_POLL_RETRIES = 12;
 const POLL_BACKOFF = [800, 1200, 2000, 3000, 5000, 8000];
 
 function shouldStopPolling(current: TaskRecord | null) {
@@ -45,6 +43,7 @@ export default function WorkspaceClient() {
   const [faceEnhancer, setFaceEnhancer] = useState(true);
   const [orientation, setOrientation] = useState<"front" | "side" | "back">("front");
   const [prompt, setPrompt] = useState<string>("");
+  const [showPromptTips, setShowPromptTips] = useState(false);
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -128,8 +127,6 @@ export default function WorkspaceClient() {
   const startTaskPolling = (taskId: string) => {
     let attempt = 0;
     let consecutiveErrorCount = 0;
-    let lastErrorWarnAt = 0;
-    const startAt = Date.now();
     pollTokenRef.current += 1;
     const token = pollTokenRef.current;
     setIsPollingPaused(false);
@@ -171,29 +168,41 @@ export default function WorkspaceClient() {
           return;
         }
 
-        consecutiveErrorCount += 1;
-        const now = Date.now();
-        if (now - lastErrorWarnAt >= ERROR_COOLDOWN_MS) {
-          const status = err instanceof ApiHttpError ? err.status : undefined;
-          setUiPollingWarning(
-            status
-              ? `Temporary gateway issue (HTTP ${status}), retrying...`
-              : "Temporary gateway issue, retrying..."
-          );
-          lastErrorWarnAt = now;
-        }
-
-        const elapsed = now - startAt;
-        if (consecutiveErrorCount >= MAX_CONSECUTIVE_ERRORS || elapsed > MAX_ACTIVE_POLL_MS) {
+        const status = err instanceof ApiHttpError ? err.status : undefined;
+        if (status === 404) {
+          setError("Task not found.");
+          setUiPollingWarning(null);
+          setIsPollingPaused(true);
+          setIsRunning(false);
           if (pollRef.current) {
             window.clearTimeout(pollRef.current);
             pollRef.current = null;
           }
-          setUiPollingWarning("Paused auto-refresh. Refresh status or continue waiting.");
-          setIsPollingPaused(true);
           return;
         }
 
+        if (status !== undefined && status !== 502 && status !== 503) {
+          setError(err instanceof Error ? err.message : "Polling failed unexpectedly.");
+          setIsPollingPaused(true);
+          setIsRunning(false);
+          if (pollRef.current) {
+            window.clearTimeout(pollRef.current);
+            pollRef.current = null;
+          }
+          return;
+        }
+
+        consecutiveErrorCount += 1;
+        if (consecutiveErrorCount >= MAX_POLL_RETRIES) {
+          if (pollRef.current) {
+            window.clearTimeout(pollRef.current);
+            pollRef.current = null;
+          }
+          setUiPollingWarning("Backend temporarily unavailable. Auto-retry stopped.");
+          setIsPollingPaused(true);
+          return;
+        }
+        setUiPollingWarning(`Backend temporarily unavailable, retrying (${consecutiveErrorCount}/${MAX_POLL_RETRIES})...`);
         scheduleNext();
         return;
       }
@@ -204,28 +213,9 @@ export default function WorkspaceClient() {
     tick();
   };
 
-  const handleRefreshStatus = async () => {
+  const handleRetryPolling = () => {
     if (!taskId) return;
-    try {
-      const latest = await getTask(taskId);
-      setTask(latest);
-      setUiPollingWarning(null);
-      setIsPollingPaused(false);
-      if (shouldStopPolling(latest)) {
-        setIsRunning(false);
-      }
-    } catch (err) {
-      const status = err instanceof ApiHttpError ? err.status : undefined;
-      setUiPollingWarning(
-        status
-          ? `Temporary gateway issue (HTTP ${status}), retrying...`
-          : "Temporary gateway issue, retrying..."
-      );
-    }
-  };
-
-  const handleContinueWaiting = () => {
-    if (!taskId) return;
+    setError(null);
     setUiPollingWarning(null);
     setIsPollingPaused(false);
     startTaskPolling(taskId);
@@ -300,6 +290,10 @@ export default function WorkspaceClient() {
     lowerError.includes("content_policy_violation") ||
     logs.some((line) => line.toLowerCase().includes("content_policy_violation"));
   const showPolicyPanel = isAvatar && modeApi === "intelligent" && hasPolicyViolation;
+  const failedReason =
+    (task?.status || "").toLowerCase() === "failed"
+      ? task?.error || logs[logs.length - 1] || "Task failed."
+      : null;
   const canUseSafeDemo = Boolean(safeDemoMotionKey && safeDemoCharacterKey) && !isRunning;
   const canRun = isLocalization
     ? false
@@ -760,9 +754,45 @@ export default function WorkspaceClient() {
                         </div>
 
                         <div className="space-y-3">
-                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                            Prompt
-                          </label>
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                              Prompt
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => setShowPromptTips((prev) => !prev)}
+                              className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-slate-700"
+                            >
+                              <CircleHelp className="h-3.5 w-3.5" />
+                              Tips
+                            </button>
+                          </div>
+                          {showPromptTips ? (
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-600 space-y-2">
+                              <div className="font-semibold text-slate-700">Safe prompt templates</div>
+                              <button
+                                type="button"
+                                onClick={() => setPrompt("Clean studio portrait motion, natural expression, stable lighting, no sensitive content.")}
+                                className="block w-full rounded border border-slate-200 bg-white px-2 py-1 text-left hover:bg-slate-100"
+                              >
+                                Clean studio portrait motion, natural expression, stable lighting.
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setPrompt("Walking in a city street, cinematic but neutral style, calm pace, family friendly.")}
+                                className="block w-full rounded border border-slate-200 bg-white px-2 py-1 text-left hover:bg-slate-100"
+                              >
+                                Walking in a city street, cinematic neutral style, family friendly.
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setPrompt("Dancing in a bright room, energetic yet safe, no explicit themes, no risky actions.")}
+                                className="block w-full rounded border border-slate-200 bg-white px-2 py-1 text-left hover:bg-slate-100"
+                              >
+                                Dancing in a bright room, energetic and safe, no risky actions.
+                              </button>
+                            </div>
+                          ) : null}
                           <input
                             type="text"
                             value={prompt}
@@ -797,26 +827,18 @@ export default function WorkspaceClient() {
                   </>
                 ) : null}
                 {error ? <p className="text-xs text-rose-500">{error}</p> : null}
+                {failedReason ? <p className="text-xs text-rose-500">Failure reason: {failedReason}</p> : null}
                 {uiPollingWarning ? (
                   <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 space-y-2">
                     <div>{uiPollingWarning}</div>
                     {isPollingPaused ? (
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={handleRefreshStatus}
-                          className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-amber-900"
-                        >
-                          Refresh status
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleContinueWaiting}
-                          className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-[11px] font-semibold text-blue-700"
-                        >
-                          Continue waiting
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={handleRetryPolling}
+                        className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-[11px] font-semibold text-blue-700"
+                      >
+                        Retry polling
+                      </button>
                     ) : null}
                   </div>
                 ) : null}
@@ -824,7 +846,7 @@ export default function WorkspaceClient() {
                   <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 space-y-2">
                     <div className="font-semibold">Safety policy blocked this input.</div>
                     <div>
-                      Intelligent mode detected a content policy violation. Try safe slicing retry or switch to a safe demo clip.
+                      Safety checker blocked this request. Try safe slicing, use a safe reference video, or remove sensitive content.
                     </div>
                     <div className="flex gap-2">
                       <button
@@ -842,7 +864,7 @@ export default function WorkspaceClient() {
                           disabled={isRunning}
                           className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-[11px] font-semibold text-blue-700 disabled:opacity-60"
                         >
-                          Use Safe Demo Clip
+                          Use Safe Reference Video
                         </button>
                       ) : null}
                     </div>
