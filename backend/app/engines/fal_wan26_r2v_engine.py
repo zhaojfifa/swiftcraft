@@ -83,10 +83,14 @@ class FalWan26R2VEngine:
         self.retry_offsets_5s = _parse_offsets(os.getenv("SWIFT_R2V_RETRY_SLICE_OFFSETS_5S", "0,2,4"), [0, 2, 4])
         self.retry_offsets_10s = _parse_offsets(os.getenv("SWIFT_R2V_RETRY_SLICE_OFFSETS_10S", "0,3,6"), [0, 3, 6])
         self.safe_ref_video_url = os.getenv("SWIFT_R2V_SAFE_REF_VIDEO_URL", "").strip()
-        self.timeout_sec = int(os.getenv("WAN26_TIMEOUT_SEC", "900"))
-        self.poll_timeout_sec = max(5, int(os.getenv("SWIFT_R2V_POLL_TIMEOUT_SEC", str(self.timeout_sec))))
-        self.step_timeout_sec = max(5, int(os.getenv("SWIFT_R2V_STEP_TIMEOUT_SEC", "60")))
-        self.prepare_timeout_sec = max(5, int(os.getenv("SWIFT_R2V_PREPARE_TIMEOUT_SEC", "60")))
+        self.watchdog_timeout_sec = max(5, int(os.getenv("WAN26_TIMEOUT_SEC", "600")))
+        self.timeout_sec = self.watchdog_timeout_sec
+        self.poll_timeout_sec = max(
+            5,
+            int(os.getenv("SWIFT_R2V_POLL_TIMEOUT_SEC", str(self.watchdog_timeout_sec))),
+        )
+        self.step_timeout_sec = max(5, int(os.getenv("SWIFT_R2V_STEP_TIMEOUT_SEC", "300")))
+        self.prepare_timeout_sec = max(5, int(os.getenv("SWIFT_R2V_PREPARE_TIMEOUT_SEC", "120")))
         self.r2 = R2Client()
 
     async def _run_step(
@@ -118,6 +122,33 @@ class FalWan26R2VEngine:
             )
             raise EngineRunError(f"{step} failed: {type(exc).__name__}: {exc}") from exc
 
+    async def _run_poll_step(
+        self,
+        fal_client: Any,
+        request_id: str,
+        on_queue_update: Optional[Callable[[Any], None]],
+        on_log: Callable[[str], None],
+    ) -> Dict[str, Any]:
+        try:
+            return await self._run_step(
+                "poll",
+                on_log,
+                self._poll_result(
+                    fal_client,
+                    request_id,
+                    on_queue_update=on_queue_update,
+                    on_log=on_log,
+                ),
+                timeout_sec=self.poll_timeout_sec,
+            )
+        except EngineRunError as exc:
+            if "poll timeout after" in str(exc):
+                raise EngineRunError(
+                    "poll timeout "
+                    f"request_id={request_id or 'n/a'} poll_timeout_sec={self.poll_timeout_sec}"
+                ) from exc
+            raise
+
     async def run(
         self,
         task_id: str,
@@ -136,7 +167,8 @@ class FalWan26R2VEngine:
                 "[preflight] policy_retry_enabled="
                 f"{self.policy_retry_enabled} fixed_slice_enabled={self.fixed_slice_enabled} "
                 f"fixed_slice_start_sec={self.fixed_slice_start_sec} step_timeout_sec={self.step_timeout_sec} "
-                f"prepare_timeout_sec={self.prepare_timeout_sec} poll_timeout_sec={self.poll_timeout_sec}"
+                f"prepare_timeout_sec={self.prepare_timeout_sec} poll_timeout_sec={self.poll_timeout_sec} "
+                f"watchdog_timeout_sec={self.watchdog_timeout_sec}"
             )
             on_log(
                 "[preflight] raw_flags "
@@ -242,16 +274,11 @@ class FalWan26R2VEngine:
                         if "result" in submit_info:
                             result = submit_info["result"]
                         else:
-                            result = await self._run_step(
-                                "poll",
-                                on_log,
-                                self._poll_result(
-                                    fal_client,
-                                    rid,
-                                    on_queue_update=on_queue_update,
-                                    on_log=on_log,
-                                ),
-                                timeout_sec=self.poll_timeout_sec,
+                            result = await self._run_poll_step(
+                                fal_client,
+                                rid,
+                                on_queue_update=on_queue_update,
+                                on_log=on_log,
                             )
                         break
                     except Exception as exc:
@@ -282,16 +309,11 @@ class FalWan26R2VEngine:
                                 if "result" in submit_info:
                                     result = submit_info["result"]
                                 else:
-                                    result = await self._run_step(
-                                        "poll",
-                                        on_log,
-                                        self._poll_result(
-                                            fal_client,
-                                            rid,
-                                            on_queue_update=on_queue_update,
-                                            on_log=on_log,
-                                        ),
-                                        timeout_sec=self.poll_timeout_sec,
+                                    result = await self._run_poll_step(
+                                        fal_client,
+                                        rid,
+                                        on_queue_update=on_queue_update,
+                                        on_log=on_log,
                                     )
                                 slice_meta = {
                                     **slice_meta,
@@ -340,16 +362,11 @@ class FalWan26R2VEngine:
                 if "result" in submit_info:
                     result = submit_info["result"]
                 else:
-                    result = await self._run_step(
-                        "poll",
-                        on_log,
-                        self._poll_result(
-                            fal_client,
-                            rid,
-                            on_queue_update=on_queue_update,
-                            on_log=on_log,
-                        ),
-                        timeout_sec=self.poll_timeout_sec,
+                    result = await self._run_poll_step(
+                        fal_client,
+                        rid,
+                        on_queue_update=on_queue_update,
+                        on_log=on_log,
                     )
             else:
                 args = build_args(submit_video_url)
@@ -366,16 +383,11 @@ class FalWan26R2VEngine:
                 if "result" in submit_info:
                     result = submit_info["result"]
                 else:
-                    result = await self._run_step(
-                        "poll",
-                        on_log,
-                        self._poll_result(
-                            fal_client,
-                            rid,
-                            on_queue_update=on_queue_update,
-                            on_log=on_log,
-                        ),
-                        timeout_sec=self.poll_timeout_sec,
+                    result = await self._run_poll_step(
+                        fal_client,
+                        rid,
+                        on_queue_update=on_queue_update,
+                        on_log=on_log,
                     )
 
             if result is None:
