@@ -77,7 +77,7 @@ class FalWan26R2VEngine:
         self.multi_shots = _env_bool("SWIFT_AVATAR_MULTI_SHOTS", False)
         self.enable_safety_checker = _env_bool("SWIFT_AVATAR_ENABLE_SAFETY_CHECKER", True)
         self.fixed_slice_enabled = _env_bool("SWIFT_R2V_FIXED_SLICE_ENABLED", False)
-        self.fixed_slice_start_sec = int(os.getenv("SWIFT_R2V_FIXED_SLICE_START_SEC", "0"))
+        self.fixed_slice_start_sec = max(0, int(os.getenv("SWIFT_R2V_FIXED_SLICE_START_SEC", "0")))
         self.policy_retry_enabled = _env_bool("SWIFT_R2V_POLICY_RETRY_ENABLED", False)
         self.max_policy_retries = max(0, int(os.getenv("SWIFT_R2V_MAX_POLICY_RETRIES", "3")))
         self.retry_offsets_5s = _parse_offsets(os.getenv("SWIFT_R2V_RETRY_SLICE_OFFSETS_5S", "0,2,4"), [0, 2, 4])
