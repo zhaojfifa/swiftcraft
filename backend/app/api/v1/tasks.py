@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 import traceback
 import uuid
@@ -103,19 +104,25 @@ async def get_task(task_id: str) -> TaskResponseOut:
     try:
         result = service.get_task(task_id)
         elapsed_ms = int((time.time() - start) * 1000)
-        print(f"[tasks.get] request_id={request_id} task_id={task_id} elapsed_ms={elapsed_ms} outcome=success")
+        print(
+            f"[get_task] pid={os.getpid()} request_id={request_id} "
+            f"task_id={task_id} elapsed_ms={elapsed_ms} outcome=success"
+        )
         return result
     except HTTPException:
         elapsed_ms = int((time.time() - start) * 1000)
-        print(f"[tasks.get] request_id={request_id} task_id={task_id} elapsed_ms={elapsed_ms} outcome=http_exception")
+        print(
+            f"[get_task] pid={os.getpid()} request_id={request_id} "
+            f"task_id={task_id} elapsed_ms={elapsed_ms} outcome=http_exception"
+        )
         raise
     except Exception as e:
         elapsed_ms = int((time.time() - start) * 1000)
         print(
-            f"[tasks.get] request_id={request_id} task_id={task_id} elapsed_ms={elapsed_ms} "
+            f"[get_task] pid={os.getpid()} request_id={request_id} task_id={task_id} elapsed_ms={elapsed_ms} "
             f"outcome=error exception={type(e).__name__}: {e}"
         )
-        print(f"[tasks.get][traceback] request_id={request_id} task_id={task_id}")
+        print(f"[get_task][traceback] pid={os.getpid()} request_id={request_id} task_id={task_id}")
         print(traceback.format_exc())
         raise HTTPException(
             status_code=503,
