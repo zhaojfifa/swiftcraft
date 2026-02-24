@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, File, Form, HTTPException, Request, UploadFile
@@ -95,4 +97,25 @@ async def create_task(
 
 @router.get("/tasks/{task_id}", response_model=TaskResponseOut)
 async def get_task(task_id: str) -> TaskResponseOut:
-    return service.get_task(task_id)
+    request_id = uuid.uuid4().hex[:12]
+    start = time.time()
+    try:
+        result = service.get_task(task_id)
+        elapsed_ms = int((time.time() - start) * 1000)
+        print(f"[tasks.get] request_id={request_id} task_id={task_id} elapsed_ms={elapsed_ms} outcome=success")
+        return result
+    except HTTPException:
+        elapsed_ms = int((time.time() - start) * 1000)
+        print(f"[tasks.get] request_id={request_id} task_id={task_id} elapsed_ms={elapsed_ms} outcome=http_exception")
+        raise
+    except Exception:
+        elapsed_ms = int((time.time() - start) * 1000)
+        print(f"[tasks.get] request_id={request_id} task_id={task_id} elapsed_ms={elapsed_ms} outcome=error")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "task_store_unavailable",
+                "task_id": task_id,
+                "request_id": request_id,
+            },
+        )
