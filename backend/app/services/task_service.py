@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import asyncio
+import threading
 import traceback
 import uuid
 from pathlib import Path
@@ -320,6 +321,7 @@ class TaskService:
 
         artifacts = self.store.get_artifacts(task_id)
         inputs: Dict[str, Any] = {"input_key": record.input_key, **artifacts}
+        self.store.append_log(task_id, "[runner] resolve engine")
         provider = self._resolve_provider_from_record(record)
         engine = get_engine(provider)
         engine_name = engine.__class__.__name__
@@ -327,15 +329,16 @@ class TaskService:
         self.store.set_stage(task_id, "running", 1)
 
         try:
-            result = asyncio.run(
-                engine.run(
-                    task_id,
-                    record,
-                    inputs,
-                    on_log=lambda message: self.store.append_log(task_id, message),
-                    on_stage=lambda stage, progress: self.store.set_stage(task_id, stage, progress),
-                )
+            self.store.append_log(task_id, "[runner] engine run start")
+            result = self._run_engine(
+                engine=engine,
+                task_id=task_id,
+                record=record,
+                inputs=inputs,
+                on_log=lambda message: self.store.append_log(task_id, message),
+                on_stage=lambda stage, progress: self.store.set_stage(task_id, stage, progress),
             )
+            self.store.append_log(task_id, "[runner] engine run finished")
         except Exception as exc:
             trace_line = traceback.format_exception_only(type(exc), exc)[-1].strip()
             trace_loc = ""
@@ -359,6 +362,40 @@ class TaskService:
             error_msg="EngineRunError: engine returned no output_url",
             where="task_service.background_runner",
         )
+
+    def _run_engine(
+        self,
+        engine: Any,
+        task_id: str,
+        record: TaskRecord,
+        inputs: Dict[str, Any],
+        on_log: Any,
+        on_stage: Any,
+    ) -> Any:
+        async def _invoke() -> Any:
+            return await engine.run(task_id, record, inputs, on_log=on_log, on_stage=on_stage)
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(_invoke())
+
+        # If we're already inside a running loop, run the coroutine in a dedicated thread.
+        result_holder: Dict[str, Any] = {}
+        error_holder: Dict[str, Exception] = {}
+
+        def _runner() -> None:
+            try:
+                result_holder["result"] = asyncio.run(_invoke())
+            except Exception as exc:
+                error_holder["error"] = exc
+
+        thread = threading.Thread(target=_runner, name=f"task-engine-{task_id}", daemon=True)
+        thread.start()
+        thread.join()
+        if "error" in error_holder:
+            raise error_holder["error"]
+        return result_holder.get("result")
 
     def get_task(self, task_id: str) -> TaskResponseOut:
         record = self.store.get_task(task_id)
