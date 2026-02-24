@@ -119,6 +119,17 @@ class TaskStore:
             },
         )
 
+    def complete_task(self, task_id: str, output_url: str, output_key: Optional[str] = None) -> None:
+        fields: Dict[str, Any] = {
+            "status": "done",
+            "stage": "DONE",
+            "progress": 100,
+            "output_url": output_url,
+        }
+        if output_key:
+            fields["output_key"] = output_key
+        self._update(task_id, fields)
+
     def fail(self, task_id: str, error: str) -> None:
         self.fail_task(task_id=task_id, error_msg=error, where="unknown")
 
