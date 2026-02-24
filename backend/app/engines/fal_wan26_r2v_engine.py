@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import time
 from typing import Any, Callable, Dict, Optional
 
 import httpx
@@ -78,7 +79,37 @@ class FalWan26R2VEngine:
         self.retry_offsets_10s = _parse_offsets(os.getenv("SWIFT_R2V_RETRY_SLICE_OFFSETS_10S", "0,3,6"), [0, 3, 6])
         self.safe_ref_video_url = os.getenv("SWIFT_R2V_SAFE_REF_VIDEO_URL", "").strip()
         self.timeout_sec = int(os.getenv("WAN26_TIMEOUT_SEC", "900"))
+        self.step_timeout_sec = max(5, int(os.getenv("SWIFT_R2V_STEP_TIMEOUT_SEC", str(self.timeout_sec))))
         self.r2 = R2Client()
+
+    async def _run_step(
+        self,
+        step: str,
+        on_log: Callable[[str], None],
+        coro: Any,
+        timeout_sec: Optional[int] = None,
+    ) -> Any:
+        timeout = max(1, int(timeout_sec or self.step_timeout_sec))
+        started = time.perf_counter()
+        on_log(f"[r2v][step] name={step} phase=start timeout_sec={timeout}")
+        try:
+            result = await asyncio.wait_for(coro, timeout=timeout)
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            on_log(f"[r2v][step] name={step} phase=ok elapsed_ms={elapsed_ms}")
+            return result
+        except asyncio.TimeoutError as exc:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            on_log(f"[r2v][step] name={step} phase=timeout elapsed_ms={elapsed_ms}")
+            raise EngineRunError(f"{step} timeout after {timeout}s") from exc
+        except EngineRunError:
+            raise
+        except Exception as exc:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            on_log(
+                f"[r2v][step] name={step} phase=fail elapsed_ms={elapsed_ms} "
+                f"error={type(exc).__name__}: {exc}"
+            )
+            raise EngineRunError(f"{step} failed: {type(exc).__name__}: {exc}") from exc
 
     async def run(
         self,
@@ -88,186 +119,224 @@ class FalWan26R2VEngine:
         on_log: Callable[[str], None],
         on_stage: Callable[[str, int], None],
     ) -> EngineResult:
-        has_fal_key = bool((os.getenv("FAL_KEY") or os.getenv("FAL_API_KEY") or "").strip())
-        on_log(f"[preflight] model_id={self.model_id}")
-        on_log(f"[preflight] has_fal_key={str(has_fal_key).lower()} duration={self.duration}")
-        if not has_fal_key:
-            raise EngineRunError("missing FAL_KEY/FAL_API_KEY for fal provider")
+        try:
+            has_fal_key = bool((os.getenv("FAL_KEY") or os.getenv("FAL_API_KEY") or "").strip())
+            on_log(f"[preflight] model_id={self.model_id}")
+            on_log(f"[preflight] has_fal_key={str(has_fal_key).lower()} duration={self.duration}")
+            if not has_fal_key:
+                raise EngineRunError("missing FAL_KEY/FAL_API_KEY for fal provider")
 
-        fal_client = _get_fal_client()
-        if not record.input_video_url:
-            raise EngineRunError(f"task_id={task_id} missing required field: input_video_url")
-        on_stage("running", 5)
+            fal_client = _get_fal_client()
+            if not record.input_video_url:
+                raise EngineRunError(f"task_id={task_id} missing required field: input_video_url")
+            on_stage("running", 5)
 
-        prompt = (
-            str(inputs.get("prompt") or "").strip()
-            or "Keep identity and motion intent. High quality, stable character and consistent style."
-        )
-        duration_sec = int(self.duration)
-        submit_video_url = record.input_video_url
-        slice_meta: Dict[str, Any] = {}
-        policy_retry_count = 0
-        policy_violation_type: Optional[str] = None
-        policy_violation_url: Optional[str] = None
-        r2v_logs: list[str] = []
+            prompt = (
+                str(inputs.get("prompt") or "").strip()
+                or "Keep identity and motion intent. High quality, stable character and consistent style."
+            )
+            duration_sec = int(self.duration)
+            submit_video_url = record.input_video_url
+            slice_meta: Dict[str, Any] = {}
+            policy_retry_count = 0
+            policy_violation_type: Optional[str] = None
+            policy_violation_url: Optional[str] = None
+            r2v_logs: list[str] = []
 
-        def on_queue_update(update: Any) -> None:
-            if isinstance(update, fal_client.InProgress):
-                for log_item in update.logs:
-                    message = log_item.get("message")
-                    if message:
-                        r2v_logs.append(message)
-                        on_log(f"[r2v][log] {message}")
+            def on_queue_update(update: Any) -> None:
+                if isinstance(update, fal_client.InProgress):
+                    for log_item in update.logs:
+                        message = log_item.get("message")
+                        if message:
+                            r2v_logs.append(message)
+                            on_log(f"[r2v][log] {message}")
 
-        def build_args(video_url: str) -> Dict[str, Any]:
-            return {
-                "prompt": prompt,
-                "video_urls": [video_url],
-                "aspect_ratio": self.aspect_ratio,
-                "resolution": self.resolution,
-                "duration": self.duration,
-                "enable_prompt_expansion": self.enable_prompt_expansion,
-                "multi_shots": self.multi_shots,
-                "enable_safety_checker": self.enable_safety_checker,
-            }
+            def build_args(video_url: str) -> Dict[str, Any]:
+                return {
+                    "prompt": prompt,
+                    "video_urls": [video_url],
+                    "aspect_ratio": self.aspect_ratio,
+                    "resolution": self.resolution,
+                    "duration": self.duration,
+                    "enable_prompt_expansion": self.enable_prompt_expansion,
+                    "multi_shots": self.multi_shots,
+                    "enable_safety_checker": self.enable_safety_checker,
+                }
 
-        result: Dict[str, Any] | None = None
+            result: Dict[str, Any] | None = None
 
-        if self.policy_retry_enabled:
-            offsets = self._offsets_for_duration(duration_sec)
-            max_attempts = max(1, self.max_policy_retries + 1)
-            offsets = offsets[:max_attempts]
-            if not offsets:
-                offsets = [0]
-            total_attempts = len(offsets)
-            total_retries = max(0, total_attempts - 1)
-            last_exc: Exception | None = None
+            if self.policy_retry_enabled:
+                offsets = self._offsets_for_duration(duration_sec)
+                max_attempts = max(1, self.max_policy_retries + 1)
+                offsets = offsets[:max_attempts]
+                if not offsets:
+                    offsets = [0]
+                total_attempts = len(offsets)
+                total_retries = max(0, total_attempts - 1)
+                last_exc: Exception | None = None
 
-            for attempt_idx, offset in enumerate(offsets, start=1):
-                ref_clip_url = await asyncio.to_thread(
-                    self._slice_and_upload_ref_clip,
-                    task_id,
-                    record.input_video_url,
-                    offset,
-                    duration_sec,
+                for attempt_idx, offset in enumerate(offsets, start=1):
+                    ref_clip_url = await self._run_step(
+                        "prepare_ref_video",
+                        on_log,
+                        asyncio.to_thread(
+                            self._slice_and_upload_ref_clip,
+                            task_id,
+                            record.input_video_url,
+                            offset,
+                            duration_sec,
+                        ),
+                    )
+                    submit_video_url = ref_clip_url
+                    slice_meta = {
+                        "ref_clip_1_url": ref_clip_url,
+                        "slice_offset_sec": offset,
+                        "slice_duration_sec": duration_sec,
+                    }
+                    on_log(f"[slice] start={offset} dur={duration_sec} ref_clip_1_url={ref_clip_url}")
+                    args = build_args(submit_video_url)
+                    on_log(
+                        f"[r2v][args] videos={len(args['video_urls'])} aspect={self.aspect_ratio} res={self.resolution} duration={self.duration}"
+                    )
+
+                    try:
+                        on_log("[r2v][step] name=fal_submit phase=start")
+                        result = await self._run_step(
+                            "poll",
+                            on_log,
+                            self._submit(fal_client, args, on_queue_update, on_log),
+                        )
+                        break
+                    except Exception as exc:
+                        last_exc = exc
+                        violated, violation_type, violation_url = self._extract_policy_violation(exc)
+                        if violated:
+                            policy_violation_type = violation_type or policy_violation_type
+                            policy_violation_url = violation_url or policy_violation_url
+                        if violated and attempt_idx < total_attempts:
+                            policy_retry_count += 1
+                            next_offset = offsets[attempt_idx]
+                            on_log(
+                                f"[safety] policy_violation retry={policy_retry_count}/{total_retries} next_offset={next_offset}"
+                            )
+                            continue
+                        if violated and self.safe_ref_video_url:
+                            on_log(f"[fallback] safe_ref_url={self.safe_ref_video_url}")
+                            safe_args = dict(args)
+                            safe_args["video_urls"] = [self.safe_ref_video_url]
+                            try:
+                                on_log("[r2v][step] name=fal_submit phase=start")
+                                result = await self._run_step(
+                                    "poll",
+                                    on_log,
+                                    self._submit(fal_client, safe_args, on_queue_update, on_log),
+                                )
+                                slice_meta = {
+                                    **slice_meta,
+                                    "safe_ref_video_url": self.safe_ref_video_url,
+                                }
+                                break
+                            except Exception as safe_exc:
+                                last_exc = safe_exc
+                        raise EngineRunError(f"r2v submit failed: {type(exc).__name__}: {exc}") from exc
+
+                if result is None:
+                    raise EngineRunError(f"r2v submit failed: {type(last_exc).__name__}: {last_exc}") from last_exc
+            elif self.fixed_slice_enabled:
+                ref_clip_url = await self._run_step(
+                    "prepare_ref_video",
+                    on_log,
+                    asyncio.to_thread(
+                        self._slice_and_upload_ref_clip,
+                        task_id,
+                        record.input_video_url,
+                        self.fixed_slice_start_sec,
+                        duration_sec,
+                    ),
                 )
                 submit_video_url = ref_clip_url
                 slice_meta = {
                     "ref_clip_1_url": ref_clip_url,
-                    "slice_offset_sec": offset,
+                    "slice_offset_sec": self.fixed_slice_start_sec,
                     "slice_duration_sec": duration_sec,
                 }
-                on_log(f"[slice] start={offset} dur={duration_sec} ref_clip_1_url={ref_clip_url}")
+                on_log(
+                    f"[slice] start={self.fixed_slice_start_sec} dur={duration_sec} ref_clip_1_url={ref_clip_url}"
+                )
                 args = build_args(submit_video_url)
                 on_log(
                     f"[r2v][args] videos={len(args['video_urls'])} aspect={self.aspect_ratio} res={self.resolution} duration={self.duration}"
                 )
-
-                try:
-                    result = await self._submit(fal_client, args, on_queue_update, on_log)
-                    break
-                except Exception as exc:
-                    last_exc = exc
-                    violated, violation_type, violation_url = self._extract_policy_violation(exc)
-                    if violated:
-                        policy_violation_type = violation_type or policy_violation_type
-                        policy_violation_url = violation_url or policy_violation_url
-                    if violated and attempt_idx < total_attempts:
-                        policy_retry_count += 1
-                        next_offset = offsets[attempt_idx]
-                        on_log(
-                            f"[safety] policy_violation retry={policy_retry_count}/{total_retries} next_offset={next_offset}"
-                        )
-                        continue
-                    if violated and self.safe_ref_video_url:
-                        on_log(f"[fallback] safe_ref_url={self.safe_ref_video_url}")
-                        safe_args = dict(args)
-                        safe_args["video_urls"] = [self.safe_ref_video_url]
-                        try:
-                            result = await self._submit(fal_client, safe_args, on_queue_update, on_log)
-                            slice_meta = {
-                                **slice_meta,
-                                "safe_ref_video_url": self.safe_ref_video_url,
-                            }
-                            break
-                        except Exception as safe_exc:
-                            last_exc = safe_exc
-                    raise EngineRunError(f"r2v submit failed: {type(exc).__name__}: {exc}") from exc
+                on_log("[r2v][step] name=fal_submit phase=start")
+                result = await self._run_step(
+                    "poll",
+                    on_log,
+                    self._submit(fal_client, args, on_queue_update, on_log),
+                )
+            else:
+                args = build_args(submit_video_url)
+                on_log(
+                    f"[r2v][args] videos={len(args['video_urls'])} aspect={self.aspect_ratio} res={self.resolution} duration={self.duration}"
+                )
+                on_log("[r2v][step] name=fal_submit phase=start")
+                result = await self._run_step(
+                    "poll",
+                    on_log,
+                    self._submit(fal_client, args, on_queue_update, on_log),
+                )
 
             if result is None:
-                raise EngineRunError(f"r2v submit failed: {type(last_exc).__name__}: {last_exc}") from last_exc
-        elif self.fixed_slice_enabled:
-            ref_clip_url = await asyncio.to_thread(
-                self._slice_and_upload_ref_clip,
-                task_id,
-                record.input_video_url,
-                self.fixed_slice_start_sec,
-                duration_sec,
+                raise EngineRunError("r2v submit failed: empty result")
+            request_id = result.get("request_id") or result.get("id") or result.get("requestId")
+            on_log(f"[r2v] submit ok request_id={request_id or 'n/a'}")
+
+            video_url = result.get("video_url") or result.get("video") or result.get("url")
+            if isinstance(video_url, dict):
+                video_url = video_url.get("url")
+            if isinstance(video_url, list) and video_url:
+                first = video_url[0]
+                video_url = first.get("url") if isinstance(first, dict) else first
+            if not video_url:
+                raise EngineRunError(f"r2v result missing video url: {result}")
+
+            on_stage("rendering", 85)
+            content = await self._run_step("download", on_log, self._download_bytes(str(video_url)))
+            on_log(f"[r2v] download ok bytes={len(content)}")
+
+            output_key = f"outputs/{task_id}/result.mp4"
+            on_log(f"[r2] upload start key={output_key}")
+            output_url = await self._run_step(
+                "r2_upload",
+                on_log,
+                asyncio.to_thread(self.r2.upload_bytes, key=output_key, content=content, content_type="video/mp4"),
             )
-            submit_video_url = ref_clip_url
-            slice_meta = {
-                "ref_clip_1_url": ref_clip_url,
-                "slice_offset_sec": self.fixed_slice_start_sec,
-                "slice_duration_sec": duration_sec,
-            }
-            on_log(
-                f"[slice] start={self.fixed_slice_start_sec} dur={duration_sec} ref_clip_1_url={ref_clip_url}"
+            on_log(f"[r2] upload success key={output_key}")
+
+            on_stage("completed", 100)
+            on_log(f"[done] output_url={output_url}")
+
+            return EngineResult(
+                output_key=output_key,
+                output_url=output_url,
+                metadata={
+                    "provider": "wan26_r2v",
+                    "model_id": self.model_id,
+                    "duration_sec": int(self.duration),
+                    "aspect_ratio": self.aspect_ratio,
+                    "resolution": self.resolution,
+                    "r2v_logs": r2v_logs,
+                    "policy_retry_count": policy_retry_count,
+                    "policy_violation_type": policy_violation_type,
+                    "policy_violation_url": policy_violation_url,
+                    **slice_meta,
+                },
             )
-            args = build_args(submit_video_url)
-            on_log(
-                f"[r2v][args] videos={len(args['video_urls'])} aspect={self.aspect_ratio} res={self.resolution} duration={self.duration}"
-            )
-            result = await self._submit(fal_client, args, on_queue_update, on_log)
-        else:
-            args = build_args(submit_video_url)
-            on_log(
-                f"[r2v][args] videos={len(args['video_urls'])} aspect={self.aspect_ratio} res={self.resolution} duration={self.duration}"
-            )
-            result = await self._submit(fal_client, args, on_queue_update, on_log)
-
-        if result is None:
-            raise EngineRunError("r2v submit failed: empty result")
-        request_id = result.get("request_id") or result.get("id") or result.get("requestId")
-        on_log(f"[r2v] submit ok request_id={request_id or 'n/a'}")
-
-        video_url = result.get("video_url") or result.get("video") or result.get("url")
-        if isinstance(video_url, dict):
-            video_url = video_url.get("url")
-        if isinstance(video_url, list) and video_url:
-            first = video_url[0]
-            video_url = first.get("url") if isinstance(first, dict) else first
-        if not video_url:
-            raise EngineRunError(f"r2v result missing video url: {result}")
-
-        on_stage("rendering", 85)
-        on_log("[r2v] download start")
-        content = await self._download_bytes(str(video_url))
-        on_log(f"[r2v] download ok bytes={len(content)}")
-
-        output_key = f"outputs/{task_id}/result.mp4"
-        on_log(f"[r2] upload start key={output_key}")
-        output_url = self.r2.upload_bytes(key=output_key, content=content, content_type="video/mp4")
-        on_log(f"[r2] upload success key={output_key}")
-
-        on_stage("completed", 100)
-        on_log(f"[done] output_url={output_url}")
-
-        return EngineResult(
-            output_key=output_key,
-            output_url=output_url,
-            metadata={
-                "provider": "wan26_r2v",
-                "model_id": self.model_id,
-                "duration_sec": int(self.duration),
-                "aspect_ratio": self.aspect_ratio,
-                "resolution": self.resolution,
-                "r2v_logs": r2v_logs,
-                "policy_retry_count": policy_retry_count,
-                "policy_violation_type": policy_violation_type,
-                "policy_violation_url": policy_violation_url,
-                **slice_meta,
-            },
-        )
+        except EngineRunError as exc:
+            on_log(f"[r2v][error] {type(exc).__name__}: {exc}")
+            raise
+        except Exception as exc:
+            on_log(f"[r2v][error] {type(exc).__name__}: {exc}")
+            raise EngineRunError(f"r2v engine failed: {type(exc).__name__}: {exc}") from exc
 
     async def _download_bytes(self, url: str) -> bytes:
         timeout = httpx.Timeout(self.timeout_sec)
