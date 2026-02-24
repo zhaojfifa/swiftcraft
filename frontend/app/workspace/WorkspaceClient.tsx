@@ -11,8 +11,10 @@ import { SERVICE_REGISTRY } from "../../lib/services/registry";
 import { resolveAssetUrl } from "../../lib/url";
 
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "done"]);
-const POLL_BACKOFF = [1000, 1500, 2000, 3000, 5000];
-const MAX_POLL_MS = 3 * 60 * 1000;
+const MAX_ACTIVE_POLL_MS = 120000;
+const MAX_CONSECUTIVE_ERRORS = 6;
+const ERROR_COOLDOWN_MS = 15000;
+const POLL_BACKOFF = [800, 1200, 2000, 3000, 5000, 8000];
 
 function shouldStopPolling(current: TaskRecord | null) {
   const status = (current?.status || "").toLowerCase();
@@ -47,6 +49,7 @@ export default function WorkspaceClient() {
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uiPollingWarning, setUiPollingWarning] = useState<string | null>(null);
+  const [isPollingPaused, setIsPollingPaused] = useState(false);
   const [activeTab, setActiveTab] = useState<"playground" | "json" | "api">("playground");
   const pollRef = useRef<number | null>(null);
   const pollTokenRef = useRef(0);
@@ -124,9 +127,12 @@ export default function WorkspaceClient() {
 
   const startTaskPolling = (taskId: string) => {
     let attempt = 0;
+    let consecutiveErrorCount = 0;
+    let lastErrorWarnAt = 0;
     const startAt = Date.now();
     pollTokenRef.current += 1;
     const token = pollTokenRef.current;
+    setIsPollingPaused(false);
 
     if (pollRef.current) {
       window.clearTimeout(pollRef.current);
@@ -147,9 +153,9 @@ export default function WorkspaceClient() {
       try {
         const latest = await getTask(taskId);
         setTask(latest);
-        if (uiPollingWarning) {
-          setUiPollingWarning(null);
-        }
+        consecutiveErrorCount = 0;
+        setUiPollingWarning(null);
+        setIsPollingPaused(false);
         if (shouldStopPolling(latest)) {
           setIsRunning(false);
           if (pollRef.current) {
@@ -160,21 +166,59 @@ export default function WorkspaceClient() {
         }
       } catch (err) {
         const name = (err as { name?: string } | null)?.name || "";
-        if (name !== "AbortError") {
-          setUiPollingWarning("Temporary polling issue, retrying...");
+        if (name === "AbortError") {
+          scheduleNext();
+          return;
         }
+
+        consecutiveErrorCount += 1;
+        const now = Date.now();
+        if (now - lastErrorWarnAt >= ERROR_COOLDOWN_MS) {
+          setUiPollingWarning("Temporary connection issue. Retrying…");
+          lastErrorWarnAt = now;
+        }
+
+        const elapsed = now - startAt;
+        if (consecutiveErrorCount >= MAX_CONSECUTIVE_ERRORS || elapsed > MAX_ACTIVE_POLL_MS) {
+          if (pollRef.current) {
+            window.clearTimeout(pollRef.current);
+            pollRef.current = null;
+          }
+          setUiPollingWarning("Paused auto-refresh. Refresh status or continue waiting.");
+          setIsPollingPaused(true);
+          return;
+        }
+
         scheduleNext();
         return;
-      }
-
-      if (Date.now() - startAt > MAX_POLL_MS) {
-        setUiPollingWarning("Polling is taking longer than expected, still retrying...");
       }
 
       scheduleNext();
     };
 
     tick();
+  };
+
+  const handleRefreshStatus = async () => {
+    if (!taskId) return;
+    try {
+      const latest = await getTask(taskId);
+      setTask(latest);
+      setUiPollingWarning(null);
+      setIsPollingPaused(false);
+      if (shouldStopPolling(latest)) {
+        setIsRunning(false);
+      }
+    } catch {
+      setUiPollingWarning("Temporary connection issue. Retrying…");
+    }
+  };
+
+  const handleContinueWaiting = () => {
+    if (!taskId) return;
+    setUiPollingWarning(null);
+    setIsPollingPaused(false);
+    startTaskPolling(taskId);
   };
 
   const runAvatarTask = async (overrides?: { motionKey?: string; characterKey?: string; modeOverride?: SwapMode }) => {
@@ -209,6 +253,7 @@ export default function WorkspaceClient() {
     }
     setError(null);
     setUiPollingWarning(null);
+    setIsPollingPaused(false);
     setIsRunning(true);
     setTask(null);
 
@@ -297,6 +342,7 @@ export default function WorkspaceClient() {
     }
     setError(null);
     setUiPollingWarning(null);
+    setIsPollingPaused(false);
     setIsRunning(true);
     setTask(null);
     cancelPolling();
@@ -313,6 +359,7 @@ export default function WorkspaceClient() {
     if (!isAvatar || isRunning || !safeDemoMotionKey || !safeDemoCharacterKey) return;
     setError(null);
     setUiPollingWarning(null);
+    setIsPollingPaused(false);
     setIsRunning(true);
     setTask(null);
     cancelPolling();
@@ -741,8 +788,26 @@ export default function WorkspaceClient() {
                 ) : null}
                 {error ? <p className="text-xs text-rose-500">{error}</p> : null}
                 {uiPollingWarning ? (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-                    {uiPollingWarning}
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 space-y-2">
+                    <div>{uiPollingWarning}</div>
+                    {isPollingPaused ? (
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={handleRefreshStatus}
+                          className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-amber-900"
+                        >
+                          Refresh status
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleContinueWaiting}
+                          className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-[11px] font-semibold text-blue-700"
+                        >
+                          Continue waiting
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
                 {showPolicyPanel ? (
