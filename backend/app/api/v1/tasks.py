@@ -82,13 +82,15 @@ async def create_task(
         if target_key is not None:
             resolved_payload["target_key"] = target_key
 
-    return service.create_task(
+    result = service.create_task(
         resolved_payload,
         background_tasks=background_tasks,
         video_file=video_file,
         image_file=image_file,
         face_enhancer=face_enhancer,
     )
+    background_tasks.add_task(service.run_task_background, result.task_id)
+    return result
 
 
 @router.get("/tasks/{task_id}", response_model=TaskResponseOut)
