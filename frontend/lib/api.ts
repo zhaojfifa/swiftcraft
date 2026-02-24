@@ -44,9 +44,23 @@ export type UploadUrlResponse = {
   headers: Record<string, string>;
 };
 
-function getApiBase(): string {
-  const base = process.env.NEXT_PUBLIC_API_BASE || '';
-  return base.replace(/\/+$/, '');
+export class ApiHttpError extends Error {
+  status: number;
+  detail?: unknown;
+
+  constructor(message: string, status: number, detail?: unknown) {
+    super(message);
+    this.name = "ApiHttpError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+function getApiPrefix(): string {
+  const base = (process.env.NEXT_PUBLIC_API_BASE || "").replace(/\/+$/, "");
+  if (!base) return "/api/v1";
+  if (base.endsWith("/api/v1")) return base;
+  return `${base}/api/v1`;
 }
 
 async function readJson<T>(res: Response): Promise<T> {
@@ -60,8 +74,7 @@ async function readJson<T>(res: Response): Promise<T> {
 }
 
 export async function createTask(payload: any): Promise<CreateTaskResponse> {
-  const base = getApiBase();
-  if (!base) throw new Error('NEXT_PUBLIC_API_BASE is not set');
+  const apiPrefix = getApiPrefix();
 
   const isTyped = payload && typeof payload === 'object' && 'service_type' in payload;
   const service = (payload?.service || '').toLowerCase();
@@ -73,7 +86,7 @@ export async function createTask(payload: any): Promise<CreateTaskResponse> {
     if (payload?.face_enhancer !== undefined) body.face_enhancer = payload.face_enhancer;
   }
 
-  const res = await fetch(`${base}/api/v1/tasks`, {
+  const res = await fetch(`${apiPrefix}/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(body),
@@ -82,7 +95,7 @@ export async function createTask(payload: any): Promise<CreateTaskResponse> {
 
   const text = await res.text();
   if (!res.ok) {
-    throw new Error(`POST /api/v1/tasks failed (${res.status}): ${text}`);
+    throw new ApiHttpError(`POST /api/v1/tasks failed (${res.status}): ${text}`, res.status, text);
   }
 
   let json: any = null;
@@ -98,17 +111,20 @@ export async function createTask(payload: any): Promise<CreateTaskResponse> {
 
 
 export async function getTask(taskId: string): Promise<TaskRecord> {
-  const base = getApiBase();
-  if (!base) throw new Error('NEXT_PUBLIC_API_BASE is not set');
+  const apiPrefix = getApiPrefix();
 
-  const res = await fetch(`${base}/api/v1/tasks/${encodeURIComponent(taskId)}`, {
+  const res = await fetch(`${apiPrefix}/tasks/${encodeURIComponent(taskId)}`, {
     method: 'GET',
     cache: 'no-store',
   });
 
   if (!res.ok) {
     const err = await readJson<{ detail?: any }>(res).catch(() => ({ detail: 'Unknown error' }));
-    throw new Error(`getTask failed (HTTP ${res.status}): ${JSON.stringify(err.detail ?? err)}`);
+    throw new ApiHttpError(
+      `getTask failed (HTTP ${res.status}): ${JSON.stringify(err.detail ?? err)}`,
+      res.status,
+      err.detail ?? err,
+    );
   }
 
   const data = await readJson<TaskRecord>(res);
@@ -116,10 +132,9 @@ export async function getTask(taskId: string): Promise<TaskRecord> {
 }
 
 export async function getUploadUrl(payload: UploadUrlRequest): Promise<UploadUrlResponse> {
-  const base = getApiBase();
-  if (!base) throw new Error('NEXT_PUBLIC_API_BASE is not set');
+  const apiPrefix = getApiPrefix();
 
-  const res = await fetch(`${base}/api/v1/upload-url`, {
+  const res = await fetch(`${apiPrefix}/upload-url`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -128,7 +143,11 @@ export async function getUploadUrl(payload: UploadUrlRequest): Promise<UploadUrl
 
   if (!res.ok) {
     const err = await readJson<{ detail?: any }>(res).catch(() => ({ detail: 'Unknown error' }));
-    throw new Error(`getUploadUrl failed (HTTP ${res.status}): ${JSON.stringify(err.detail ?? err)}`);
+    throw new ApiHttpError(
+      `getUploadUrl failed (HTTP ${res.status}): ${JSON.stringify(err.detail ?? err)}`,
+      res.status,
+      err.detail ?? err,
+    );
   }
 
   return readJson<UploadUrlResponse>(res);
