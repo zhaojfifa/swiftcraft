@@ -319,6 +319,36 @@ class TaskService:
         self.store.set_stage(task_id, "failed", 100)
         self.store.fail_task(task_id, error_msg=error_msg, where=where, exc=exc)
 
+    def _normalize_engine_error(self, exc: Exception) -> Dict[str, Any]:
+        message = str(exc)
+        lower = message.lower()
+        reason_code = "engine_error"
+        if "content_policy_violation" in lower:
+            reason_code = "content_policy_violation"
+        elif isinstance(exc, TimeoutError) or "timeout" in lower:
+            reason_code = "timeout"
+        elif "fal" in lower:
+            reason_code = "fal_error"
+        return {
+            "reason_code": reason_code,
+            "reason_type": type(exc).__name__,
+            "reason_message": message[:600],
+        }
+
+    def _persist_error_reason(self, task_id: str, reason: Dict[str, Any]) -> None:
+        record = self.store.get_task(task_id)
+        if record is None:
+            return
+        metadata = dict(record.metadata or {})
+        metadata.update(
+            {
+                "error_reason_code": reason.get("reason_code"),
+                "error_reason_type": reason.get("reason_type"),
+                "error_reason_message": reason.get("reason_message"),
+            }
+        )
+        self.store.save(record.copy(update={"metadata": metadata}))
+
     def launch_task_background(self, task_id: str) -> None:
         thread = threading.Thread(
             target=self._run_task_background_safe,
@@ -343,6 +373,7 @@ class TaskService:
 
     def run_task_background(self, task_id: str) -> None:
         pid = os.getpid()
+        run_started = time.perf_counter()
         self.store.append_log(task_id, f"[runner] thread start pid={pid} task_id={task_id}")
         record = self.store.get_task(task_id)
         if record is None:
@@ -374,15 +405,22 @@ class TaskService:
             self.store.append_log(task_id, "[runner] engine submit finished")
             self.store.append_log(task_id, "[runner] engine run finished")
         except Exception as exc:
+            elapsed_ms = int((time.perf_counter() - run_started) * 1000)
             trace_line = traceback.format_exception_only(type(exc), exc)[-1].strip()
             trace_loc = ""
             tb_frames = traceback.extract_tb(exc.__traceback__) if exc.__traceback__ is not None else []
             if tb_frames:
                 frame = tb_frames[-1]
                 trace_loc = f"{frame.filename}:{frame.lineno}"
+            reason = self._normalize_engine_error(exc)
+            self._persist_error_reason(task_id, reason)
             self.store.append_log(task_id, f"[failed] pid={pid} {type(exc).__name__}: {exc}")
             if trace_loc:
                 self.store.append_log(task_id, f"[failed] traceback: {trace_loc}")
+            self.store.append_log(
+                task_id,
+                f"[runner] outcome=failed elapsed_ms={elapsed_ms} reason={reason.get('reason_code')}",
+            )
             self._mark_failed_terminal(task_id, error_msg=trace_line, where="task_service.background_runner", exc=exc)
             failed_record = self.store.get_task(task_id)
             failed_status = failed_record.status if failed_record is not None else "failed"
@@ -391,11 +429,15 @@ class TaskService:
 
         if result.output_url:
             self.store.complete_task(task_id, output_url=result.output_url, output_key=result.output_key)
+            elapsed_ms = int((time.perf_counter() - run_started) * 1000)
+            self.store.append_log(task_id, f"[runner] outcome=success elapsed_ms={elapsed_ms}")
             done_record = self.store.get_task(task_id)
             done_status = done_record.status if done_record is not None else "done"
             self.store.append_log(task_id, f"[runner] thread done pid={pid} task_id={task_id} status={done_status}")
             return
 
+        elapsed_ms = int((time.perf_counter() - run_started) * 1000)
+        self.store.append_log(task_id, f"[runner] outcome=failed elapsed_ms={elapsed_ms} reason=missing_output_url")
         self._mark_failed_terminal(
             task_id,
             error_msg="EngineRunError: engine returned no output_url",
@@ -415,6 +457,8 @@ class TaskService:
         on_stage: Any,
         timeout_sec: int,
     ) -> Any:
+        started = time.perf_counter()
+        on_log(f"[runner] engine watchdog start timeout_sec={timeout_sec}")
         result_holder: Dict[str, Any] = {}
         error_holder: Dict[str, Exception] = {}
 
@@ -431,6 +475,8 @@ class TaskService:
             raise TimeoutError(f"engine watchdog timeout after {timeout_sec}s")
         if "error" in error_holder:
             raise error_holder["error"]
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        on_log(f"[runner] engine watchdog done elapsed_ms={elapsed_ms}")
         return result_holder.get("result")
 
     def _run_engine(
