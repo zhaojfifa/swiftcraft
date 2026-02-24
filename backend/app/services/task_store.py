@@ -49,7 +49,12 @@ class TaskStore:
             print(f"[task_store][put] pid={os.getpid()} task_id={record.task_id} start")
             logger.info("[task_store][put] start task_id=%s key=%s bytes=%s", record.task_id, key, payload_bytes)
             try:
-                self._r2.put_bytes(key, payload_data, content_type="application/json")
+                self._r2.put_bytes(
+                    key,
+                    payload_data,
+                    content_type="application/json",
+                    cache_control="no-store",
+                )
                 elapsed_ms = int((time.time() - start) * 1000)
                 print(f"[task_store][put] pid={os.getpid()} task_id={record.task_id} ms={elapsed_ms} bytes={payload_bytes} ok")
                 logger.info(
@@ -93,6 +98,7 @@ class TaskStore:
         with self._lock:
             cached = self._tasks.get(task_id)
         if cached is not None:
+            print(f"[task_store][get] pid={os.getpid()} task_id={task_id} ms=0 bytes=0 outcome=cache_hit")
             return cached.copy()
 
         if self._r2 is None:
@@ -118,6 +124,10 @@ class TaskStore:
             return None
         except Exception as exc:
             elapsed_ms = int((time.time() - start) * 1000)
+            print(
+                f"[task_store][get] pid={os.getpid()} task_id={task_id} "
+                f"ms={elapsed_ms} bytes=0 fail error={type(exc).__name__}: {exc}"
+            )
             logger.warning("[task_store][get] unexpected fail task_id=%s key=%s elapsed_ms=%s error=%s", task_id, key, elapsed_ms, exc)
             with self._lock:
                 stale = self._tasks.get(task_id)
@@ -134,6 +144,10 @@ class TaskStore:
             data = json.loads(raw.decode("utf-8"))
         except Exception as exc:
             elapsed_ms = int((time.time() - start) * 1000)
+            print(
+                f"[task_store][get] pid={os.getpid()} task_id={task_id} "
+                f"ms={elapsed_ms} bytes={payload_bytes} fail error={type(exc).__name__}: {exc}"
+            )
             logger.warning("[task_store][get] decode fail task_id=%s key=%s elapsed_ms=%s error=%s", task_id, key, elapsed_ms, exc)
             return None
         elapsed_ms = int((time.time() - start) * 1000)
@@ -149,6 +163,10 @@ class TaskStore:
             record = TaskRecord.model_validate(data)
         except Exception as exc:
             elapsed_ms = int((time.time() - start) * 1000)
+            print(
+                f"[task_store][get] pid={os.getpid()} task_id={task_id} "
+                f"ms={elapsed_ms} bytes={payload_bytes} fail error={type(exc).__name__}: {exc}"
+            )
             logger.warning("[task_store][get] validate fail task_id=%s key=%s elapsed_ms=%s error=%s", task_id, key, elapsed_ms, exc)
             return None
         with self._lock:

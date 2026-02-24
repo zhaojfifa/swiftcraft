@@ -135,6 +135,7 @@ class R2Client:
         key: str,
         data: bytes,
         content_type: str = "application/octet-stream",
+        cache_control: str | None = None,
         retries: int = 1,
     ) -> None:
         key = key.lstrip("/")
@@ -144,11 +145,16 @@ class R2Client:
             if delay:
                 time.sleep(delay)
             try:
+                put_args = {
+                    "Bucket": self.cfg.bucket,
+                    "Key": key,
+                    "Body": data,
+                    "ContentType": content_type,
+                }
+                if cache_control:
+                    put_args["CacheControl"] = cache_control
                 self.s3.put_object(
-                    Bucket=self.cfg.bucket,
-                    Key=key,
-                    Body=data,
-                    ContentType=content_type,
+                    **put_args,
                 )
                 return
             except Exception as exc:
