@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
 import time
 import traceback
@@ -135,3 +136,12 @@ async def get_task(task_id: str) -> TaskResponseOut:
                 "exception": f"{type(e).__name__}: {e}",
             },
         )
+
+
+@router.get("/health")
+async def health() -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "pid": os.getpid(),
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
