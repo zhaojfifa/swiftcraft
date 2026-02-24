@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import BackgroundTasks, HTTPException, UploadFile
+from fastapi import HTTPException, UploadFile
 from pydantic import TypeAdapter, ValidationError
 
 from app.core.config import settings
@@ -134,7 +134,6 @@ class TaskService:
     def create_task(
         self,
         payload: Dict[str, Any],
-        background_tasks: BackgroundTasks,
         video_file: UploadFile | None = None,
         image_file: UploadFile | None = None,
         face_enhancer: Optional[str] = None,
@@ -334,7 +333,8 @@ class TaskService:
             )
 
     def run_task_background(self, task_id: str) -> None:
-        self.store.append_log(task_id, f"[runner] start task_id={task_id}")
+        pid = os.getpid()
+        self.store.append_log(task_id, f"[runner] thread start pid={pid} task_id={task_id}")
         record = self.store.get_task(task_id)
         if record is None:
             return
@@ -370,15 +370,20 @@ class TaskService:
             if tb_frames:
                 frame = tb_frames[-1]
                 trace_loc = f"{frame.filename}:{frame.lineno}"
-            self.store.append_log(task_id, f"[failed] {type(exc).__name__}: {exc}")
+            self.store.append_log(task_id, f"[failed] pid={pid} {type(exc).__name__}: {exc}")
             if trace_loc:
                 self.store.append_log(task_id, f"[failed] traceback: {trace_loc}")
             self.store.fail_task(task_id, error_msg=trace_line, where="task_service.background_runner", exc=exc)
+            failed_record = self.store.get_task(task_id)
+            failed_status = failed_record.status if failed_record is not None else "failed"
+            self.store.append_log(task_id, f"[runner] thread done pid={pid} task_id={task_id} status={failed_status}")
             return
 
         if result.output_url:
             self.store.complete_task(task_id, output_url=result.output_url, output_key=result.output_key)
-            self.store.append_log(task_id, f"[runner] done task_id={task_id}")
+            done_record = self.store.get_task(task_id)
+            done_status = done_record.status if done_record is not None else "done"
+            self.store.append_log(task_id, f"[runner] thread done pid={pid} task_id={task_id} status={done_status}")
             return
 
         self.store.fail_task(
@@ -386,6 +391,9 @@ class TaskService:
             error_msg="EngineRunError: engine returned no output_url",
             where="task_service.background_runner",
         )
+        failed_record = self.store.get_task(task_id)
+        failed_status = failed_record.status if failed_record is not None else "failed"
+        self.store.append_log(task_id, f"[runner] thread done pid={pid} task_id={task_id} status={failed_status}")
 
     def _run_engine(
         self,
