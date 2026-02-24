@@ -1,10 +1,12 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Dict, Optional
 
 import boto3
+from botocore.exceptions import ClientError
 
 
 @dataclass(frozen=True)
@@ -90,3 +92,39 @@ class R2Client:
             ContentType=content_type,
         )
         return self.public_url(key)
+
+    def put_json(self, key: str, data: Dict[str, object]) -> None:
+        key = key.lstrip("/")
+        payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.s3.put_object(
+            Bucket=self.cfg.bucket,
+            Key=key,
+            Body=payload,
+            ContentType="application/json",
+        )
+
+    def get_json(self, key: str) -> Optional[Dict[str, object]]:
+        key = key.lstrip("/")
+        try:
+            response = self.s3.get_object(Bucket=self.cfg.bucket, Key=key)
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code in ("NoSuchKey", "404", "NotFound"):
+                return None
+            raise
+        body = response["Body"].read()
+        if not body:
+            return None
+        return json.loads(body.decode("utf-8"))
+
+    def exists(self, key: str) -> bool:
+        key = key.lstrip("/")
+        try:
+            self.s3.head_object(Bucket=self.cfg.bucket, Key=key)
+            return True
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code in ("NoSuchKey", "404", "NotFound"):
+                return False
+            raise
+

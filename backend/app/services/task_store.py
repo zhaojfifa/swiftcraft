@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from threading import Lock
 import traceback
 from typing import Any, Dict, List, Optional
 
 from app.models.task import TaskRecord
+from app.services.r2_client import R2Client
+
+
+logger = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -22,6 +27,50 @@ class TaskStore:
         self._order: List[str] = []
         self._artifacts: Dict[str, Dict[str, Any]] = {}
         self._lock = Lock()
+        self._r2: Optional[R2Client] = None
+        try:
+            self._r2 = R2Client()
+        except Exception as exc:
+            logger.warning("TaskStore R2 init failed; using in-memory fallback: %s", exc)
+
+    def _task_key(self, task_id: str) -> str:
+        return f"tasks/{task_id}.json"
+
+    def save(self, record: TaskRecord) -> TaskRecord:
+        if self._r2 is not None:
+            self._r2.put_json(self._task_key(record.task_id), record.model_dump(mode="json"))
+        with self._lock:
+            self._tasks[record.task_id] = record
+            if record.task_id not in self._order:
+                self._order.insert(0, record.task_id)
+        return record
+
+    def get(self, task_id: str) -> Optional[TaskRecord]:
+        with self._lock:
+            cached = self._tasks.get(task_id)
+        if cached is not None:
+            return cached.copy()
+
+        if self._r2 is None:
+            return None
+
+        data = self._r2.get_json(self._task_key(task_id))
+        if not data:
+            return None
+        record = TaskRecord.model_validate(data)
+        with self._lock:
+            self._tasks[task_id] = record
+            if task_id not in self._order:
+                self._order.insert(0, task_id)
+        return record.copy()
+
+    def exists(self, task_id: str) -> bool:
+        with self._lock:
+            if task_id in self._tasks:
+                return True
+        if self._r2 is None:
+            return False
+        return self._r2.exists(self._task_key(task_id))
 
     def create_task(
         self,
@@ -51,15 +100,10 @@ class TaskStore:
             input_key=input_key,
             input_image_key=input_image_key,
         )
-        with self._lock:
-            self._tasks[task_id] = record
-            self._order.insert(0, task_id)
-        return record
+        return self.save(record)
 
     def get_task(self, task_id: str) -> Optional[TaskRecord]:
-        with self._lock:
-            record = self._tasks.get(task_id)
-            return record.copy() if record else None
+        return self.get(task_id)
 
     def list_tasks(self, limit: int = 20) -> List[TaskRecord]:
         with self._lock:
@@ -75,13 +119,12 @@ class TaskStore:
             return dict(self._artifacts.get(task_id, {}))
 
     def append_log(self, task_id: str, message: str) -> None:
-        with self._lock:
-            record = self._tasks.get(task_id)
-            if not record:
-                return
-            logs = list(record.logs)
-            logs.append(message)
-            self._update(task_id, {"logs": logs})
+        record = self.get(task_id)
+        if not record:
+            return
+        logs = list(record.logs or [])
+        logs.append(message)
+        self._update(task_id, {"logs": logs})
 
     def set_stage(self, task_id: str, stage: str, progress: int) -> None:
         update: Dict[str, Any] = {"stage": stage, "progress": _clamp(progress)}
@@ -152,28 +195,27 @@ class TaskStore:
                 frame = frames[-1]
                 trace_snippet = f" at {frame.filename}:{frame.lineno} in {frame.name}"
 
-        with self._lock:
-            record = self._tasks.get(task_id)
-            if not record:
-                return
-            logs = list(record.logs or [])
-            logs.append(f"[failed] where={location} error={details}")
-            if trace_snippet:
-                logs.append(f"[failed] traceback{trace_snippet}")
-            self._update(
-                task_id,
-                {
-                    "status": "failed",
-                    "stage": "FAILED",
-                    "error": details,
-                    "logs": logs,
-                },
-            )
+        record = self.get(task_id)
+        if not record:
+            return
+        logs = list(record.logs or [])
+        logs.append(f"[failed] where={location} error={details}")
+        if trace_snippet:
+            logs.append(f"[failed] traceback{trace_snippet}")
+        self._update(
+            task_id,
+            {
+                "status": "failed",
+                "stage": "FAILED",
+                "error": details,
+                "logs": logs,
+            },
+        )
 
     def _update(self, task_id: str, fields: Dict[str, Any]) -> None:
-        record = self._tasks.get(task_id)
+        record = self.get(task_id)
         if not record:
             return
         fields["updated_at"] = _now_iso()
         updated = record.copy(update=fields)
-        self._tasks[task_id] = updated
+        self.save(updated)
