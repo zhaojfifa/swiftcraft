@@ -15,6 +15,7 @@ const POLL_FAST_ATTEMPTS = 10;
 const POLL_FAST_MS = 1000;
 const POLL_MAX_MS = 10000;
 const POLL_STILL_PROCESSING_MS = 180000;
+const POLL_STUCK_MAX_UNCHANGED = 8;
 
 function shouldStopPolling(current: TaskRecord | null) {
   const status = (current?.status || "").toLowerCase();
@@ -50,6 +51,7 @@ export default function WorkspaceClient() {
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uiPollingWarning, setUiPollingWarning] = useState<string | null>(null);
+  const [uiLogs, setUiLogs] = useState<string[]>([]);
   const [isPollingPaused, setIsPollingPaused] = useState(false);
   const [activeTab, setActiveTab] = useState<"playground" | "json" | "api">("playground");
   const pollRef = useRef<number | null>(null);
@@ -152,9 +154,13 @@ export default function WorkspaceClient() {
   const startTaskPolling = (taskId: string) => {
     let attempt = 0;
     const startedAt = Date.now();
+    let unchangedPollCount = 0;
+    let lastTaskSignature = "";
+    let stuckMode = false;
     pollTokenRef.current += 1;
     const token = pollTokenRef.current;
     setIsPollingPaused(false);
+    setUiLogs((prev) => [...prev, `[ui] polling_base=cdn_ssot_first task_id=${taskId}`]);
 
     if (pollRef.current) {
       window.clearTimeout(pollRef.current);
@@ -189,9 +195,11 @@ export default function WorkspaceClient() {
           } catch (apiErr) {
             const apiStatus = apiErr instanceof ApiHttpError ? apiErr.status : undefined;
             if (apiStatus === 502 || apiStatus === 503) {
-              setUiPollingWarning(
-                `Temporary gateway issue, retrying (fallback to CDN) (HTTP ${apiStatus}).`,
-              );
+              if (!stuckMode) {
+                setUiPollingWarning(
+                  `Temporary gateway issue, retrying (fallback to CDN) (HTTP ${apiStatus}).`,
+                );
+              }
               scheduleNext();
               return;
             }
@@ -210,6 +218,20 @@ export default function WorkspaceClient() {
         }
 
         setTask(latest);
+        const signature = [
+          String(latest.status || ""),
+          String(latest.stage || ""),
+          String(latest.progress ?? ""),
+          String(Array.isArray(latest.logs) ? latest.logs.length : 0),
+          String(latest.output_url || ""),
+        ].join("|");
+        if (signature === lastTaskSignature) {
+          unchangedPollCount += 1;
+        } else {
+          unchangedPollCount = 0;
+          lastTaskSignature = signature;
+          stuckMode = false;
+        }
         if ((latest.status || "").toLowerCase() === "failed") {
           const lastLog =
             Array.isArray(latest.logs) && latest.logs.length > 0
@@ -227,6 +249,9 @@ export default function WorkspaceClient() {
         const elapsed = Date.now() - startedAt;
         if (elapsed > POLL_STILL_PROCESSING_MS && !shouldStopPolling(latest)) {
           setUiPollingWarning("Still processing, you can keep this tab open or refresh later.");
+        } else if (!shouldStopPolling(latest) && unchangedPollCount >= POLL_STUCK_MAX_UNCHANGED) {
+          stuckMode = true;
+          setUiPollingWarning("Still processing... (backend confirmed)");
         } else if (!uiPollingWarning?.startsWith("Task record not yet available")) {
           setUiPollingWarning(null);
         }
@@ -255,9 +280,11 @@ export default function WorkspaceClient() {
         }
 
         if (status === 502 || status === 503) {
-          setUiPollingWarning(
-            `Temporary gateway issue, retrying (fallback to CDN) (HTTP ${status}).`,
-          );
+          if (!stuckMode) {
+            setUiPollingWarning(
+              `Temporary gateway issue, retrying (fallback to CDN) (HTTP ${status}).`,
+            );
+          }
           scheduleNext();
           return;
         }
@@ -289,6 +316,7 @@ export default function WorkspaceClient() {
     setError(null);
     setUiPollingWarning(null);
     setIsPollingPaused(false);
+    setUiLogs([]);
     startTaskPolling(taskId);
   };
 
@@ -325,6 +353,7 @@ export default function WorkspaceClient() {
     setError(null);
     setUiPollingWarning(null);
     setIsPollingPaused(false);
+    setUiLogs([]);
     setIsRunning(true);
     setTask(null);
 
@@ -353,7 +382,7 @@ export default function WorkspaceClient() {
     (task?.output_key && cdnBase ? `${cdnBase}/${task.output_key}` : null);
   // Preview priority: output -> local upload (upload mode) -> empty placeholder.
   const previewUrl = outputUrl ?? (inputSource === "upload" ? inputVideoUrl : null);
-  const logs = task?.logs ?? [];
+  const logs = [...uiLogs, ...(task?.logs ?? [])];
   const taskId = task?.task_id ?? task?.id ?? "";
   const showUploadBlocks = (isSwap && inputSource === "upload") || isAvatar;
   const lowerError = (task?.error || "").toLowerCase();
@@ -418,6 +447,7 @@ export default function WorkspaceClient() {
     setError(null);
     setUiPollingWarning(null);
     setIsPollingPaused(false);
+    setUiLogs([]);
     setIsRunning(true);
     setTask(null);
     cancelPolling();
@@ -435,6 +465,7 @@ export default function WorkspaceClient() {
     setError(null);
     setUiPollingWarning(null);
     setIsPollingPaused(false);
+    setUiLogs([]);
     setIsRunning(true);
     setTask(null);
     cancelPolling();
