@@ -11,10 +11,9 @@ import { SERVICE_REGISTRY } from "../../lib/services/registry";
 import { resolveAssetUrl } from "../../lib/url";
 
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "done"]);
-const POLL_FAST_ATTEMPTS = 10;
-const POLL_FAST_MS = 1000;
-const POLL_MAX_MS = 10000;
-const POLL_STILL_PROCESSING_MS = 180000;
+const POLL_INITIAL_MS = 1000;
+const POLL_MAX_MS = 15000;
+const POLL_STILL_PROCESSING_MS = 120000;
 const POLL_STUCK_MAX_UNCHANGED = 8;
 
 function shouldStopPolling(current: TaskRecord | null) {
@@ -129,9 +128,7 @@ export default function WorkspaceClient() {
   };
 
   const getPollDelayMs = (attempt: number) => {
-    if (attempt < POLL_FAST_ATTEMPTS) return POLL_FAST_MS;
-    const backoffIndex = attempt - POLL_FAST_ATTEMPTS;
-    return Math.min(POLL_MAX_MS, 2000 * Math.pow(2, backoffIndex));
+    return Math.min(POLL_MAX_MS, POLL_INITIAL_MS * Math.pow(2, attempt));
   };
 
   const fetchTaskFromCdn = async (taskId: string): Promise<TaskRecord> => {
@@ -394,6 +391,13 @@ export default function WorkspaceClient() {
     (task?.status || "").toLowerCase() === "failed"
       ? task?.error || logs[logs.length - 1] || "Task failed."
       : null;
+  const hasPollTimeoutFailure = Boolean(
+    failedReason && failedReason.toLowerCase().includes("poll timeout"),
+  );
+  const taskRequestId =
+    task?.metadata && typeof task.metadata === "object"
+      ? String((task.metadata as Record<string, unknown>).request_id || "")
+      : "";
   const canUseSafeDemo = Boolean(safeDemoMotionKey && safeDemoCharacterKey) && !isRunning;
   const canRun = isLocalization
     ? false
@@ -930,6 +934,11 @@ export default function WorkspaceClient() {
                 ) : null}
                 {error ? <p className="text-xs text-rose-500">{error}</p> : null}
                 {failedReason ? <p className="text-xs text-rose-500">Failure reason: {failedReason}</p> : null}
+                {hasPollTimeoutFailure ? (
+                  <p className="text-xs text-amber-700">
+                    This task may still be running. Refresh later or check Fal dashboard with Request ID.
+                  </p>
+                ) : null}
                 {uiPollingWarning ? (
                   <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 space-y-2">
                     <div>{uiPollingWarning}</div>
@@ -975,6 +984,18 @@ export default function WorkspaceClient() {
                 {taskId ? (
                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
                     <div>Task ID: {taskId}</div>
+                    {taskRequestId ? (
+                      <div className="flex items-center gap-2">
+                        <span>Request ID: {taskRequestId}</span>
+                        <button
+                          type="button"
+                          onClick={() => navigator.clipboard.writeText(taskRequestId)}
+                          className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    ) : null}
                     <div>
                       Status: {task?.status || "queued"} · Stage: {task?.stage || "queued"}
                     </div>
