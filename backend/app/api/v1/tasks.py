@@ -15,6 +15,7 @@ from app.services.task_service import TaskService
 
 router = APIRouter(tags=["tasks"])
 service = TaskService()
+_PROCESS_START_MONOTONIC = time.monotonic()
 
 
 @router.post(
@@ -111,13 +112,6 @@ async def get_task(task_id: str) -> TaskResponseOut:
             f"task_id={task_id} elapsed_ms={elapsed_ms} outcome=success"
         )
         return result
-    except HTTPException:
-        elapsed_ms = int((time.time() - start) * 1000)
-        print(
-            f"[get_task] pid={os.getpid()} request_id={request_id} "
-            f"task_id={task_id} elapsed_ms={elapsed_ms} outcome=http_exception"
-        )
-        raise
     except Exception as e:
         elapsed_ms = int((time.time() - start) * 1000)
         print(
@@ -129,11 +123,14 @@ async def get_task(task_id: str) -> TaskResponseOut:
         return JSONResponse(
             status_code=503,
             content={
-                "error": "task_poll_unavailable",
+                "detail": "polling_unavailable",
                 "task_id": task_id,
                 "request_id": request_id,
                 "pid": os.getpid(),
-                "exception": f"{type(e).__name__}: {e}",
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "where": "api.v1.tasks.get_task",
+                "exception_type": type(e).__name__,
+                "exception_msg": str(e),
             },
         )
 
@@ -144,4 +141,5 @@ async def health() -> Dict[str, Any]:
         "ok": True,
         "pid": os.getpid(),
         "ts": datetime.now(timezone.utc).isoformat(),
+        "uptime_sec": int(time.monotonic() - _PROCESS_START_MONOTONIC),
     }
