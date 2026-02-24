@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { UploadCloud, Play, Terminal } from "lucide-react";
 import Link from "next/link";
 
-import { createTask, getTask, getUploadUrl, TaskRecord } from "../../lib/api";
+import { ApiHttpError, createTask, getTask, getUploadUrl, TaskRecord } from "../../lib/api";
 import { SwapMode, resolvePresetInputKey } from "../../lib/presets";
 import { SERVICE_REGISTRY } from "../../lib/services/registry";
 import { resolveAssetUrl } from "../../lib/url";
@@ -174,7 +174,12 @@ export default function WorkspaceClient() {
         consecutiveErrorCount += 1;
         const now = Date.now();
         if (now - lastErrorWarnAt >= ERROR_COOLDOWN_MS) {
-          setUiPollingWarning("Temporary connection issue. Retrying…");
+          const status = err instanceof ApiHttpError ? err.status : undefined;
+          setUiPollingWarning(
+            status
+              ? `Temporary gateway issue (HTTP ${status}), retrying...`
+              : "Temporary gateway issue, retrying..."
+          );
           lastErrorWarnAt = now;
         }
 
@@ -209,8 +214,13 @@ export default function WorkspaceClient() {
       if (shouldStopPolling(latest)) {
         setIsRunning(false);
       }
-    } catch {
-      setUiPollingWarning("Temporary connection issue. Retrying…");
+    } catch (err) {
+      const status = err instanceof ApiHttpError ? err.status : undefined;
+      setUiPollingWarning(
+        status
+          ? `Temporary gateway issue (HTTP ${status}), retrying...`
+          : "Temporary gateway issue, retrying..."
+      );
     }
   };
 
@@ -321,7 +331,7 @@ export default function WorkspaceClient() {
     request: payloadPreview,
     task: task ?? null
   };
-  const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:10000";
+  const apiBase = (process.env.NEXT_PUBLIC_API_BASE || "https://swiftcraft.ai").replace(/\/+$/, "");
   const curlSnippet = isAvatar
     ? [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
