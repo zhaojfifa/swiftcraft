@@ -13,7 +13,7 @@ import { resolveAssetUrl } from "../../lib/url";
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "done"]);
 const POLL_FAST_ATTEMPTS = 10;
 const POLL_FAST_MS = 1000;
-const POLL_MAX_MS = 10000;
+const POLL_MAX_MS = 30000;
 const POLL_STILL_PROCESSING_MS = 180000;
 const POLL_STUCK_MAX_UNCHANGED = 8;
 
@@ -168,6 +168,7 @@ export default function WorkspaceClient() {
 
     const scheduleNext = () => {
       const delay = getPollDelayMs(attempt);
+      setUiLogs((prev) => [...prev, `[ui] poll_interval_ms=${delay} attempt=${attempt + 1}`]);
       attempt += 1;
       pollRef.current = window.setTimeout(tick, delay);
     };
@@ -197,9 +198,10 @@ export default function WorkspaceClient() {
             if (apiStatus === 502 || apiStatus === 503) {
               if (!stuckMode) {
                 setUiPollingWarning(
-                  `Temporary gateway issue, retrying (fallback to CDN) (HTTP ${apiStatus}).`,
+                  `Temporary gateway issue (HTTP ${apiStatus}), retrying. Long-running tasks may take several minutes.`,
                 );
               }
+              setUiLogs((prev) => [...prev, `[ui] last_error=http_${apiStatus} source=api_fallback`]);
               scheduleNext();
               return;
             }
@@ -282,14 +284,16 @@ export default function WorkspaceClient() {
         if (status === 502 || status === 503) {
           if (!stuckMode) {
             setUiPollingWarning(
-              `Temporary gateway issue, retrying (fallback to CDN) (HTTP ${status}).`,
+              `Temporary gateway issue (HTTP ${status}), retrying. Long-running tasks may take several minutes.`,
             );
           }
+          setUiLogs((prev) => [...prev, `[ui] last_error=http_${status} source=polling`]);
           scheduleNext();
           return;
         }
 
         if (status !== undefined) {
+          setUiLogs((prev) => [...prev, `[ui] last_error=http_${status} source=polling_terminal`]);
           setError(err instanceof Error ? err.message : "Polling failed unexpectedly.");
           setIsPollingPaused(true);
           setIsRunning(false);
@@ -300,6 +304,7 @@ export default function WorkspaceClient() {
           return;
         }
 
+        setUiLogs((prev) => [...prev, `[ui] last_error=network_or_parse source=polling`]);
         setUiPollingWarning("Task record not yet available, retrying...");
         scheduleNext();
         return;
