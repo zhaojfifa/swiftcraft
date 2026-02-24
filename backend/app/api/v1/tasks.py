@@ -130,6 +130,7 @@ async def get_task(task_id: str) -> TaskResponseOut:
                 "error": "task_poll_unavailable",
                 "task_id": task_id,
                 "request_id": request_id,
+                "pid": os.getpid(),
                 "exception": f"{type(e).__name__}: {e}",
             },
         )
