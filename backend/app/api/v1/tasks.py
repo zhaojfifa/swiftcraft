@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import os
+import threading
 import time
 import traceback
 import uuid
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Body, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from app.schemas.task import TaskResponseOut
@@ -16,6 +17,16 @@ from app.services.task_service import TaskService
 router = APIRouter(tags=["tasks"])
 service = TaskService()
 _PROCESS_START_MONOTONIC = time.monotonic()
+
+
+def _start_runner_thread(task_id: str) -> None:
+    thread = threading.Thread(
+        target=service.run_task_background,
+        args=(task_id,),
+        daemon=True,
+        name=f"runner:{task_id[:8]}",
+    )
+    thread.start()
 
 
 @router.post(
@@ -57,7 +68,6 @@ _PROCESS_START_MONOTONIC = time.monotonic()
 )
 async def create_task(
     request: Request,
-    background_tasks: BackgroundTasks,
     payload: Dict[str, Any] | None = Body(default=None),
     service_name: str | None = Form(None, alias="service"),
     mode: str | None = Form("baseline"),
@@ -91,12 +101,11 @@ async def create_task(
 
     result = service.create_task(
         resolved_payload,
-        background_tasks=background_tasks,
         video_file=video_file,
         image_file=image_file,
         face_enhancer=face_enhancer,
     )
-    service.launch_task_background(result.task_id)
+    _start_runner_thread(result.task_id)
     return result
 
 
