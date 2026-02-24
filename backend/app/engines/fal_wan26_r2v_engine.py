@@ -184,6 +184,17 @@ class FalWan26R2VEngine:
                 }
 
             result: Dict[str, Any] | None = None
+            last_request_id: Optional[str] = None
+
+            def extract_submit_request_id(submit_info: Dict[str, Any]) -> str:
+                rid = str(
+                    submit_info.get("request_id")
+                    or submit_info.get("id")
+                    or submit_info.get("requestId")
+                    or ""
+                ).strip()
+                on_log(f"[r2v] submit accepted request_id={rid or 'n/a'}")
+                return rid
 
             if self.policy_retry_enabled:
                 offsets = self._offsets_for_duration(duration_sec)
@@ -226,6 +237,8 @@ class FalWan26R2VEngine:
                             on_log,
                             self._submit_request(fal_client, args, on_queue_update, on_log),
                         )
+                        rid = extract_submit_request_id(submit_info)
+                        last_request_id = rid or last_request_id
                         if "result" in submit_info:
                             result = submit_info["result"]
                         else:
@@ -234,7 +247,7 @@ class FalWan26R2VEngine:
                                 on_log,
                                 self._poll_result(
                                     fal_client,
-                                    str(submit_info.get("request_id") or ""),
+                                    rid,
                                     on_queue_update=on_queue_update,
                                     on_log=on_log,
                                 ),
@@ -264,6 +277,8 @@ class FalWan26R2VEngine:
                                     on_log,
                                     self._submit_request(fal_client, safe_args, on_queue_update, on_log),
                                 )
+                                rid = extract_submit_request_id(submit_info)
+                                last_request_id = rid or last_request_id
                                 if "result" in submit_info:
                                     result = submit_info["result"]
                                 else:
@@ -272,7 +287,7 @@ class FalWan26R2VEngine:
                                         on_log,
                                         self._poll_result(
                                             fal_client,
-                                            str(submit_info.get("request_id") or ""),
+                                            rid,
                                             on_queue_update=on_queue_update,
                                             on_log=on_log,
                                         ),
@@ -320,6 +335,8 @@ class FalWan26R2VEngine:
                     on_log,
                     self._submit_request(fal_client, args, on_queue_update, on_log),
                 )
+                rid = extract_submit_request_id(submit_info)
+                last_request_id = rid or last_request_id
                 if "result" in submit_info:
                     result = submit_info["result"]
                 else:
@@ -328,7 +345,7 @@ class FalWan26R2VEngine:
                         on_log,
                         self._poll_result(
                             fal_client,
-                            str(submit_info.get("request_id") or ""),
+                            rid,
                             on_queue_update=on_queue_update,
                             on_log=on_log,
                         ),
@@ -344,6 +361,8 @@ class FalWan26R2VEngine:
                     on_log,
                     self._submit_request(fal_client, args, on_queue_update, on_log),
                 )
+                rid = extract_submit_request_id(submit_info)
+                last_request_id = rid or last_request_id
                 if "result" in submit_info:
                     result = submit_info["result"]
                 else:
@@ -352,7 +371,7 @@ class FalWan26R2VEngine:
                         on_log,
                         self._poll_result(
                             fal_client,
-                            str(submit_info.get("request_id") or ""),
+                            rid,
                             on_queue_update=on_queue_update,
                             on_log=on_log,
                         ),
@@ -361,7 +380,10 @@ class FalWan26R2VEngine:
 
             if result is None:
                 raise EngineRunError("r2v submit failed: empty result")
-            request_id = result.get("request_id") or result.get("id") or result.get("requestId")
+            result_request_id = str(
+                result.get("request_id") or result.get("id") or result.get("requestId") or ""
+            ).strip()
+            request_id = result_request_id or last_request_id or ""
             on_log(f"[r2v] submit ok request_id={request_id or 'n/a'}")
 
             video_url = result.get("video_url") or result.get("video") or result.get("url")
@@ -398,6 +420,7 @@ class FalWan26R2VEngine:
                     "duration_sec": int(self.duration),
                     "aspect_ratio": self.aspect_ratio,
                     "resolution": self.resolution,
+                    "request_id": request_id or None,
                     "r2v_logs": r2v_logs,
                     "policy_retry_count": policy_retry_count,
                     "policy_violation_type": policy_violation_type,
@@ -406,10 +429,12 @@ class FalWan26R2VEngine:
                 },
             )
         except EngineRunError as exc:
-            on_log(f"[r2v][error] {type(exc).__name__}: {exc}")
+            rid = locals().get("last_request_id")
+            on_log(f"[r2v][error] request_id={rid or 'n/a'} {type(exc).__name__}: {exc}")
             raise
         except Exception as exc:
-            on_log(f"[r2v][error] {type(exc).__name__}: {exc}")
+            rid = locals().get("last_request_id")
+            on_log(f"[r2v][error] request_id={rid or 'n/a'} {type(exc).__name__}: {exc}")
             raise EngineRunError(f"r2v engine failed: {type(exc).__name__}: {exc}") from exc
 
     async def _download_bytes(self, url: str) -> bytes:
