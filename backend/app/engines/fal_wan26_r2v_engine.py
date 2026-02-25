@@ -551,7 +551,6 @@ class FalWan26R2VEngine:
         if hasattr(fal_client, "submit"):
             submitted = await asyncio.to_thread(fal_client.submit, self.model_id, arguments=args)
             request_id = self._extract_request_id(submitted)
-            on_log(f"[r2v] submit accepted request_id={request_id or 'n/a'}")
             if request_id:
                 return {"request_id": request_id}
             on_log("[r2v] submit missing request_id; falling back to subscribe")
