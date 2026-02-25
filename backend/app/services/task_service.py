@@ -310,10 +310,18 @@ class TaskService:
             return "wan26_r2v" if record.mode == "intelligent" else "wan26_flash"
         return self._default_provider()
 
-    def _engine_watchdog_timeout_sec(self) -> int:
-        base = int(os.getenv("WAN26_TIMEOUT_SEC", "900"))
-        buffer = int(os.getenv("SWIFT_RUNNER_TIMEOUT_BUFFER_SEC", "120"))
-        return max(30, base + buffer)
+    def _engine_watchdog_timeout_sec(self, engine: Any | None = None) -> int:
+        if engine is not None:
+            engine_timeout = getattr(engine, "watchdog_timeout_sec", None)
+            if engine_timeout is not None:
+                try:
+                    return max(30, int(engine_timeout))
+                except (TypeError, ValueError):
+                    pass
+        configured = os.getenv("SWIFT_R2V_WATCHDOG_TIMEOUT_SEC")
+        if configured is not None and configured.strip():
+            return max(30, int(configured))
+        return max(30, int(os.getenv("WAN26_TIMEOUT_SEC", "600")))
 
     def _mark_failed_terminal(self, task_id: str, error_msg: str, where: str, exc: Exception | None = None) -> None:
         self.store.set_stage(task_id, "failed", 100)
@@ -400,7 +408,7 @@ class TaskService:
                 inputs=inputs,
                 on_log=lambda message: self.store.append_log(task_id, message),
                 on_stage=lambda stage, progress: self.store.set_stage(task_id, stage, progress),
-                timeout_sec=self._engine_watchdog_timeout_sec(),
+                timeout_sec=self._engine_watchdog_timeout_sec(engine),
             )
             self.store.append_log(task_id, "[runner] engine submit finished")
             self.store.append_log(task_id, "[runner] engine run finished")
