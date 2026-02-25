@@ -500,7 +500,7 @@ class FalWan26R2VEngine:
             stderr = (exc.stderr or "").strip()
             raise EngineRunError(f"ffmpeg slicing failed: {stderr[-400:]}") from exc
 
-        key = f"inputs/{task_id}/ref_clip_1.mp4"
+        key = f"outputs/{task_id}/ref_clip.mp4"
         content = ref_path.read_bytes()
         return self.r2.upload_bytes(key=key, content=content, content_type="video/mp4")
 
