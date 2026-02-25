@@ -13,7 +13,7 @@ import { resolveAssetUrl } from "../../lib/url";
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "done"]);
 const POLL_INITIAL_MS = 1000;
 const POLL_MAX_MS = 15000;
-const POLL_STILL_PROCESSING_MS = 120000;
+const POLL_STILL_PROCESSING_MS = 60000;
 const POLL_STUCK_MAX_UNCHANGED = 8;
 
 function shouldStopPolling(current: TaskRecord | null) {
@@ -244,7 +244,11 @@ export default function WorkspaceClient() {
         }
 
         const elapsed = Date.now() - startedAt;
-        if (elapsed > POLL_STILL_PROCESSING_MS && !shouldStopPolling(latest)) {
+        if (
+          elapsed > POLL_STILL_PROCESSING_MS &&
+          !shouldStopPolling(latest) &&
+          String(latest.stage || "").toLowerCase() === "running"
+        ) {
           setUiPollingWarning("Still processing, you can keep this tab open or refresh later.");
         } else if (!shouldStopPolling(latest) && unchangedPollCount >= POLL_STUCK_MAX_UNCHANGED) {
           stuckMode = true;
@@ -937,6 +941,11 @@ export default function WorkspaceClient() {
                 {hasPollTimeoutFailure ? (
                   <p className="text-xs text-amber-700">
                     This task may still be running. Refresh later or check Fal dashboard with Request ID.
+                  </p>
+                ) : null}
+                {hasPolicyViolation ? (
+                  <p className="text-xs text-amber-700">
+                    Safety checker blocked this request. Try a safer reference video or prompt.
                   </p>
                 ) : null}
                 {uiPollingWarning ? (
