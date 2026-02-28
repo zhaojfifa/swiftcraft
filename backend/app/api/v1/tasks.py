@@ -43,6 +43,17 @@ def _start_runner_thread(task_id: str) -> None:
                             "mode": {"type": "string", "example": "baseline"},
                             "input_key": {"type": "string", "example": "presets/swap/baseline.mp4"},
                             "service_type": {"type": "string", "example": "face_swap"},
+                            "inputs": {
+                                "type": "object",
+                                "properties": {
+                                    "target_lang": {"type": "string", "example": "my"},
+                                    "voice_id": {"type": "string", "example": "mm_female_1"},
+                                    "subtitle_mode": {"type": "string", "example": "sidecar"},
+                                    "preserve_bgm": {"type": "boolean", "example": True},
+                                    "ducking": {"type": "boolean", "example": True},
+                                    "lipsync_enabled": {"type": "boolean", "example": False},
+                                },
+                            },
                         },
                         "required": ["service", "mode"],
                     },

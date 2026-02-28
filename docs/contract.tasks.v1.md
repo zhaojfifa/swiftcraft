@@ -38,12 +38,20 @@ POST /api/v1/tasks
   }
 }
 
-Localization (typed, preview)
+Localization (typed)
 POST /api/v1/tasks
 {
   "service_type": "localization",
-  "mode": "preview",
-  "inputs": {}
+  "mode": "baseline",
+  "input_key": "uploads/<source_video_key>",
+  "inputs": {
+    "target_lang": "my",
+    "voice_id": "mm_female_1",
+    "subtitle_mode": "sidecar",
+    "preserve_bgm": true,
+    "ducking": true,
+    "lipsync_enabled": false
+  }
 }
 
 Response (TaskResponseOut)
@@ -53,8 +61,14 @@ Response (TaskResponseOut)
   "model_id": "string|null",
   "mode": "string",
   "status": "queued|running|succeeded|failed",
-  "stage": "SUBMITTED|ANALYZING|MAPPING|RENDERING|MERGING|FINALIZING|DONE|FAILED",
+  "stage": "SUBMITTED|EXTRACTING|TRANSCRIBING|TRANSLATING|DUBBING|RENDERING|UPLOADING|ANALYZING|MAPPING|MERGING|FINALIZING|DONE|FAILED",
   "output_url": "string|null",
   "logs": [],
   "metadata": {}
 }
+
+Localization output contract
+- `output_url`: localized video (`localized.mp4`) for Video tab.
+- `metadata.outputs.subtitle_url`: localized subtitle sidecar.
+- `metadata.outputs.audio_url`: dubbed target audio.
+- `metadata.outputs.manifest_url`: run manifest for audit/debug tabs.

@@ -64,9 +64,28 @@ def _extract_avatar_prompt(payload: Dict[str, Any]) -> Optional[str]:
     return text or None
 
 
+def _normalize_localization_inputs(payload: Dict[str, Any], mode: str) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    raw_inputs = payload.get("inputs")
+    normalized = dict(raw_inputs) if isinstance(raw_inputs, dict) else {}
+    normalized.setdefault("target_lang", "my")
+    normalized.setdefault("voice_id", "mm_female_1")
+    normalized.setdefault("subtitle_mode", "sidecar")
+    normalized.setdefault("preserve_bgm", True)
+    normalized.setdefault("ducking", True)
+    enforced: list[str] = []
+    if mode == "baseline":
+        normalized["lipsync_enabled"] = False
+        enforced.append("baseline_force_lipsync_off")
+    elif "lipsync_enabled" not in normalized:
+        normalized["lipsync_enabled"] = bool(normalized.get("lipsync_enabled", False))
+    return normalized, {"enforced": enforced}
+
+
 def _service_type_from_legacy(service: str) -> ServiceType:
     if service == "avatar":
         return ServiceType.avatar_transfer
+    if service == "localization":
+        return ServiceType.localization
     return ServiceType.face_swap
 
 
@@ -86,9 +105,14 @@ def _stage_from_record(record: TaskRecord) -> TaskStage:
     mapping = {
         "queued": TaskStage.SUBMITTED,
         "submitted": TaskStage.SUBMITTED,
+        "extracting": TaskStage.EXTRACTING,
+        "transcribing": TaskStage.TRANSCRIBING,
+        "translating": TaskStage.TRANSLATING,
+        "dubbing": TaskStage.DUBBING,
         "analyzing": TaskStage.ANALYZING,
         "mapping": TaskStage.MAPPING,
         "rendering": TaskStage.RENDERING,
+        "uploading": TaskStage.UPLOADING,
         "merging": TaskStage.MERGING,
         "finalizing": TaskStage.FINALIZING,
         "done": TaskStage.DONE,
@@ -122,6 +146,8 @@ class TaskService:
             if not self._avatar_enabled():
                 return "mock"
             return "wan26_r2v" if mode == "intelligent" else "wan26_flash"
+        if service == "localization":
+            return "localization_basic" if mode == "baseline" else "mock"
         return str(payload.get("provider") or self._default_provider()).strip().lower()
 
     def _public_url_from_key(self, key: str) -> str:
@@ -177,6 +203,11 @@ class TaskService:
         resolved_service_type = _service_type_from_legacy(resolved_service)
         avatar_image_key = _extract_avatar_image_key(payload) if resolved_service == "avatar" else None
         avatar_prompt = _extract_avatar_prompt(payload) if resolved_service == "avatar" else None
+        localization_inputs: Dict[str, Any] = {}
+        localization_policy: Dict[str, Any] = {}
+        if resolved_service == "localization":
+            localization_inputs, localization_policy = _normalize_localization_inputs(payload, resolved_mode)
+            payload["inputs"] = localization_inputs
 
         if video_file or image_file:
             if video_file and not video_file.filename:
@@ -218,6 +249,8 @@ class TaskService:
             task_id = uuid.uuid4().hex
             provider = self._resolve_provider(resolved_service, payload, resolved_mode)
             metadata_dict["provider"] = provider
+            if resolved_service == "localization":
+                metadata_dict["policy"] = localization_policy
             if face_enhancer is not None:
                 metadata_dict["face_enhancer"] = face_enhancer
             resolved_input_key = resolve_input_key(resolved_service, resolved_mode)
@@ -247,6 +280,7 @@ class TaskService:
                     "input_image_url": input_image_url,
                     "input_video_url": input_video_url,
                     "prompt": avatar_prompt,
+                    "inputs": localization_inputs if resolved_service == "localization" else {},
                 },
             )
             return self._to_response(record, resolved_service_type)
@@ -275,7 +309,10 @@ class TaskService:
             task_id,
             resolved_service,
             resolved_mode,
-            {"provider": provider},
+            {
+                "provider": provider,
+                **({"policy": localization_policy} if resolved_service == "localization" else {}),
+            },
             None,
             input_video_url,
             input_image_url,
@@ -296,6 +333,7 @@ class TaskService:
                 "input_video_url": input_video_url,
                 "input_image_url": input_image_url,
                 "prompt": avatar_prompt,
+                "inputs": localization_inputs if resolved_service == "localization" else {},
             },
         )
         return self._to_response(record, resolved_service_type)
@@ -308,6 +346,8 @@ class TaskService:
             if not self._avatar_enabled():
                 return "mock"
             return "wan26_r2v" if record.mode == "intelligent" else "wan26_flash"
+        if record.service == "localization":
+            return "localization_basic" if record.mode == "baseline" else "mock"
         return self._default_provider()
 
     def _engine_watchdog_timeout_sec(self, engine: Any | None = None) -> int:
