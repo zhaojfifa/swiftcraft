@@ -1,28 +1,46 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiHttpError, createTask, getTask, getUploadUrl, TaskRecord } from "../../../lib/api";
 import { resolveAssetUrl } from "../../../lib/url";
 import InputPanel from "./components/InputPanel";
 import LogsPanel from "./components/LogsPanel";
 import OutputTabs from "./components/OutputTabs";
+import StagePanel from "./components/StagePanel";
 
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "done"]);
+
+type TopTab = "playground" | "json" | "api";
+type OutputTab = "video" | "subtitles" | "audio" | "manifest";
+type Mode = "baseline" | "intelligent";
 
 function shouldStopPolling(task: TaskRecord | null): boolean {
   const status = String(task?.status || "").toLowerCase();
   const stage = String(task?.stage || "").toLowerCase();
-  return TERMINAL_STATUSES.has(status) || stage === "done" || stage === "failed" || Boolean(task?.output_url);
+  return (
+    TERMINAL_STATUSES.has(status) ||
+    stage === "done" ||
+    stage === "failed" ||
+    Boolean(task?.output_url || (task?.metadata?.outputs as Record<string, unknown> | undefined)?.video_url)
+  );
 }
 
 export default function LocalizationClient() {
-  const [mode, setMode] = useState<"baseline" | "intelligent" | "enhanced">("baseline");
+  const [mode, setMode] = useState<Mode>("baseline");
+  const [activeTopTab, setActiveTopTab] = useState<TopTab>("playground");
+  const [activeOutputTab, setActiveOutputTab] = useState<OutputTab>("video");
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [inputVideoUrl, setInputVideoUrl] = useState<string | null>(null);
+  const [targetLang, setTargetLang] = useState("my");
+  const [voiceId, setVoiceId] = useState("mm_female_1");
+  const [subtitleMode, setSubtitleMode] = useState<"sidecar" | "burned">("sidecar");
   const [preserveBgm, setPreserveBgm] = useState(true);
   const [ducking, setDucking] = useState(true);
+  const [lipsyncEnabled, setLipsyncEnabled] = useState(false);
+  const [lipsyncScope, setLipsyncScope] = useState<"face" | "full">("face");
+
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,8 +52,17 @@ export default function LocalizationClient() {
 
   const taskId = task?.task_id || "";
   const logs = useMemo(() => task?.logs || [], [task?.logs]);
-  const outputs = task?.metadata?.outputs || {};
-  const outputUrl = resolveAssetUrl(task?.output_url || null);
+  const outputs = useMemo(() => {
+    const raw = task?.metadata?.outputs;
+    if (raw && typeof raw === "object") return raw as Record<string, unknown>;
+    return {};
+  }, [task?.metadata?.outputs]);
+
+  const videoUrl = resolveAssetUrl(String(outputs.video_url || task?.output_url || "") || null);
+  const subtitleUrl = typeof outputs.subtitle_url === "string" ? outputs.subtitle_url : null;
+  const audioUrl = typeof outputs.audio_url === "string" ? outputs.audio_url : null;
+  const manifestUrl = typeof outputs.manifest_url === "string" ? outputs.manifest_url : null;
+  const manifestFallback = outputs.manifest_json || outputs;
 
   useEffect(() => {
     return () => {
@@ -52,6 +79,12 @@ export default function LocalizationClient() {
     setInputVideoUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [videoFile]);
+
+  useEffect(() => {
+    if (mode === "baseline") {
+      setLipsyncEnabled(false);
+    }
+  }, [mode]);
 
   const uploadFileToR2 = async (file: File): Promise<string> => {
     const upload = await getUploadUrl({
@@ -104,6 +137,7 @@ export default function LocalizationClient() {
         } catch {
           latest = await getTask(id);
         }
+
         setTask(latest);
         const elapsed = Date.now() - startedAtRef.current;
         if (elapsed > 120000 && !shouldStopPolling(latest)) {
@@ -111,11 +145,13 @@ export default function LocalizationClient() {
         } else {
           setWarning(null);
         }
+
         if (String(latest.status || "").toLowerCase() === "failed") {
           setError(latest.error || "Task failed.");
         } else {
           setError(null);
         }
+
         if (shouldStopPolling(latest)) {
           setIsRunning(false);
           return;
@@ -140,27 +176,28 @@ export default function LocalizationClient() {
       setError("Please upload a source video.");
       return;
     }
-    if (mode !== "baseline") {
-      setError("Only baseline mode is enabled for localization.");
-      return;
-    }
+
+    const effectiveLipsyncEnabled = mode === "intelligent" ? lipsyncEnabled : false;
+
     setError(null);
     setWarning(null);
     setTask(null);
     setIsRunning(true);
+
     try {
       const inputKey = await uploadFileToR2(videoFile);
       const res = await createTask({
         service_type: "localization",
-        mode: "baseline",
+        mode,
         input_key: inputKey,
         inputs: {
-          target_lang: "my",
-          voice_id: "mm_female_1",
-          subtitle_mode: "sidecar",
+          target_lang: targetLang,
+          voice_id: voiceId,
+          subtitle_mode: subtitleMode,
           preserve_bgm: preserveBgm,
           ducking,
-          lipsync_enabled: false,
+          lipsync_enabled: effectiveLipsyncEnabled,
+          lipsync_scope: effectiveLipsyncEnabled ? lipsyncScope : undefined,
         },
       });
       startPolling(res.task_id);
@@ -175,49 +212,147 @@ export default function LocalizationClient() {
     lowerError.includes("content_policy_violation") ||
     logs.some((line) => line.toLowerCase().includes("content_policy_violation"));
 
+  const requestPreview = {
+    service_type: "localization",
+    mode,
+    input_key: videoFile ? "(uploaded key)" : "",
+    inputs: {
+      target_lang: targetLang,
+      voice_id: voiceId,
+      subtitle_mode: subtitleMode,
+      preserve_bgm: preserveBgm,
+      ducking,
+      lipsync_enabled: mode === "intelligent" ? lipsyncEnabled : false,
+      lipsync_scope: mode === "intelligent" && lipsyncEnabled ? lipsyncScope : null,
+    },
+    workflow_config: {
+      preset: mode,
+    },
+  };
+
+  const payloadPreview = {
+    request: requestPreview,
+    task: task || null,
+  };
+
+  const apiBase = (process.env.NEXT_PUBLIC_API_BASE || "https://swiftcraft.ai").replace(/\/+$/, "");
+  const curlSnippet = [
+    `curl -X POST \"${apiBase}/api/v1/tasks\"`,
+    "  -H \"Content-Type: application/json\"",
+    `  -d '${JSON.stringify(requestPreview)}'`,
+  ].join(" \\\n");
+
   return (
-    <div className="h-screen bg-slate-50 text-slate-900 flex overflow-hidden">
-      <InputPanel
-        mode={mode}
-        setMode={setMode}
-        videoFile={videoFile}
-        setVideoFile={setVideoFile}
-        inputVideoUrl={inputVideoUrl}
-        preserveBgm={preserveBgm}
-        setPreserveBgm={setPreserveBgm}
-        ducking={ducking}
-        setDucking={setDucking}
-        isRunning={isRunning}
-        onRun={handleRun}
-      />
-      <div className="flex-1 p-6 overflow-y-auto">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <h1 className="text-xl font-bold">Localization Workspace</h1>
-            <p className="text-sm text-slate-500">Source video -&gt; Burmese subtitle + dubbed audio + localized video</p>
-          </div>
-          <Link href="/" className="text-sm text-blue-600 underline">
-            Back
+    <div className="h-screen bg-white text-slate-900 flex flex-col font-sans overflow-hidden">
+      <nav className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0 z-20 shadow-sm">
+        <div className="flex items-center gap-4">
+          <Link href="/" className="font-bold text-slate-900 tracking-tight hover:text-blue-600 transition">
+            SwiftCraft
           </Link>
+          <span className="text-slate-300">/</span>
+          <span className="font-medium text-slate-600">Localization</span>
         </div>
 
-        {taskId ? (
-          <div className="mb-3 rounded border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
-            Task ID: {taskId}
-          </div>
-        ) : null}
-        {warning ? <div className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{warning}</div> : null}
-        {error ? <div className="mb-3 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">{error}</div> : null}
-        {hasPolicyViolation ? (
-          <div className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            Safety checker blocked this content. Try safer reference material or prompt text.
-          </div>
-        ) : null}
+        <div className="bg-slate-100 p-1 rounded-lg border border-slate-200 flex relative">
+          <button
+            onClick={() => setMode("baseline")}
+            className={`px-6 py-1.5 rounded-md text-sm font-medium transition-all duration-200 z-10 ${
+              mode === "baseline"
+                ? "bg-white text-slate-900 shadow-sm border border-slate-200 ring-1 ring-black/5"
+                : "text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            Baseline
+          </button>
+          <button
+            onClick={() => setMode("intelligent")}
+            className={`px-6 py-1.5 rounded-md text-sm font-medium transition-all duration-200 z-10 ${
+              mode === "intelligent"
+                ? "bg-white text-blue-600 shadow-sm border border-slate-200 ring-1 ring-black/5"
+                : "text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            Intelligent
+          </button>
+        </div>
 
-        <OutputTabs outputUrl={outputUrl} outputs={outputs} />
-        <LogsPanel status={String(task?.status || "")} stage={String(task?.stage || "")} logs={logs} />
+        <div className="text-xs font-medium text-slate-500 bg-slate-50 px-2 py-1 rounded border border-slate-200">
+          v1.6 Demo
+        </div>
+      </nav>
+
+      <div className="flex-1 flex overflow-hidden">
+        <InputPanel
+          mode={mode}
+          activeTopTab={activeTopTab}
+          setActiveTopTab={setActiveTopTab}
+          videoFile={videoFile}
+          setVideoFile={setVideoFile}
+          inputVideoUrl={inputVideoUrl}
+          targetLang={targetLang}
+          setTargetLang={setTargetLang}
+          voiceId={voiceId}
+          setVoiceId={setVoiceId}
+          subtitleMode={subtitleMode}
+          setSubtitleMode={setSubtitleMode}
+          preserveBgm={preserveBgm}
+          setPreserveBgm={setPreserveBgm}
+          ducking={ducking}
+          setDucking={setDucking}
+          lipsyncEnabled={lipsyncEnabled}
+          setLipsyncEnabled={setLipsyncEnabled}
+          lipsyncScope={lipsyncScope}
+          setLipsyncScope={setLipsyncScope}
+          isRunning={isRunning}
+          payloadPreview={payloadPreview}
+          curlSnippet={curlSnippet}
+          onRun={handleRun}
+        />
+
+        <div className="flex-1 bg-slate-50/80 p-8 overflow-y-auto">
+          <div className="w-full max-w-6xl mx-auto space-y-4">
+            {taskId ? (
+              <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                Task ID: {taskId}
+              </div>
+            ) : null}
+            {warning ? (
+              <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{warning}</div>
+            ) : null}
+            {error ? (
+              <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">{error}</div>
+            ) : null}
+            {hasPolicyViolation ? (
+              <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Safety checker blocked this content. Try safer reference material or prompt text.
+              </div>
+            ) : null}
+
+            <div className="w-full bg-black rounded-2xl shadow-2xl border border-slate-300/50 overflow-hidden max-w-5xl aspect-video">
+              {videoUrl ? (
+                <video controls className="w-full h-full object-contain" src={videoUrl} />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-slate-300">
+                  Waiting for localized video output
+                </div>
+              )}
+            </div>
+
+            <OutputTabs
+              activeTab={activeOutputTab}
+              setActiveTab={setActiveOutputTab}
+              videoUrl={videoUrl}
+              subtitleUrl={subtitleUrl}
+              audioUrl={audioUrl}
+              manifestUrl={manifestUrl}
+              manifestFallback={manifestFallback}
+            />
+
+            <StagePanel mode={mode} stage={String(task?.stage || "")} status={String(task?.status || "")} />
+            <LogsPanel status={String(task?.status || "")} stage={String(task?.stage || "")} logs={logs} />
+          </div>
+        </div>
       </div>
     </div>
   );
 }
-

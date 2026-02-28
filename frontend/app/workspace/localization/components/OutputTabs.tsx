@@ -2,50 +2,53 @@
 
 import { useEffect, useState } from "react";
 
-type Outputs = {
-  subtitle_url?: string;
-  audio_url?: string;
-  manifest_url?: string;
-};
-
-type Props = {
-  outputUrl?: string | null;
-  outputs?: Outputs;
-};
-
 type TabId = "video" | "subtitles" | "audio" | "manifest";
 
-export default function OutputTabs({ outputUrl, outputs }: Props) {
-  const [activeTab, setActiveTab] = useState<TabId>("video");
+type Props = {
+  activeTab: TabId;
+  setActiveTab: (tab: TabId) => void;
+  videoUrl: string | null;
+  subtitleUrl: string | null;
+  audioUrl: string | null;
+  manifestUrl: string | null;
+  manifestFallback: unknown;
+};
+
+export default function OutputTabs({
+  activeTab,
+  setActiveTab,
+  videoUrl,
+  subtitleUrl,
+  audioUrl,
+  manifestUrl,
+  manifestFallback,
+}: Props) {
   const [subtitlePreview, setSubtitlePreview] = useState("");
   const [manifestPreview, setManifestPreview] = useState("");
 
   useEffect(() => {
-    const subtitleUrl = outputs?.subtitle_url;
     if (!subtitleUrl) {
       setSubtitlePreview("");
       return;
     }
     fetch(subtitleUrl, { cache: "no-store" })
       .then((res) => (res.ok ? res.text() : ""))
-      .then((text) => {
-        const lines = text.split("\n").slice(0, 200).join("\n");
-        setSubtitlePreview(lines);
-      })
+      .then((text) => setSubtitlePreview(text.split("\n").slice(0, 200).join("\n")))
       .catch(() => setSubtitlePreview(""));
-  }, [outputs?.subtitle_url]);
+  }, [subtitleUrl]);
 
   useEffect(() => {
-    const manifestUrl = outputs?.manifest_url;
     if (!manifestUrl) {
       setManifestPreview("");
       return;
     }
     fetch(manifestUrl, { cache: "no-store" })
       .then((res) => (res.ok ? res.text() : ""))
-      .then((text) => setManifestPreview(text.slice(0, 6000)))
+      .then((text) => setManifestPreview(text.slice(0, 10000)))
       .catch(() => setManifestPreview(""));
-  }, [outputs?.manifest_url]);
+  }, [manifestUrl]);
+
+  const manifestText = manifestPreview || JSON.stringify(manifestFallback || {}, null, 2);
 
   return (
     <div className="w-full rounded-xl border border-slate-200 bg-white overflow-hidden">
@@ -67,10 +70,10 @@ export default function OutputTabs({ outputUrl, outputs }: Props) {
         ))}
       </div>
 
-      <div className="p-4 min-h-64">
+      <div className="p-4 min-h-72">
         {activeTab === "video" ? (
-          outputUrl ? (
-            <video controls className="w-full rounded-lg border border-slate-200" src={outputUrl} />
+          videoUrl ? (
+            <video controls className="w-full rounded-lg border border-slate-200" src={videoUrl} />
           ) : (
             <div className="text-slate-400">No video output yet.</div>
           )
@@ -78,9 +81,9 @@ export default function OutputTabs({ outputUrl, outputs }: Props) {
 
         {activeTab === "subtitles" ? (
           <div className="space-y-3">
-            {outputs?.subtitle_url ? (
-              <a href={outputs.subtitle_url} target="_blank" rel="noreferrer" className="text-blue-600 underline">
-                Download
+            {subtitleUrl ? (
+              <a href={subtitleUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline">
+                Download subtitle
               </a>
             ) : (
               <div className="text-slate-400">Subtitle not ready.</div>
@@ -93,11 +96,11 @@ export default function OutputTabs({ outputUrl, outputs }: Props) {
 
         {activeTab === "audio" ? (
           <div className="space-y-3">
-            {outputs?.audio_url ? (
+            {audioUrl ? (
               <>
-                <audio controls className="w-full" src={outputs.audio_url} />
-                <a href={outputs.audio_url} target="_blank" rel="noreferrer" className="text-blue-600 underline">
-                  Download
+                <audio controls className="w-full" src={audioUrl} />
+                <a href={audioUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline">
+                  Download audio
                 </a>
               </>
             ) : (
@@ -108,15 +111,15 @@ export default function OutputTabs({ outputUrl, outputs }: Props) {
 
         {activeTab === "manifest" ? (
           <div className="space-y-3">
-            {outputs?.manifest_url ? (
-              <a href={outputs.manifest_url} target="_blank" rel="noreferrer" className="text-blue-600 underline">
-                Download
+            {manifestUrl ? (
+              <a href={manifestUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline">
+                Open manifest URL
               </a>
             ) : (
-              <div className="text-slate-400">Manifest not ready.</div>
+              <div className="text-slate-400">Manifest URL not ready, showing task metadata preview.</div>
             )}
-            <pre className="text-xs bg-slate-50 border border-slate-200 rounded p-3 max-h-72 overflow-auto whitespace-pre-wrap">
-              {manifestPreview || "No preview"}
+            <pre className="text-xs bg-slate-50 border border-slate-200 rounded p-3 max-h-72 overflow-auto whitespace-pre-wrap break-all">
+              {manifestText}
             </pre>
           </div>
         ) : null}
@@ -124,4 +127,3 @@ export default function OutputTabs({ outputUrl, outputs }: Props) {
     </div>
   );
 }
-
