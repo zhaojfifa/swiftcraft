@@ -36,9 +36,6 @@ export default function WorkspaceClient() {
   const isSwap = serviceConfig.id === "swap";
   const isAvatar = serviceConfig.id === "avatar";
   const isLocalization = serviceConfig.id === "localization";
-  if (isLocalization) {
-    return <LocalizationClient />;
-  }
 
   const [mode, setMode] = useState<SwapMode>("intelligent");
   const [inputSource, setInputSource] = useState<"preset" | "upload">("preset");
@@ -494,7 +491,9 @@ export default function WorkspaceClient() {
     }
   };
 
-  return (
+  const serviceView = isLocalization ? (
+    <LocalizationClient />
+  ) : (
     <div className="h-screen bg-white text-slate-900 flex flex-col font-sans overflow-hidden">
       <nav className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0 z-20 shadow-sm">
         <div className="flex items-center gap-4">
@@ -1104,4 +1103,6 @@ export default function WorkspaceClient() {
       </div>
     </div>
   );
+
+  return serviceView;
 }

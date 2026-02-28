@@ -194,7 +194,7 @@ export default function LocalizationClient() {
         <div className="flex items-center justify-between mb-3">
           <div>
             <h1 className="text-xl font-bold">Localization Workspace</h1>
-            <p className="text-sm text-slate-500">Source video -> Burmese subtitle + dubbed audio + localized video</p>
+            <p className="text-sm text-slate-500">Source video -&gt; Burmese subtitle + dubbed audio + localized video</p>
           </div>
           <Link href="/" className="text-sm text-blue-600 underline">
             Back
