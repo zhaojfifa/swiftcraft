@@ -28,9 +28,11 @@ export type TaskRecord = {
   metadata?: {
     provider?: string;
     outputs?: {
+      video_url?: string;
       subtitle_url?: string;
       audio_url?: string;
       manifest_url?: string;
+      manifest_json?: unknown;
     };
     policy?: {
       enforced?: string[];
