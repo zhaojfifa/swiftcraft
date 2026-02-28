@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.engines.akool_engine import AkoolEngine
+from app.engines.localization_engine import LocalizationEngine
 from app.engines.mock_engine import MockEngine
 from app.engines.real_engine import RealEngine
 
@@ -15,6 +16,8 @@ def get_engine(provider: str):
         from app.engines.fal_wan26_flash_engine import FalWan26FlashEngine
 
         return FalWan26FlashEngine()
+    if normalized in ("localization_basic", "localization-baseline"):
+        return LocalizationEngine()
     if normalized == "real":
         return RealEngine()
     if normalized == "akool":

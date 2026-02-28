@@ -22,9 +22,14 @@ class TaskStatus(str, Enum):
 
 class TaskStage(str, Enum):
     SUBMITTED = "SUBMITTED"
+    EXTRACTING = "EXTRACTING"
+    TRANSCRIBING = "TRANSCRIBING"
+    TRANSLATING = "TRANSLATING"
+    DUBBING = "DUBBING"
     ANALYZING = "ANALYZING"
     MAPPING = "MAPPING"
     RENDERING = "RENDERING"
+    UPLOADING = "UPLOADING"
     MERGING = "MERGING"
     FINALIZING = "FINALIZING"
     DONE = "DONE"
@@ -88,7 +93,8 @@ class AvatarRequest(BaseModel):
 
 class LocalizationRequest(BaseModel):
     service_type: Literal["localization"] = "localization"
-    mode: str
+    mode: Literal["baseline", "intelligent"] = "baseline"
+    input_key: Optional[str] = None
     inputs: dict = Field(default_factory=dict)
 
 
