@@ -82,7 +82,7 @@ export const SERVICE_REGISTRY: ServiceConfig[] = [
     description: "Localize dialogue and lip-sync for new languages.",
     badge: "Preview",
     route: "/workspace?service=localization",
-    enabled: false,
+    enabled: true,
     inputs: [],
     ui: {
       cardClass:
@@ -94,7 +94,7 @@ export const SERVICE_REGISTRY: ServiceConfig[] = [
       titleClass: "text-2xl font-bold text-white mb-2 group-hover:text-slate-200 transition-colors",
       ctaClass:
         "relative z-10 flex items-center text-slate-200 font-medium text-sm group-hover:underline underline-offset-4",
-      ctaLabel: "Preview"
+      ctaLabel: "Enter Workspace"
     }
   }
 ];

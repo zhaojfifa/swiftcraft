@@ -25,7 +25,19 @@ export type TaskRecord = {
   output_url?: string | null;
   error?: string | null;
   logs?: string[] | null;
-  metadata?: Record<string, unknown>;
+  metadata?: {
+    provider?: string;
+    outputs?: {
+      subtitle_url?: string;
+      audio_url?: string;
+      manifest_url?: string;
+    };
+    policy?: {
+      enforced?: string[];
+    };
+    metrics?: unknown;
+    [k: string]: unknown;
+  };
   created_at?: string;
   updated_at?: string;
 };

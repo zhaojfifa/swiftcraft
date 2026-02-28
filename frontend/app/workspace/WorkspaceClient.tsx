@@ -9,6 +9,7 @@ import { ApiHttpError, createTask, getTask, getUploadUrl, TaskRecord } from "../
 import { SwapMode, resolvePresetInputKey } from "../../lib/presets";
 import { SERVICE_REGISTRY } from "../../lib/services/registry";
 import { resolveAssetUrl } from "../../lib/url";
+import LocalizationClient from "./localization/LocalizationClient";
 
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "done"]);
 const POLL_INITIAL_MS = 1000;
@@ -35,6 +36,9 @@ export default function WorkspaceClient() {
   const isSwap = serviceConfig.id === "swap";
   const isAvatar = serviceConfig.id === "avatar";
   const isLocalization = serviceConfig.id === "localization";
+  if (isLocalization) {
+    return <LocalizationClient />;
+  }
 
   const [mode, setMode] = useState<SwapMode>("intelligent");
   const [inputSource, setInputSource] = useState<"preset" | "upload">("preset");
