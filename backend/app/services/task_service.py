@@ -20,6 +20,7 @@ from app.schemas.task import (
     AvatarRequest,
     CreateTaskRequest,
     LegacySwapRequest,
+    LocalizationRequest,
     ServiceType,
     TaskResponseOut,
     TaskStage,
@@ -189,8 +190,13 @@ class TaskService:
                 raise HTTPException(status_code=400, detail=f"Invalid task payload: {exc.errors()}") from exc
             service_type = parsed.service_type
             mode = parsed.mode
-            service = "swap" if service_type == ServiceType.face_swap else "avatar"
-            if isinstance(parsed, AvatarRequest):
+            if service_type == ServiceType.face_swap:
+                service = "swap"
+            elif service_type == ServiceType.avatar_transfer:
+                service = "avatar"
+            else:
+                service = "localization"
+            if isinstance(parsed, (AvatarRequest, LocalizationRequest)):
                 input_key = parsed.input_key
         else:
             legacy = LegacySwapRequest.model_validate(payload)
@@ -304,6 +310,8 @@ class TaskService:
                     detail="avatar requires inputs.character_image (or input_image_url)",
                 )
         if resolved_service == "avatar" and not input_video_url and input_key:
+            input_video_url = self._public_url_from_key(input_key)
+        if resolved_service == "localization" and not input_video_url and input_key:
             input_video_url = self._public_url_from_key(input_key)
         record = self.store.create_task(
             task_id,
@@ -476,6 +484,12 @@ class TaskService:
             return
 
         if result.output_url:
+            if result.metadata:
+                current = self.store.get_task(task_id)
+                if current is not None:
+                    merged = dict(current.metadata or {})
+                    merged.update(result.metadata)
+                    self.store.save(current.copy(update={"metadata": merged}))
             self.store.complete_task(task_id, output_url=result.output_url, output_key=result.output_key)
             elapsed_ms = int((time.perf_counter() - run_started) * 1000)
             self.store.append_log(task_id, f"[runner] outcome=success elapsed_ms={elapsed_ms}")
