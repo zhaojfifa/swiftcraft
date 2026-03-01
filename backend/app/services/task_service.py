@@ -406,6 +406,72 @@ class TaskService:
         )
         self.store.save(record.copy(update={"metadata": metadata}))
 
+    def _normalize_engine_result(self, result: Any) -> Dict[str, Any]:
+        normalized: Dict[str, Any] = {}
+        if isinstance(result, dict):
+            normalized.update(result)
+        else:
+            normalized["output_url"] = getattr(result, "output_url", None)
+            normalized["output_key"] = getattr(result, "output_key", None)
+            metadata = getattr(result, "metadata", None)
+            if isinstance(metadata, dict):
+                normalized["metadata"] = metadata
+
+        metadata_from_result = normalized.get("metadata")
+        if isinstance(metadata_from_result, dict):
+            for key in ("outputs", "metrics", "run_config_snapshot", "manifest_preview"):
+                if key not in normalized and key in metadata_from_result:
+                    normalized[key] = metadata_from_result.get(key)
+
+        return normalized
+
+    def _persist_success_result(self, task_id: str, result: Any) -> bool:
+        payload = self._normalize_engine_result(result)
+        output_url = payload.get("output_url")
+        if not output_url:
+            return False
+
+        record = self.store.get_task(task_id)
+        if record is None:
+            return False
+
+        output_key = payload.get("output_key")
+        metadata = dict(record.metadata or {})
+
+        metadata_from_result = payload.get("metadata")
+        if isinstance(metadata_from_result, dict):
+            metadata.update(metadata_from_result)
+
+        merged_outputs: Dict[str, Any] = {}
+        current_outputs = metadata.get("outputs")
+        if isinstance(current_outputs, dict):
+            merged_outputs.update(current_outputs)
+        result_outputs = payload.get("outputs")
+        if isinstance(result_outputs, dict):
+            merged_outputs.update(result_outputs)
+        if merged_outputs:
+            metadata["outputs"] = merged_outputs
+
+        if isinstance(payload.get("metrics"), dict):
+            metadata["metrics"] = payload["metrics"]
+        if isinstance(payload.get("run_config_snapshot"), dict):
+            metadata["run_config_snapshot"] = payload["run_config_snapshot"]
+        if isinstance(payload.get("manifest_preview"), dict):
+            metadata["manifest_preview"] = payload["manifest_preview"]
+
+        updated = record.copy(
+            update={
+                "output_url": output_url or record.output_url,
+                "output_key": output_key or record.output_key,
+                "metadata": metadata,
+                "stage": "DONE",
+                "status": "done",
+                "progress": 100,
+            }
+        )
+        self.store.save(updated)
+        return True
+
     def launch_task_background(self, task_id: str) -> None:
         thread = threading.Thread(
             target=self._run_task_background_safe,
@@ -484,14 +550,8 @@ class TaskService:
             self.store.append_log(task_id, f"[runner] thread done pid={pid} task_id={task_id} status={failed_status}")
             return
 
-        if result.output_url:
-            if result.metadata:
-                current = self.store.get_task(task_id)
-                if current is not None:
-                    merged = dict(current.metadata or {})
-                    merged.update(result.metadata)
-                    self.store.save(current.copy(update={"metadata": merged}))
-            self.store.complete_task(task_id, output_url=result.output_url, output_key=result.output_key)
+        if self._persist_success_result(task_id, result):
+            self.store.append_log(task_id, "[runner] outputs persisted to SSOT before DONE")
             elapsed_ms = int((time.perf_counter() - run_started) * 1000)
             self.store.append_log(task_id, f"[runner] outcome=success elapsed_ms={elapsed_ms}")
             done_record = self.store.get_task(task_id)
