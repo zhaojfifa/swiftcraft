@@ -30,7 +30,6 @@ class LocalizationEngine:
     ) -> EngineResult:
         started = time.perf_counter()
         metrics: Dict[str, int] = {}
-        outputs: Dict[str, str] = {}
         translation_meta: Dict[str, Any] = {}
         workspace = Path(__file__).resolve().parents[3] / "video_workspace" / "tasks" / task_id / "localization"
         workspace.mkdir(parents=True, exist_ok=True)
@@ -72,6 +71,18 @@ class LocalizationEngine:
 
             loc_inputs = inputs.get("inputs") if isinstance(inputs.get("inputs"), dict) else {}
             target_lang = str((loc_inputs or {}).get("target_lang") or "my")
+            voice_id = str((loc_inputs or {}).get("voice_id") or "mm_female_1")
+            subtitle_mode = str((loc_inputs or {}).get("subtitle_mode") or "sidecar")
+            preserve_bgm = bool((loc_inputs or {}).get("preserve_bgm", True))
+            ducking = bool((loc_inputs or {}).get("ducking", True))
+            run_config_snapshot = {
+                "target_lang": target_lang,
+                "voice_id": voice_id,
+                "subtitle_mode": subtitle_mode,
+                "preserve_bgm": preserve_bgm,
+                "ducking": ducking,
+                "lipsync_enabled": False,
+            }
             step = mark_step("translating", "TRANSLATING", 45)
             target_srt = translate_srt(source_srt, target_lang=target_lang)
             target_srt_path = workspace / "target.srt"
@@ -82,7 +93,6 @@ class LocalizationEngine:
 
             step = mark_step("dubbing", "DUBBING", 60)
             dub_text = srt_to_text(target_srt)
-            voice_id = str((loc_inputs or {}).get("voice_id") or "mm_female_1")
             dub_mp3_path = synthesize_mp3(
                 dub_text,
                 voice_id=voice_id,
@@ -101,44 +111,54 @@ class LocalizationEngine:
 
             step = mark_step("uploading", "UPLOADING", 90)
             output_key = f"outputs/{task_id}/localized.mp4"
+            subtitle_key = f"outputs/{task_id}/target.srt"
+            audio_ext = ".mp3" if dub_mp3_path.suffix.lower() != ".wav" else ".wav"
+            audio_key = f"outputs/{task_id}/dub{audio_ext}"
+            manifest_key = f"outputs/{task_id}/manifest.json"
+
             output_url = self.r2.upload_bytes(output_key, localized_mp4_path.read_bytes(), content_type="video/mp4")
-            subtitle_key = f"tasks/{task_id}/artifacts/target.srt"
             subtitle_url = self.r2.upload_bytes(subtitle_key, target_srt_path.read_bytes(), content_type="text/plain")
-            audio_key = f"tasks/{task_id}/artifacts/dub.mp3"
-            audio_url = self.r2.upload_bytes(audio_key, dub_mp3_path.read_bytes(), content_type="audio/mpeg")
-            manifest_key = f"tasks/{task_id}/manifest.json"
+            audio_content_type = "audio/wav" if audio_ext == ".wav" else "audio/mpeg"
+            audio_url = self.r2.upload_bytes(audio_key, dub_mp3_path.read_bytes(), content_type=audio_content_type)
+            manifest_url = self.r2.public_url(manifest_key)
+
+            outputs = {
+                "video_key": output_key,
+                "video_url": output_url,
+                "subtitle_key": subtitle_key,
+                "subtitle_url": subtitle_url,
+                "audio_key": audio_key,
+                "audio_url": audio_url,
+                "manifest_key": manifest_key,
+                "manifest_url": manifest_url,
+            }
             manifest = {
                 "task_id": task_id,
                 "service": "localization",
                 "mode": record.mode,
                 "source_url": source_url,
-                "outputs": {
-                    "output_url": output_url,
-                    "subtitle_url": subtitle_url,
-                    "audio_url": audio_url,
-                },
+                "outputs": outputs,
                 "metrics": {"elapsed_ms_by_step": metrics},
+                "run_config_snapshot": run_config_snapshot,
                 "translation": translation_meta,
             }
             self.r2.put_json(manifest_key, manifest)
-            manifest_url = self.r2.public_url(manifest_key)
             end_step("uploading", step)
 
-            outputs = {
-                "subtitle_url": subtitle_url,
-                "audio_url": audio_url,
-                "manifest_url": manifest_url,
-            }
-
             on_stage("DONE", 100)
-            on_log(f"[done] output_url={output_url}")
+            total_latency_ms = int((time.perf_counter() - started) * 1000)
+            on_log(
+                "[done] outputs: "
+                f"video={output_url} subtitle={subtitle_url} audio={audio_url} manifest={manifest_url}"
+            )
             return EngineResult(
                 output_key=output_key,
                 output_url=output_url,
                 metadata={
                     "provider": "localization_basic",
                     "outputs": outputs,
-                    "metrics": {"elapsed_ms_by_step": metrics, "elapsed_ms_total": int((time.perf_counter() - started) * 1000)},
+                    "metrics": {"elapsed_ms_by_step": metrics, "total_latency_ms": total_latency_ms},
+                    "run_config_snapshot": run_config_snapshot,
                     "translation": translation_meta,
                 },
             )
