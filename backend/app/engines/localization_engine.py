@@ -11,7 +11,7 @@ from app.models.task import TaskRecord
 from app.services.r2_client import R2Client
 from app.utils.dubbing_service import srt_to_text, synthesize_mp3
 from app.utils.fastwhisper_asr import segments_to_srt, transcribe
-from app.utils.ffmpeg_localization import extract_audio, mix_ducking, mux
+from app.utils.ffmpeg_localization import extract_audio, mix_ducking, mux, probe_duration_sec
 from app.utils.translate_mm import translate_srt, write_translation_artifacts
 
 
@@ -117,7 +117,29 @@ class LocalizationEngine:
             ducking = bool((loc_inputs or {}).get("ducking", True))
             mix_ducking(audio_wav, dub_mp3_path, mixed_wav, ducking=ducking)
             localized_mp4_path = workspace / "localized.mp4"
+            source_video_duration_sec = probe_duration_sec(source_video)
+            dub_audio_duration_sec = probe_duration_sec(dub_mp3_path)
+            on_log(
+                "[loc][duration] pre_mux "
+                f"source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'} "
+                f"dub_audio_sec={dub_audio_duration_sec if dub_audio_duration_sec is not None else 'n/a'}"
+            )
             mux(source_video, mixed_wav, localized_mp4_path)
+            output_video_duration_sec = probe_duration_sec(localized_mp4_path)
+            on_log(
+                "[loc][duration] post_mux "
+                f"output_video_sec={output_video_duration_sec if output_video_duration_sec is not None else 'n/a'}"
+            )
+            if (
+                source_video_duration_sec is not None
+                and output_video_duration_sec is not None
+                and source_video_duration_sec > 3.0
+                and output_video_duration_sec <= 1.5
+            ):
+                raise EngineRunError(
+                    "localized output duration regression detected: "
+                    f"source={source_video_duration_sec:.3f}s output={output_video_duration_sec:.3f}s"
+                )
             end_step("rendering", step)
 
             step = mark_step("uploading", "UPLOADING", 90)
