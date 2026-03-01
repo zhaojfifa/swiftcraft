@@ -12,6 +12,7 @@ Terminal status
 Output rule
 - output_key: outputs/<task_id>/result.mp4
 - output_url: ${PUBLIC_CDN_BASE_URL}/${output_key}
+- localization output_key: outputs/<task_id>/localized.mp4 (backward-compatible `output_url` remains primary video URL)
 
 Request examples
 
@@ -61,7 +62,7 @@ Response (TaskResponseOut)
   "model_id": "string|null",
   "mode": "string",
   "status": "queued|running|succeeded|failed",
-  "stage": "SUBMITTED|EXTRACTING|TRANSCRIBING|TRANSLATING|DUBBING|RENDERING|UPLOADING|ANALYZING|MAPPING|MERGING|FINALIZING|DONE|FAILED",
+  "stage": "SUBMITTED|ANALYZING|EXTRACTING|TRANSCRIBING|TRANSLATING|SYNTHESIZING|DUBBING|RENDERING|UPLOADING|MAPPING|MERGING|FINALIZING|DONE|FAILED",
   "output_url": "string|null",
   "logs": [],
   "metadata": {}
@@ -69,6 +70,14 @@ Response (TaskResponseOut)
 
 Localization output contract
 - `output_url`: localized video (`localized.mp4`) for Video tab.
+- `metadata.outputs.video_url`: same video URL as `output_url` (non-breaking duplication for tabs/clients).
+- `metadata.outputs.video_key`: `outputs/{task_id}/localized.mp4`.
 - `metadata.outputs.subtitle_url`: localized subtitle sidecar.
+- `metadata.outputs.subtitle_key`: `outputs/{task_id}/target.srt`.
 - `metadata.outputs.audio_url`: dubbed target audio.
+- `metadata.outputs.audio_key`: `outputs/{task_id}/dub.mp3` (or `.wav` fallback).
 - `metadata.outputs.manifest_url`: run manifest for audit/debug tabs.
+- `metadata.outputs.manifest_key`: `outputs/{task_id}/manifest.json`.
+- `metadata.run_config_snapshot`: effective localization config persisted in SSOT.
+- `metadata.metrics.elapsed_ms_by_step` and `metadata.metrics.total_latency_ms`: timing metrics.
+- `metadata.manifest_preview`: manifest JSON inline preview fallback.

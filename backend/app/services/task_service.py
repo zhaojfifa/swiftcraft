@@ -109,6 +109,7 @@ def _stage_from_record(record: TaskRecord) -> TaskStage:
         "extracting": TaskStage.EXTRACTING,
         "transcribing": TaskStage.TRANSCRIBING,
         "translating": TaskStage.TRANSLATING,
+        "synthesizing": TaskStage.SYNTHESIZING,
         "dubbing": TaskStage.DUBBING,
         "analyzing": TaskStage.ANALYZING,
         "mapping": TaskStage.MAPPING,

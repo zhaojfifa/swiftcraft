@@ -46,11 +46,13 @@ class LocalizationEngine:
 
         try:
             on_stage("SUBMITTED", 1)
+            step = mark_step("analyzing", "ANALYZING", 5)
             source_url = (record.input_video_url or "").strip()
             if not source_url and record.input_key:
                 source_url = self.r2.public_url(record.input_key)
             if not source_url:
                 raise EngineRunError(f"task_id={task_id} missing input video url/key")
+            end_step("analyzing", step)
 
             source_video = workspace / "source.mp4"
             step = mark_step("extracting", "EXTRACTING", 10)
@@ -91,7 +93,7 @@ class LocalizationEngine:
             translation_meta = {"target_lang": target_lang, "qa": qa, "qa_local_path": str(qa_path)}
             end_step("translating", step)
 
-            step = mark_step("dubbing", "DUBBING", 60)
+            step = mark_step("synthesizing", "SYNTHESIZING", 60)
             dub_text = srt_to_text(target_srt)
             dub_mp3_path = synthesize_mp3(
                 dub_text,
@@ -99,7 +101,7 @@ class LocalizationEngine:
                 provider="azure-speech",
                 output_path=workspace / "dub.mp3",
             )
-            end_step("dubbing", step)
+            end_step("synthesizing", step)
 
             step = mark_step("rendering", "RENDERING", 78)
             mixed_wav = workspace / "mixed.wav"
@@ -159,6 +161,7 @@ class LocalizationEngine:
                     "outputs": outputs,
                     "metrics": {"elapsed_ms_by_step": metrics, "total_latency_ms": total_latency_ms},
                     "run_config_snapshot": run_config_snapshot,
+                    "manifest_preview": manifest,
                     "translation": translation_meta,
                 },
             )
