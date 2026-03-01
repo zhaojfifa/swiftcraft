@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 
 def _run_ffmpeg(cmd: list[str]) -> None:
@@ -12,6 +13,27 @@ def _run_ffmpeg(cmd: list[str]) -> None:
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or "").strip()
         raise RuntimeError(f"ffmpeg command failed: {stderr[-400:]}") from exc
+
+
+def probe_duration_sec(path: Path) -> Optional[float]:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        value = float((result.stdout or "").strip())
+        if value >= 0:
+            return value
+        return None
+    except Exception:
+        return None
 
 
 def extract_audio(video_path: Path, wav_out: Path) -> None:
@@ -72,7 +94,8 @@ def mux(video_in: Path, mixed_wav: Path, mp4_out: Path) -> None:
         "copy",
         "-c:a",
         "aac",
-        "-shortest",
+        "-af",
+        "apad",
         str(mp4_out),
     ]
     _run_ffmpeg(cmd)
