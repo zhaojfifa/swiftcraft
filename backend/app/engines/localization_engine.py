@@ -124,7 +124,7 @@ class LocalizationEngine:
                 f"source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'} "
                 f"dub_audio_sec={dub_audio_duration_sec if dub_audio_duration_sec is not None else 'n/a'}"
             )
-            mux(source_video, mixed_wav, localized_mp4_path)
+            mux(source_video, mixed_wav, localized_mp4_path, source_video_duration_sec=source_video_duration_sec)
             output_video_duration_sec = probe_duration_sec(localized_mp4_path)
             on_log(
                 "[loc][duration] post_mux "
@@ -133,8 +133,8 @@ class LocalizationEngine:
             if (
                 source_video_duration_sec is not None
                 and output_video_duration_sec is not None
-                and source_video_duration_sec > 3.0
-                and output_video_duration_sec <= 1.5
+                and source_video_duration_sec >= 3.0
+                and output_video_duration_sec < (source_video_duration_sec - 1.0)
             ):
                 raise EngineRunError(
                     "localized output duration regression detected: "

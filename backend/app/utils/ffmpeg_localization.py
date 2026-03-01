@@ -77,8 +77,34 @@ def mix_ducking(original_wav: Path, dub_mp3: Path, mixed_wav_out: Path, ducking:
     _run_ffmpeg(cmd)
 
 
-def mux(video_in: Path, mixed_wav: Path, mp4_out: Path) -> None:
+def mux(video_in: Path, mixed_wav: Path, mp4_out: Path, source_video_duration_sec: Optional[float] = None) -> None:
     mp4_out.parent.mkdir(parents=True, exist_ok=True)
+    if source_video_duration_sec is not None and source_video_duration_sec > 0:
+        duration_text = f"{source_video_duration_sec:.3f}"
+        filter_complex = f"[1:a]apad,atrim=0:{duration_text}[dub];[dub]asetpts=N/SR/TB[aout]"
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(video_in),
+            "-i",
+            str(mixed_wav),
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "0:v:0",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(mp4_out),
+        ]
+        _run_ffmpeg(cmd)
+        return
+
     cmd = [
         "ffmpeg",
         "-y",
@@ -96,6 +122,7 @@ def mux(video_in: Path, mixed_wav: Path, mp4_out: Path) -> None:
         "aac",
         "-af",
         "apad",
+        "-shortest",
         str(mp4_out),
     ]
     _run_ffmpeg(cmd)
