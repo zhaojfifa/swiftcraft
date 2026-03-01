@@ -89,7 +89,7 @@ class TaskStore:
                     exc,
                 )
         with self._lock:
-            self._tasks[record.task_id] = record
+            self._tasks[record.task_id] = record.copy(deep=True)
             if record.task_id not in self._order:
                 self._order.insert(0, record.task_id)
         return record

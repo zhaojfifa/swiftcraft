@@ -78,12 +78,21 @@ class LocalizationEngine:
             preserve_bgm = bool((loc_inputs or {}).get("preserve_bgm", True))
             ducking = bool((loc_inputs or {}).get("ducking", True))
             run_config_snapshot = {
+                "service_type": "localization",
+                "mode": record.mode,
                 "target_lang": target_lang,
                 "voice_id": voice_id,
                 "subtitle_mode": subtitle_mode,
                 "preserve_bgm": preserve_bgm,
                 "ducking": ducking,
                 "lipsync_enabled": False,
+                "providers": {
+                    "transcribe": "fastwhisper",
+                    "translate": "translate_mm",
+                    "tts": "azure-speech",
+                    "render": "ffmpeg",
+                    "storage": "r2",
+                },
             }
             step = mark_step("translating", "TRANSLATING", 45)
             target_srt = translate_srt(source_srt, target_lang=target_lang)
