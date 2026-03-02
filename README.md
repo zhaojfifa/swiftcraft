@@ -12,6 +12,11 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 10000 --reload
 ```
 
+Render preflight (ASR deps import check):
+```
+bash scripts/render_preflight.sh
+```
+
 Akool baseline (optional):
 ```
 set USE_MOCK_AI=false

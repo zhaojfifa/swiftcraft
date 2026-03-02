@@ -215,7 +215,7 @@ class LocalizationEngine:
             if runtime_unavailable_reason and (not segments or fallback_detected):
                 raise EngineRunError(
                     "ASR_RUNTIME_UNAVAILABLE: "
-                    f"{runtime_unavailable_reason}; install faster-whisper==1.0.3 and ctranslate2>=4.3.0"
+                    f"{runtime_unavailable_reason}; install ASR deps at build time and verify requirements path"
                 )
             if (not segments or fallback_detected) and not silent_for_gate:
                 raise EngineRunError(

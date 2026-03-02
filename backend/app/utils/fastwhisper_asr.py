@@ -69,7 +69,7 @@ def reset_last_transcribe_status() -> None:
 def _env_runtime_install_enabled() -> bool:
     value = os.getenv("ASR_RUNTIME_INSTALL_ON_MISSING")
     if value is None:
-        return True
+        return False
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 

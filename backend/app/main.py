@@ -51,7 +51,7 @@ async def startup_checks() -> None:
         print(
             "[startup][warn] asr_runtime=missing "
             f"reason={type(exc).__name__}: {exc} "
-            "hint='pip install -r backend/requirements.txt'"
+            "hint='install at build-time and verify active requirements path (root requirements.txt -> backend/requirements.txt)'"
         )
 
 
