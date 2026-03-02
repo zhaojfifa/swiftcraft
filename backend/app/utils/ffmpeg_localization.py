@@ -1,54 +1,88 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
 import re
+import shlex
 import subprocess
+import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional, Sequence
 
 
-def _stderr_tail(stderr: str, max_lines: int = 80, max_chars: int = 4000) -> str:
-    text = (stderr or "").strip()
-    if not text:
-        return ""
-    lines = text.splitlines()
-    if len(lines) > max_lines:
-        text = "\n".join(lines[-max_lines:])
-    if len(text) > max_chars:
-        text = text[-max_chars:]
-    return text
+def _tail(s: str, n: int = 2000) -> str:
+    s = s or ""
+    return s[-n:] if len(s) > n else s
 
 
-def _run_cmd(cmd: list[str], timeout_sec: int = 120, label: str = "ffmpeg") -> subprocess.CompletedProcess[str]:
+def _fmt_cmd(cmd: Sequence[object]) -> str:
+    out: list[str] = []
+    for x in cmd:
+        if isinstance(x, (bytes, bytearray)):
+            out.append(x.decode("utf-8", "replace"))
+        else:
+            try:
+                out.append(os.fspath(x))
+            except Exception:
+                out.append(str(x))
+    return " ".join(out)
+
+
+def _normalize_cmd(cmd: Sequence[object]) -> list[str]:
+    return [c.decode("utf-8", "replace") if isinstance(c, (bytes, bytearray)) else str(c) for c in cmd]
+
+
+def _run_cmd(
+    cmd: Sequence[object],
+    *,
+    label: str,
+    timeout_sec: Optional[int] = None,
+    on_log: Optional[Callable[[str], None]] = None,
+) -> subprocess.CompletedProcess[str]:
+    if timeout_sec is None:
+        timeout_sec = int(os.getenv("FFMPEG_TIMEOUT_SEC", "120"))
+
+    pretty = " ".join(shlex.quote(c) for c in _normalize_cmd(cmd))
+    if on_log:
+        on_log(f"[loc][ffmpeg] {label} start timeout_sec={timeout_sec} cmd={pretty}")
+
+    t0 = time.perf_counter()
     try:
-        return subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout_sec)
-    except FileNotFoundError as exc:
-        raise RuntimeError(f"{label} executable not found: {cmd[0]}") from exc
-    except subprocess.CalledProcessError as exc:
-        stderr_tail = _stderr_tail(exc.stderr or "")
-        joined = " ".join(cmd)
-        raise RuntimeError(
-            f"{label} failed (code={exc.returncode}): {joined}\n"
-            f"{stderr_tail}"
-        ) from exc
-    except subprocess.TimeoutExpired as exc:
-        stderr_tail = _stderr_tail(getattr(exc, "stderr", "") or "")
-        joined = " ".join(cmd)
-        raise TimeoutError(
-            f"{label} timeout after {timeout_sec}s: {joined}\n"
-            f"{stderr_tail}"
-        ) from exc
+        cp = subprocess.run(
+            _normalize_cmd(cmd),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired as e:
+        if on_log:
+            on_log(f"[loc][ffmpeg] {label} TIMEOUT after {timeout_sec}s cmd={pretty}")
+            if getattr(e, "stdout", None):
+                on_log(f"[loc][ffmpeg] {label} stdout_tail={_tail(e.stdout)}")
+            if getattr(e, "stderr", None):
+                on_log(f"[loc][ffmpeg] {label} stderr_tail={_tail(e.stderr)}")
+        raise
+    except subprocess.CalledProcessError as e:
+        if on_log:
+            on_log(f"[loc][ffmpeg] {label} FAILED rc={e.returncode} cmd={pretty}")
+            on_log(f"[loc][ffmpeg] {label} stdout_tail={_tail(e.stdout or '')}")
+            on_log(f"[loc][ffmpeg] {label} stderr_tail={_tail(e.stderr or '')}")
+        raise
+
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    if on_log:
+        on_log(f"[loc][ffmpeg] {label} ok elapsed_ms={elapsed_ms}")
+        if cp.stderr:
+            on_log(f"[loc][ffmpeg] {label} stderr_tail={_tail(cp.stderr)}")
+    return cp
 
 
-def _run_ffmpeg(cmd: list[str]) -> None:
-    timeout_sec = int(os.getenv("FFMPEG_TIMEOUT_SEC", "120") or "120")
-    _run_cmd(cmd, timeout_sec=timeout_sec, label="ffmpeg")
-
-
-def probe_duration_sec(path: Path) -> Optional[float]:
+def probe_duration_sec(path: Path, on_log: Optional[Callable[[str], None]] = None) -> Optional[float]:
     cmd = [
         "ffprobe",
+        "-hide_banner",
+        "-nostdin",
         "-v",
         "error",
         "-show_entries",
@@ -58,20 +92,20 @@ def probe_duration_sec(path: Path) -> Optional[float]:
         str(path),
     ]
     try:
-        timeout_sec = int(os.getenv("FFPROBE_TIMEOUT_SEC", "30") or "30")
-        result = _run_cmd(cmd, timeout_sec=timeout_sec, label="ffprobe")
+        timeout_sec = int(os.getenv("FFPROBE_TIMEOUT_SEC", "30"))
+        result = _run_cmd(cmd, label="probe_duration", timeout_sec=timeout_sec, on_log=on_log)
         value = float((result.stdout or "").strip())
-        if value >= 0:
-            return value
-        return None
+        return value if value >= 0 else None
     except Exception:
         return None
 
 
-def normalize_audio_for_asr(input_wav: Path, output_wav: Path) -> None:
+def normalize_audio_for_asr(input_wav: Path, output_wav: Path, on_log: Optional[Callable[[str], None]] = None) -> None:
     output_wav.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
         "-y",
         "-i",
         str(input_wav),
@@ -83,12 +117,14 @@ def normalize_audio_for_asr(input_wav: Path, output_wav: Path) -> None:
         "16000",
         str(output_wav),
     ]
-    _run_ffmpeg(cmd)
+    _run_cmd(cmd, label="normalize_audio", timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_NORM", "120")), on_log=on_log)
 
 
-def audio_rms_db(input_wav: Path) -> Optional[float]:
+def audio_rms_db(input_wav: Path, on_log: Optional[Callable[[str], None]] = None) -> Optional[float]:
     cmd = [
         "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
         "-v",
         "info",
         "-i",
@@ -100,13 +136,11 @@ def audio_rms_db(input_wav: Path) -> Optional[float]:
         "-",
     ]
     try:
-        timeout_sec = int(os.getenv("FFPROBE_TIMEOUT_SEC", "30") or "30")
-        result = _run_cmd(cmd, timeout_sec=timeout_sec, label="ffmpeg")
+        result = _run_cmd(cmd, label="audio_rms_db", timeout_sec=int(os.getenv("FFPROBE_TIMEOUT_SEC", "30")), on_log=on_log)
         stderr = (result.stderr or "").strip()
     except Exception:
         return None
 
-    # ffmpeg astats can report either "RMS level dB" or "RMS level dBfs".
     matches = re.findall(r"RMS level dB(?:fs)?\s*:\s*(-?\d+(?:\.\d+)?)", stderr, flags=re.IGNORECASE)
     if not matches:
         return None
@@ -117,9 +151,11 @@ def audio_rms_db(input_wav: Path) -> Optional[float]:
         return None
 
 
-def probe_av_streams(video_path: Path) -> dict[str, Any]:
+def probe_av_streams(video_path: Path, on_log: Optional[Callable[[str], None]] = None) -> dict[str, Any]:
     cmd = [
         "ffprobe",
+        "-hide_banner",
+        "-nostdin",
         "-v",
         "error",
         "-show_entries",
@@ -135,8 +171,7 @@ def probe_av_streams(video_path: Path) -> dict[str, Any]:
         "audio_codecs": [],
     }
     try:
-        timeout_sec = int(os.getenv("FFPROBE_TIMEOUT_SEC", "30") or "30")
-        result = _run_cmd(cmd, timeout_sec=timeout_sec, label="ffprobe")
+        result = _run_cmd(cmd, label="probe_av_streams", timeout_sec=int(os.getenv("FFPROBE_TIMEOUT_SEC", "30")), on_log=on_log)
         payload = json.loads(result.stdout or "{}")
     except Exception:
         return out
@@ -160,10 +195,12 @@ def probe_av_streams(video_path: Path) -> dict[str, Any]:
     return out
 
 
-def render_with_original_audio(video_in: Path, output_wav: Path) -> None:
+def render_with_original_audio(video_in: Path, output_wav: Path, on_log: Optional[Callable[[str], None]] = None) -> None:
     output_wav.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
         "-y",
         "-i",
         str(video_in),
@@ -175,24 +212,26 @@ def render_with_original_audio(video_in: Path, output_wav: Path) -> None:
         "48000",
         str(output_wav),
     ]
-    _run_ffmpeg(cmd)
+    _run_cmd(cmd, label="render_with_original_audio", timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_RENDER_AUDIO", "120")), on_log=on_log)
 
 
-def extract_audio(video_path: Path, wav_out: Path) -> None:
+def extract_audio(video_path: Path, wav_out: Path, on_log: Optional[Callable[[str], None]] = None) -> None:
     wav_out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
         "-y",
         "-i",
         str(video_path),
+        "-vn",
         "-ac",
         "1",
         "-ar",
         "16000",
-        "-vn",
         str(wav_out),
     ]
-    _run_ffmpeg(cmd)
+    _run_cmd(cmd, label="extract_audio", timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_EXTRACT", "120")), on_log=on_log)
 
 
 def mix_ducking(
@@ -201,11 +240,14 @@ def mix_ducking(
     mixed_wav_out: Path,
     preserve_bgm: bool = True,
     ducking: bool = True,
+    on_log: Optional[Callable[[str], None]] = None,
 ) -> None:
     mixed_wav_out.parent.mkdir(parents=True, exist_ok=True)
     if not preserve_bgm:
         cmd = [
             "ffmpeg",
+            "-hide_banner",
+            "-nostdin",
             "-y",
             "-i",
             str(dub_mp3),
@@ -213,15 +255,17 @@ def mix_ducking(
             "48000",
             str(mixed_wav_out),
         ]
-        _run_ffmpeg(cmd)
+        _run_cmd(cmd, label="mix_ducking_passthrough", timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MIX", "180")), on_log=on_log)
         return
-    # Keep mixed audio stable for downstream mux by padding mixed output.
+
     if ducking:
         filter_complex = "[0:a][1:a]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=400[a0];[a0]apad[a]"
     else:
         filter_complex = "[0:a][1:a]amix=inputs=2:duration=longest:weights=1 1[a0];[a0]apad[a]"
     cmd = [
         "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
         "-y",
         "-i",
         str(original_wav),
@@ -229,16 +273,21 @@ def mix_ducking(
         str(dub_mp3),
         "-filter_complex",
         filter_complex,
-        "-map",
-        "[a]",
-        "-ar",
-        "48000",
+        "-c:a",
+        "pcm_s16le",
+        "-shortest",
         str(mixed_wav_out),
     ]
-    _run_ffmpeg(cmd)
+    _run_cmd(cmd, label="mix_ducking", timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MIX", "180")), on_log=on_log)
 
 
-def mux(video_in: Path, mixed_wav: Path, mp4_out: Path, source_video_duration_sec: Optional[float] = None) -> None:
+def mux(
+    video_in: Path,
+    mixed_wav: Path,
+    mp4_out: Path,
+    source_video_duration_sec: Optional[float] = None,
+    on_log: Optional[Callable[[str], None]] = None,
+) -> None:
     mp4_out.parent.mkdir(parents=True, exist_ok=True)
     duration = source_video_duration_sec if source_video_duration_sec and source_video_duration_sec > 0 else None
     if duration is not None:
@@ -246,6 +295,8 @@ def mux(video_in: Path, mixed_wav: Path, mp4_out: Path, source_video_duration_se
         filter_complex = f"[1:a]apad,atrim=0:{duration_text}[dub];[dub]asetpts=N/SR/TB[aout]"
         cmd = [
             "ffmpeg",
+            "-hide_banner",
+            "-nostdin",
             "-y",
             "-i",
             str(video_in),
@@ -264,11 +315,13 @@ def mux(video_in: Path, mixed_wav: Path, mp4_out: Path, source_video_duration_se
             "-shortest",
             str(mp4_out),
         ]
-        _run_ffmpeg(cmd)
+        _run_cmd(cmd, label="mux", timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MUX", "180")), on_log=on_log)
         return
 
     cmd = [
         "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
         "-y",
         "-i",
         str(video_in),
@@ -282,9 +335,7 @@ def mux(video_in: Path, mixed_wav: Path, mp4_out: Path, source_video_duration_se
         "copy",
         "-c:a",
         "aac",
-        "-af",
-        "apad",
         "-shortest",
         str(mp4_out),
     ]
-    _run_ffmpeg(cmd)
+    _run_cmd(cmd, label="mux", timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MUX", "180")), on_log=on_log)

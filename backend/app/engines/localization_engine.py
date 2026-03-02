@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict
@@ -69,6 +70,12 @@ class LocalizationEngine:
             except Exception:
                 return -1
 
+        def _probe_duration(path: Path) -> float | None:
+            try:
+                return probe_duration_sec(path, on_log=on_log)
+            except TypeError:
+                return probe_duration_sec(path)
+
         try:
             on_stage("SUBMITTED", 1)
             step = mark_step("analyzing", "ANALYZING", 5)
@@ -85,19 +92,19 @@ class LocalizationEngine:
                 resp = client.get(source_url)
                 resp.raise_for_status()
                 source_video.write_bytes(resp.content)
-            source_probe = probe_av_streams(source_video)
+            source_probe = probe_av_streams(source_video, on_log=on_log)
             on_log(f"[loc] source_probe={source_probe}")
             audio_wav = workspace / "source.wav"
-            extract_audio(source_video, audio_wav)
-            audio_wav_duration_sec = probe_duration_sec(audio_wav)
+            extract_audio(source_video, audio_wav, on_log=on_log)
+            audio_wav_duration_sec = _probe_duration(audio_wav)
             on_log(
                 f"[loc] extracted_audio_path={audio_wav} duration_sec="
                 f"{audio_wav_duration_sec if audio_wav_duration_sec is not None else 'n/a'}"
             )
             normalized_wav = workspace / "source_norm.wav"
-            normalize_audio_for_asr(audio_wav, normalized_wav)
-            normalized_wav_duration_sec = probe_duration_sec(normalized_wav)
-            rms_db = audio_rms_db(normalized_wav)
+            normalize_audio_for_asr(audio_wav, normalized_wav, on_log=on_log)
+            normalized_wav_duration_sec = _probe_duration(normalized_wav)
+            rms_db = audio_rms_db(normalized_wav, on_log=on_log)
             on_log(
                 f"[loc] normalized_audio_path={normalized_wav} duration_sec="
                 f"{normalized_wav_duration_sec if normalized_wav_duration_sec is not None else 'n/a'} "
@@ -147,7 +154,7 @@ class LocalizationEngine:
             fallback_reason = None
             if no_subtitles:
                 fallback_reason = "SILENT_AUDIO_OR_EMPTY_ASR"
-                source_video_duration_sec_for_marker = probe_duration_sec(source_video) or 5.0
+                source_video_duration_sec_for_marker = _probe_duration(source_video) or 5.0
                 target_srt = (
                     "1\n"
                     f"00:00:00,000 --> {_srt_ts(source_video_duration_sec_for_marker)}\n"
@@ -191,7 +198,7 @@ class LocalizationEngine:
                     provider="azure-speech",
                     output_path=workspace / "dub.mp3",
                 )
-                dub_duration_sec = probe_duration_sec(dub_mp3_path)
+                dub_duration_sec = _probe_duration(dub_mp3_path)
                 on_log(
                     f"[loc] dub_audio_path={dub_mp3_path} duration_sec="
                     f"{dub_duration_sec if dub_duration_sec is not None else 'n/a'}"
@@ -204,7 +211,17 @@ class LocalizationEngine:
             try:
                 mixed_wav = workspace / "mixed.wav"
                 localized_mp4_path = workspace / "localized.mp4"
-                source_video_duration_sec = probe_duration_sec(source_video)
+                source_video_duration_sec = _probe_duration(source_video)
+                on_log(f"[loc][render] source_video_size={source_video.stat().st_size if source_video.exists() else 'missing'}")
+                on_log(f"[loc][render] audio_wav_size={audio_wav.stat().st_size if audio_wav.exists() else 'missing'}")
+                on_log(
+                    f"[loc][render] dub_mp3_size={dub_mp3_path.stat().st_size if (dub_mp3_path and dub_mp3_path.exists()) else 'n/a'}"
+                )
+                on_log(
+                    f"[loc][render] ffmpeg_timeouts="
+                    f"mix={os.getenv('FFMPEG_TIMEOUT_SEC_MIX','180')} "
+                    f"mux={os.getenv('FFMPEG_TIMEOUT_SEC_MUX','180')}"
+                )
                 on_log(
                     "[loc][render] mix_start "
                     f"source_video={source_video} exists={source_video.exists()} size={_file_size(source_video)} "
@@ -216,10 +233,10 @@ class LocalizationEngine:
                 )
                 mix_started = time.perf_counter()
                 if no_subtitles:
-                    render_with_original_audio(source_video, mixed_wav)
+                    render_with_original_audio(source_video, mixed_wav, on_log=on_log)
                 else:
-                    mix_ducking(audio_wav, dub_mp3_path, mixed_wav, preserve_bgm=preserve_bgm, ducking=ducking)
-                mixed_audio_duration_sec = probe_duration_sec(mixed_wav)
+                    mix_ducking(audio_wav, dub_mp3_path, mixed_wav, preserve_bgm=preserve_bgm, ducking=ducking, on_log=on_log)
+                mixed_audio_duration_sec = _probe_duration(mixed_wav)
                 on_log(
                     "[loc][render] mix_done "
                     f"elapsed_ms={int((time.perf_counter() - mix_started) * 1000)} "
@@ -237,8 +254,8 @@ class LocalizationEngine:
                     f"output={localized_mp4_path} source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'}"
                 )
                 mux_started = time.perf_counter()
-                mux(source_video, mixed_wav, localized_mp4_path, source_video_duration_sec=source_video_duration_sec)
-                output_video_duration_sec = probe_duration_sec(localized_mp4_path)
+                mux(source_video, mixed_wav, localized_mp4_path, source_video_duration_sec=source_video_duration_sec, on_log=on_log)
+                output_video_duration_sec = _probe_duration(localized_mp4_path)
                 on_log(
                     "[loc][render] mux_done "
                     f"elapsed_ms={int((time.perf_counter() - mux_started) * 1000)} "
@@ -262,6 +279,11 @@ class LocalizationEngine:
             except Exception as render_exc:
                 on_log(
                     f"[loc][render] rendering_exception type={type(render_exc).__name__} msg={render_exc}"
+                )
+                on_log(
+                    f"[loc][render] rendering_exception_types "
+                    f"source_video={type(source_video).__name__} audio_wav={type(audio_wav).__name__} "
+                    f"dub_mp3={type(dub_mp3_path).__name__} mixed_wav={type(mixed_wav).__name__}"
                 )
                 raise
             end_step("rendering", step)
