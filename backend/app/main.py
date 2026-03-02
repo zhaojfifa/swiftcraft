@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +32,27 @@ app.add_middleware(
 
 app.mount("/static/presets", StaticFiles(directory=str(PRESETS_DIR)), name="presets")
 app.mount("/static/data", StaticFiles(directory=str(DATA_DIR)), name="data")
+
+
+@app.on_event("startup")
+async def startup_checks() -> None:
+    asr_model = (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "medium").strip() or "medium"
+    try:
+        import faster_whisper  # type: ignore
+        import ctranslate2  # type: ignore
+
+        print(
+            "[startup] asr_runtime=ok "
+            f"faster_whisper={getattr(faster_whisper, '__version__', 'unknown')} "
+            f"ctranslate2={getattr(ctranslate2, '__version__', 'unknown')} "
+            f"ASR_MODEL={asr_model}"
+        )
+    except Exception as exc:
+        print(
+            "[startup][warn] asr_runtime=missing "
+            f"reason={type(exc).__name__}: {exc} "
+            "hint='pip install -r backend/requirements.txt'"
+        )
 
 
 @app.get("/health")
