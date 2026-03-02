@@ -64,12 +64,23 @@ Response (TaskResponseOut)
   "status": "queued|running|succeeded|failed",
   "stage": "SUBMITTED|ANALYZING|EXTRACTING|TRANSCRIBING|TRANSLATING|SYNTHESIZING|DUBBING|RENDERING|UPLOADING|MAPPING|MERGING|FINALIZING|DONE|FAILED",
   "output_url": "string|null",
+  "outputs": {
+    "video_key": "string|null",
+    "video_url": "string|null",
+    "subtitle_key": "string|null",
+    "subtitle_url": "string|null",
+    "audio_key": "string|null",
+    "audio_url": "string|null",
+    "manifest_key": "string|null",
+    "manifest_url": "string|null"
+  },
   "logs": [],
   "metadata": {}
 }
 
 Localization output contract
 - `output_url`: localized video (`localized.mp4`) for Video tab.
+- `outputs` (optional): stable top-level artifact object for clients. Values are mapped from `metadata.outputs` with fallback to `metadata.manifest_preview.outputs`.
 - `metadata.outputs.video_url`: same video URL as `output_url` (non-breaking duplication for tabs/clients).
 - `metadata.outputs.video_key`: `outputs/{task_id}/localized.mp4`.
 - `metadata.outputs.subtitle_url`: localized subtitle sidecar.
