@@ -16,14 +16,66 @@ type TopTab = "playground" | "json" | "api";
 type OutputTab = "video" | "subtitles" | "audio" | "manifest";
 type Mode = "baseline" | "intelligent";
 
+type OutputMap = {
+  video_url?: string;
+  subtitle_url?: string;
+  audio_url?: string;
+  manifest_url?: string;
+  manifest_json?: unknown;
+  [k: string]: unknown;
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function pickString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return null;
+}
+
+function extractLocalizationOutputs(task: TaskRecord | null) {
+  const metadata = asRecord(task?.metadata);
+  const mdOutputs = asRecord(metadata.outputs) as OutputMap;
+  const manifestPreview = asRecord(metadata.manifest_preview);
+  const mpOutputs = asRecord(manifestPreview.outputs) as OutputMap;
+
+  const merged: OutputMap = {
+    ...mpOutputs,
+    ...mdOutputs,
+  };
+
+  const videoUrl = pickString(
+    merged.video_url,
+    mdOutputs.video_url,
+    mpOutputs.video_url,
+    task?.output_url,
+  );
+  const subtitleUrl = pickString(merged.subtitle_url, mdOutputs.subtitle_url, mpOutputs.subtitle_url);
+  const audioUrl = pickString(merged.audio_url, mdOutputs.audio_url, mpOutputs.audio_url);
+  const manifestUrl = pickString(merged.manifest_url, mdOutputs.manifest_url, mpOutputs.manifest_url);
+  const manifestFallback = merged.manifest_json ?? mdOutputs.manifest_json ?? manifestPreview ?? merged;
+
+  return { videoUrl, subtitleUrl, audioUrl, manifestUrl, manifestFallback };
+}
+
 function shouldStopPolling(task: TaskRecord | null): boolean {
   const status = String(task?.status || "").toLowerCase();
   const stage = String(task?.stage || "").toLowerCase();
+  const metadata = asRecord(task?.metadata);
+  const outputs = asRecord(metadata.outputs);
+  const manifestPreviewOutputs = asRecord(asRecord(metadata.manifest_preview).outputs);
+  const hasVideo =
+    typeof outputs.video_url === "string" ||
+    typeof manifestPreviewOutputs.video_url === "string" ||
+    typeof task?.output_url === "string";
   return (
     TERMINAL_STATUSES.has(status) ||
     stage === "done" ||
     stage === "failed" ||
-    Boolean(task?.output_url || (task?.metadata?.outputs as Record<string, unknown> | undefined)?.video_url)
+    hasVideo
   );
 }
 
@@ -52,17 +104,12 @@ export default function LocalizationClient() {
 
   const taskId = task?.task_id || "";
   const logs = useMemo(() => task?.logs || [], [task?.logs]);
-  const outputs = useMemo(() => {
-    const raw = task?.metadata?.outputs;
-    if (raw && typeof raw === "object") return raw as Record<string, unknown>;
-    return {};
-  }, [task?.metadata?.outputs]);
-
-  const videoUrl = resolveAssetUrl(String(outputs.video_url || task?.output_url || "") || null);
-  const subtitleUrl = typeof outputs.subtitle_url === "string" ? outputs.subtitle_url : null;
-  const audioUrl = typeof outputs.audio_url === "string" ? outputs.audio_url : null;
-  const manifestUrl = typeof outputs.manifest_url === "string" ? outputs.manifest_url : null;
-  const manifestFallback = outputs.manifest_json || outputs;
+  const extracted = useMemo(() => extractLocalizationOutputs(task), [task]);
+  const videoUrl = resolveAssetUrl(extracted.videoUrl);
+  const subtitleUrl = resolveAssetUrl(extracted.subtitleUrl);
+  const audioUrl = resolveAssetUrl(extracted.audioUrl);
+  const manifestUrl = resolveAssetUrl(extracted.manifestUrl);
+  const manifestFallback = extracted.manifestFallback;
 
   useEffect(() => {
     return () => {

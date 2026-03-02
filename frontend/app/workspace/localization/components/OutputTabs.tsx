@@ -43,8 +43,17 @@ export default function OutputTabs({
       return;
     }
     fetch(manifestUrl, { cache: "no-store" })
-      .then((res) => (res.ok ? res.text() : ""))
-      .then((text) => setManifestPreview(text.slice(0, 10000)))
+      .then(async (res) => {
+        if (!res.ok) return "";
+        const raw = await res.text();
+        if (!raw.trim()) return "";
+        try {
+          return JSON.stringify(JSON.parse(raw), null, 2).slice(0, 10000);
+        } catch {
+          return raw.slice(0, 10000);
+        }
+      })
+      .then((text) => setManifestPreview(text))
       .catch(() => setManifestPreview(""));
   }, [manifestUrl]);
 
@@ -86,10 +95,10 @@ export default function OutputTabs({
                 Download subtitle
               </a>
             ) : (
-              <div className="text-slate-400">Subtitle not ready.</div>
+              <div className="text-slate-400">Not available.</div>
             )}
             <pre className="text-xs bg-slate-50 border border-slate-200 rounded p-3 max-h-72 overflow-auto whitespace-pre-wrap">
-              {subtitlePreview || "No preview"}
+              {subtitlePreview || "No preview (or blocked by CORS)."}
             </pre>
           </div>
         ) : null}
@@ -104,7 +113,7 @@ export default function OutputTabs({
                 </a>
               </>
             ) : (
-              <div className="text-slate-400">Dub audio not ready.</div>
+              <div className="text-slate-400">Not available.</div>
             )}
           </div>
         ) : null}
@@ -116,7 +125,7 @@ export default function OutputTabs({
                 Open manifest URL
               </a>
             ) : (
-              <div className="text-slate-400">Manifest URL not ready, showing task metadata preview.</div>
+              <div className="text-slate-400">Not available via URL, showing metadata preview.</div>
             )}
             <pre className="text-xs bg-slate-50 border border-slate-200 rounded p-3 max-h-72 overflow-auto whitespace-pre-wrap break-all">
               {manifestText}
