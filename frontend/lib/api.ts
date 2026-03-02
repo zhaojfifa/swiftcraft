@@ -34,6 +34,16 @@ export type TaskRecord = {
       manifest_url?: string;
       manifest_json?: unknown;
     };
+    manifest_preview?: {
+      outputs?: {
+        video_url?: string;
+        subtitle_url?: string;
+        audio_url?: string;
+        manifest_url?: string;
+        manifest_json?: unknown;
+      };
+      [k: string]: unknown;
+    };
     policy?: {
       enforced?: string[];
     };
