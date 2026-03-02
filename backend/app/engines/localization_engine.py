@@ -158,42 +158,44 @@ class LocalizationEngine:
             asr_model = (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "small").strip() or "small"
             asr_beam_size = _env_int("ASR_BEAM_SIZE", _env_int("FASTWHISPER_BEAM_SIZE", 5))
             asr_vad_filter = _env_bool("ASR_VAD_FILTER", _env_bool("FASTWHISPER_VAD_FILTER", True))
-            asr_language_hint = (os.getenv("ASR_LANGUAGE_HINT") or os.getenv("FASTWHISPER_LANGUAGE") or "").strip() or None
-            asr_model_used = asr_model
-            segments = transcribe(
-                str(normalized_wav),
-                model_name=asr_model,
-                beam_size=asr_beam_size,
-                vad_filter=asr_vad_filter,
-                language=asr_language_hint,
-            )
-            raw_text = _joined_asr_text(segments)
-            initial_fallback_detected = _contains_fallback_marker(raw_text)
             normalized_duration_for_gate = (
                 normalized_wav_duration_sec if normalized_wav_duration_sec is not None else (audio_wav_duration_sec or 0.0)
             )
             silent_for_gate = normalized_duration_for_gate > 1.0 and (rms_db is not None and rms_db <= -35.0)
-            if (not segments or initial_fallback_detected) and not silent_for_gate:
-                asr_model_used = (os.getenv("ASR_MODEL_FALLBACK", "medium").strip() or "medium")
-                retry_beam = max(asr_beam_size + 2, 8)
-                retry_vad = not asr_vad_filter
-                on_log(
-                    "[loc] ASR_RETRY_USED=true "
-                    f"reason={'empty' if not segments else 'fallback_phrase'} "
-                    f"ASR_MODEL_USED={asr_model_used} beam={retry_beam} vad={retry_vad} lang={asr_language_hint}"
-                )
-                segments = transcribe(
+            asr_model_used = asr_model
+            asr_retry_used = False
+            asr_lang_final = "none"
+            segments: list[Any] = []
+            raw_text = ""
+            fallback_detected = True
+
+            for idx, lang in enumerate(("zh", "en")):
+                if idx == 1 and silent_for_gate:
+                    break
+                on_log(f"[loc] ASR_LANG_TRY={lang}")
+                attempt_segments = transcribe(
                     str(normalized_wav),
                     model_name=asr_model_used,
-                    beam_size=retry_beam,
-                    vad_filter=retry_vad,
-                    language=asr_language_hint,
+                    beam_size=asr_beam_size,
+                    vad_filter=asr_vad_filter,
+                    language=lang,
                 )
-                raw_text = _joined_asr_text(segments)
-            else:
-                on_log(f"[loc] ASR_RETRY_USED=false ASR_MODEL_USED={asr_model_used}")
+                attempt_text = _joined_asr_text(attempt_segments)
+                attempt_fallback = _contains_fallback_marker(attempt_text)
+                if idx == 1:
+                    asr_retry_used = True
+                segments = attempt_segments
+                raw_text = attempt_text
+                fallback_detected = attempt_fallback
+                if attempt_segments and not attempt_fallback:
+                    asr_lang_final = lang
+                    break
 
-            fallback_detected = _contains_fallback_marker(raw_text)
+            if asr_lang_final == "none" and segments and not fallback_detected:
+                asr_lang_final = "zh"
+            on_log(f"[loc] ASR_RETRY_USED={'true' if asr_retry_used else 'false'} ASR_MODEL_USED={asr_model_used}")
+            on_log(f"[loc] ASR_LANG_FINAL={asr_lang_final}")
+
             if (not segments or fallback_detected) and not silent_for_gate:
                 raise EngineRunError(
                     "ASR_EMPTY_OR_FALLBACK: transcribe returned empty/fallback text for non-silent audio"
@@ -213,7 +215,7 @@ class LocalizationEngine:
             if fallback_detected:
                 on_log("[loc][warn] asr_fallback_phrase_detected -> check faster-whisper runtime / audio content")
             transcription_meta = {
-                "source_lang_guess": (os.getenv("ASR_LANGUAGE_HINT") or os.getenv("FASTWHISPER_LANGUAGE") or "").strip() or "unknown",
+                "source_lang_guess": asr_lang_final if asr_lang_final != "none" else "unknown",
                 "text_len": len(source_text),
                 "segments": num_segments,
                 "fallback_detected": _contains_fallback_marker(source_text),
