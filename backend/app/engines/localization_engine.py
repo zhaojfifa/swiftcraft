@@ -11,7 +11,16 @@ from app.models.task import TaskRecord
 from app.services.r2_client import R2Client
 from app.utils.dubbing_service import srt_to_text, synthesize_mp3
 from app.utils.fastwhisper_asr import segments_to_srt, transcribe
-from app.utils.ffmpeg_localization import extract_audio, mix_ducking, mux, probe_duration_sec
+from app.utils.ffmpeg_localization import (
+    audio_rms_db,
+    extract_audio,
+    mix_ducking,
+    mux,
+    normalize_audio_for_asr,
+    probe_av_streams,
+    probe_duration_sec,
+    render_with_original_audio,
+)
 from app.utils.translate_mm import translate_srt, write_translation_artifacts
 
 
@@ -36,6 +45,13 @@ class LocalizationEngine:
 
         def _segment_count(srt_text: str) -> int:
             return len([ln for ln in srt_text.splitlines() if ln.strip().isdigit()])
+
+        def _srt_ts(seconds: float) -> str:
+            total_ms = max(0, int(round(seconds * 1000)))
+            hh, rem = divmod(total_ms, 3600 * 1000)
+            mm, rem = divmod(rem, 60 * 1000)
+            ss, ms = divmod(rem, 1000)
+            return f"{hh:02}:{mm:02}:{ss:02},{ms:03}"
 
         def mark_step(name: str, stage: str, progress: int) -> float:
             on_stage(stage, progress)
@@ -63,6 +79,8 @@ class LocalizationEngine:
                 resp = client.get(source_url)
                 resp.raise_for_status()
                 source_video.write_bytes(resp.content)
+            source_probe = probe_av_streams(source_video)
+            on_log(f"[loc] source_probe={source_probe}")
             audio_wav = workspace / "source.wav"
             extract_audio(source_video, audio_wav)
             audio_wav_duration_sec = probe_duration_sec(audio_wav)
@@ -70,10 +88,19 @@ class LocalizationEngine:
                 f"[loc] extracted_audio_path={audio_wav} duration_sec="
                 f"{audio_wav_duration_sec if audio_wav_duration_sec is not None else 'n/a'}"
             )
+            normalized_wav = workspace / "source_norm.wav"
+            normalize_audio_for_asr(audio_wav, normalized_wav)
+            normalized_wav_duration_sec = probe_duration_sec(normalized_wav)
+            rms_db = audio_rms_db(normalized_wav)
+            on_log(
+                f"[loc] normalized_audio_path={normalized_wav} duration_sec="
+                f"{normalized_wav_duration_sec if normalized_wav_duration_sec is not None else 'n/a'} "
+                f"rms_db={rms_db if rms_db is not None else 'n/a'}"
+            )
             end_step("extracting", step)
 
             step = mark_step("transcribing", "TRANSCRIBING", 25)
-            segments = transcribe(str(audio_wav))
+            segments = transcribe(str(normalized_wav))
             source_srt = segments_to_srt(segments)
             source_srt_path = workspace / "source.srt"
             source_srt_path.write_text(source_srt, encoding="utf-8")
@@ -81,6 +108,7 @@ class LocalizationEngine:
             first_ts = f"{segments[0].start:.3f}" if segments else "n/a"
             last_ts = f"{segments[-1].end:.3f}" if segments else "n/a"
             on_log(f"[loc] asr_segments={num_segments} first_ts={first_ts}s last_ts={last_ts}s")
+            no_subtitles = not segments or (rms_db is not None and rms_db <= -40.0)
             end_step("transcribing", step)
 
             loc_inputs = inputs.get("inputs") if isinstance(inputs.get("inputs"), dict) else {}
@@ -108,7 +136,17 @@ class LocalizationEngine:
             }
 
             step = mark_step("translating", "TRANSLATING", 45)
-            target_srt = translate_srt(source_srt, target_lang=target_lang)
+            fallback_reason = None
+            if no_subtitles:
+                fallback_reason = "SILENT_AUDIO_OR_EMPTY_ASR"
+                source_video_duration_sec_for_marker = probe_duration_sec(source_video) or 5.0
+                target_srt = (
+                    "1\n"
+                    f"00:00:00,000 --> {_srt_ts(source_video_duration_sec_for_marker)}\n"
+                    "[NO_SUBTITLES] No speech detected.\n"
+                )
+            else:
+                target_srt = translate_srt(source_srt, target_lang=target_lang)
             target_srt_path = workspace / "target.srt"
             target_srt_path.write_text(target_srt, encoding="utf-8")
             qa_path, qa = write_translation_artifacts(workspace, source_srt, target_srt, target_lang=target_lang)
@@ -124,33 +162,48 @@ class LocalizationEngine:
                 "qa_local_path": str(qa_path),
                 "source_segments": source_segments,
                 "translated_segments": translated_segments,
+                "source_probe": source_probe,
             }
+            if no_subtitles:
+                qa["translated_lines"] = 0
+                translation_meta["source_segments"] = 0
+                translation_meta["translated_segments"] = 0
+                translation_meta["fallback_reason"] = fallback_reason
             end_step("translating", step)
 
             step = mark_step("synthesizing", "SYNTHESIZING", 60)
-            dub_text = srt_to_text(target_srt)
-            dub_mp3_path = synthesize_mp3(
-                dub_text,
-                voice_id=voice_id,
-                provider="azure-speech",
-                output_path=workspace / "dub.mp3",
-            )
-            dub_duration_sec = probe_duration_sec(dub_mp3_path)
-            on_log(
-                f"[loc] dub_audio_path={dub_mp3_path} duration_sec="
-                f"{dub_duration_sec if dub_duration_sec is not None else 'n/a'}"
-            )
+            dub_mp3_path: Path | None = None
+            dub_duration_sec = None
+            if not no_subtitles:
+                dub_text = srt_to_text(target_srt)
+                dub_mp3_path = synthesize_mp3(
+                    dub_text,
+                    voice_id=voice_id,
+                    provider="azure-speech",
+                    output_path=workspace / "dub.mp3",
+                )
+                dub_duration_sec = probe_duration_sec(dub_mp3_path)
+                on_log(
+                    f"[loc] dub_audio_path={dub_mp3_path} duration_sec="
+                    f"{dub_duration_sec if dub_duration_sec is not None else 'n/a'}"
+                )
+            else:
+                on_log("[loc] skip_tts fallback_reason=SILENT_AUDIO_OR_EMPTY_ASR")
             end_step("synthesizing", step)
 
             step = mark_step("rendering", "RENDERING", 78)
             mixed_wav = workspace / "mixed.wav"
-            mix_ducking(audio_wav, dub_mp3_path, mixed_wav, preserve_bgm=preserve_bgm, ducking=ducking)
+            if no_subtitles:
+                render_with_original_audio(source_video, mixed_wav)
+            else:
+                mix_ducking(audio_wav, dub_mp3_path, mixed_wav, preserve_bgm=preserve_bgm, ducking=ducking)
             localized_mp4_path = workspace / "localized.mp4"
             source_video_duration_sec = probe_duration_sec(source_video)
             mixed_audio_duration_sec = probe_duration_sec(mixed_wav)
             on_log(
                 "[loc][duration] pre_mux "
                 f"source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'} "
+                f"dub_audio_sec={dub_duration_sec if dub_duration_sec is not None else 'n/a'} "
                 f"mixed_audio_sec={mixed_audio_duration_sec if mixed_audio_duration_sec is not None else 'n/a'}"
             )
             mux(source_video, mixed_wav, localized_mp4_path, source_video_duration_sec=source_video_duration_sec)
@@ -174,14 +227,17 @@ class LocalizationEngine:
             step = mark_step("uploading", "UPLOADING", 90)
             output_key = f"outputs/{task_id}/localized.mp4"
             subtitle_key = f"outputs/{task_id}/target.srt"
-            audio_ext = ".mp3" if dub_mp3_path.suffix.lower() != ".wav" else ".wav"
-            audio_key = f"outputs/{task_id}/dub{audio_ext}"
             manifest_key = f"outputs/{task_id}/manifest.json"
 
             output_url = self.r2.upload_bytes(output_key, localized_mp4_path.read_bytes(), content_type="video/mp4")
             subtitle_url = self.r2.upload_bytes(subtitle_key, target_srt_path.read_bytes(), content_type="text/plain")
-            audio_content_type = "audio/wav" if audio_ext == ".wav" else "audio/mpeg"
-            audio_url = self.r2.upload_bytes(audio_key, dub_mp3_path.read_bytes(), content_type=audio_content_type)
+            audio_key = None
+            audio_url = None
+            if dub_mp3_path is not None:
+                audio_ext = ".mp3" if dub_mp3_path.suffix.lower() != ".wav" else ".wav"
+                audio_key = f"outputs/{task_id}/dub{audio_ext}"
+                audio_content_type = "audio/wav" if audio_ext == ".wav" else "audio/mpeg"
+                audio_url = self.r2.upload_bytes(audio_key, dub_mp3_path.read_bytes(), content_type=audio_content_type)
             manifest_url = self.r2.public_url(manifest_key)
 
             total_latency_ms = int((time.perf_counter() - started) * 1000)
@@ -190,11 +246,14 @@ class LocalizationEngine:
                 "video_url": output_url,
                 "subtitle_key": subtitle_key,
                 "subtitle_url": subtitle_url,
-                "audio_key": audio_key,
-                "audio_url": audio_url,
                 "manifest_key": manifest_key,
                 "manifest_url": manifest_url,
             }
+            if audio_key and audio_url:
+                outputs["audio_key"] = audio_key
+                outputs["audio_url"] = audio_url
+            elif no_subtitles:
+                outputs["audio_omitted_reason"] = "SILENT_AUDIO_OR_EMPTY_ASR"
             manifest = {
                 "task_id": task_id,
                 "service": "localization",
@@ -207,6 +266,11 @@ class LocalizationEngine:
                 },
                 "run_config_snapshot": run_config_snapshot,
                 "translation": translation_meta,
+                "metadata": {
+                    "policy": {
+                        "enforced": ["cannot_remove_burned_in_subtitles_baseline"],
+                    }
+                },
             }
             self.r2.put_json(manifest_key, manifest)
             end_step("uploading", step)
@@ -229,6 +293,7 @@ class LocalizationEngine:
                     "run_config_snapshot": run_config_snapshot,
                     "manifest_preview": manifest,
                     "translation": translation_meta,
+                    "policy": {"enforced": ["cannot_remove_burned_in_subtitles_baseline"]},
                 },
             )
         except Exception as exc:
