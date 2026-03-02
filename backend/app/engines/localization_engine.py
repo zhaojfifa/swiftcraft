@@ -21,6 +21,7 @@ from app.utils.ffmpeg_localization import (
     probe_av_streams,
     probe_duration_sec,
     render_with_original_audio,
+    speech_ratio_from_silencedetect,
 )
 from app.utils.translate_mm import translate_srt, write_translation_artifacts
 
@@ -93,6 +94,15 @@ class LocalizationEngine:
             except Exception:
                 return default
 
+        def _env_float(name: str, default: float) -> float:
+            value = os.getenv(name, "").strip()
+            if not value:
+                return default
+            try:
+                return float(value)
+            except Exception:
+                return default
+
         def _joined_asr_text(current_segments: list[Any]) -> str:
             return " ".join((str(getattr(seg, "text", "") or "").strip() for seg in current_segments)).strip()
 
@@ -134,6 +144,14 @@ class LocalizationEngine:
                 f"{normalized_wav_duration_sec if normalized_wav_duration_sec is not None else 'n/a'} "
                 f"rms_db={rms_db if rms_db is not None else 'n/a'}"
             )
+            speech_ratio_min = _env_float("ASR_SPEECH_RATIO_MIN", 0.12)
+            speech_ratio, silence_sec, audio_sec = speech_ratio_from_silencedetect(normalized_wav, on_log=on_log)
+            on_log(f"[loc] ASR_SPEECH_RATIO={speech_ratio if speech_ratio is not None else 'n/a'}")
+            on_log(f"[loc] ASR_SILENCE_SEC={silence_sec:.3f}")
+            on_log(f"[loc] ASR_AUDIO_SEC={audio_sec if audio_sec is not None else 'n/a'}")
+            on_log(f"[loc] ASR_SPEECH_GATE_MIN={speech_ratio_min}")
+            if speech_ratio is not None and speech_ratio < speech_ratio_min:
+                raise EngineRunError("NO_SPEECH_DETECTED: speech_ratio below threshold")
             end_step("extracting", step)
 
             step = mark_step("transcribing", "TRANSCRIBING", 25)

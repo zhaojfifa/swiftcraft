@@ -208,6 +208,65 @@ def audio_rms_db(input_wav: Path, on_log: Optional[Callable[[str], None]] = None
         return None
 
 
+def speech_ratio_from_silencedetect(
+    input_wav: Path,
+    on_log: Optional[Callable[[str], None]] = None,
+) -> tuple[Optional[float], float, Optional[float]]:
+    audio_sec = probe_duration_sec(input_wav, on_log=on_log)
+    if audio_sec is None or audio_sec <= 0:
+        return None, 0.0, audio_sec
+
+    silence_db = os.getenv("ASR_SILENCE_DB", "-35").strip() or "-35"
+    min_silence_sec = os.getenv("ASR_SILENCE_MIN_SEC", "0.20").strip() or "0.20"
+    filter_expr = f"silencedetect=noise={silence_db}dB:d={min_silence_sec}"
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-v",
+        "info",
+        "-i",
+        str(input_wav),
+        "-af",
+        filter_expr,
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        result = _run_cmd(
+            cmd,
+            label="speech_ratio_silencedetect",
+            timeout_sec=int(os.getenv("FFPROBE_TIMEOUT_SEC", "30")),
+            on_log=on_log,
+        )
+        stderr = result.stderr or ""
+    except Exception:
+        return None, 0.0, audio_sec
+
+    durations = re.findall(r"silence_duration:\s*([0-9]+(?:\.[0-9]+)?)", stderr, flags=re.IGNORECASE)
+    silence_sec = 0.0
+    for value in durations:
+        try:
+            silence_sec += max(0.0, float(value))
+        except Exception:
+            continue
+
+    starts = re.findall(r"silence_start:\s*([0-9]+(?:\.[0-9]+)?)", stderr, flags=re.IGNORECASE)
+    ends = re.findall(r"silence_end:\s*([0-9]+(?:\.[0-9]+)?)", stderr, flags=re.IGNORECASE)
+    if len(starts) > len(ends):
+        try:
+            open_start = float(starts[-1])
+            silence_sec += max(0.0, audio_sec - open_start)
+        except Exception:
+            pass
+
+    silence_sec = max(0.0, min(silence_sec, audio_sec))
+    speech_ratio = 1.0 - (silence_sec / audio_sec if audio_sec > 0 else 1.0)
+    speech_ratio = max(0.0, min(1.0, speech_ratio))
+    return speech_ratio, silence_sec, audio_sec
+
+
 def probe_av_streams(video_path: Path, on_log: Optional[Callable[[str], None]] = None) -> dict[str, Any]:
     cmd = [
         "ffprobe",

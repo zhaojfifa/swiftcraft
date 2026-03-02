@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import math
 from pathlib import Path
+import struct
+import wave
 
 import pytest
 
@@ -82,6 +85,27 @@ def _patch_engine_runtime(monkeypatch, module, tmp_path: Path) -> None:
     monkeypatch.setattr(module, "__file__", str(fake_engine_file))
     monkeypatch.setattr(module, "R2Client", _FakeR2)
     monkeypatch.setattr(module.httpx, "Client", _FakeHttpClient)
+
+
+def _write_tone_wav(path: Path, *, tone_sec: float, silence_sec_before: float = 0.0, silence_sec_after: float = 0.0) -> None:
+    sample_rate = 16000
+    amplitude = 14000
+    tone_hz = 440.0
+
+    def _silence_samples(seconds: float) -> list[int]:
+        return [0] * max(0, int(sample_rate * seconds))
+
+    def _tone_samples(seconds: float) -> list[int]:
+        count = max(0, int(sample_rate * seconds))
+        return [int(amplitude * math.sin(2.0 * math.pi * tone_hz * (i / sample_rate))) for i in range(count)]
+
+    samples = _silence_samples(silence_sec_before) + _tone_samples(tone_sec) + _silence_samples(silence_sec_after)
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        frames = b"".join(struct.pack("<h", max(-32768, min(32767, s))) for s in samples)
+        wf.writeframes(frames)
 
 
 def test_localization_silent_audio_no_subtitles(monkeypatch, tmp_path: Path):
@@ -294,3 +318,57 @@ def test_localization_tts_gate_fails_on_empty_text(monkeypatch, tmp_path: Path):
             )
         )
     assert ("FAILED", 100) in stages
+
+
+def test_localization_speech_gate_rejects_low_speech_ratio(monkeypatch, tmp_path: Path):
+    from app.engines import localization_engine as module
+
+    _patch_engine_runtime(monkeypatch, module, tmp_path)
+    wav_src = tmp_path / "mostly_silent.wav"
+    _write_tone_wav(wav_src, tone_sec=0.3, silence_sec_before=2.7, silence_sec_after=0.0)
+
+    def _extract(_video_path, wav_out, **_kwargs):
+        Path(wav_out).write_bytes(wav_src.read_bytes())
+
+    def _normalize(in_wav, out_wav, **_kwargs):
+        Path(out_wav).write_bytes(Path(in_wav).read_bytes())
+
+    monkeypatch.setattr(module, "extract_audio", _extract)
+    monkeypatch.setattr(module, "normalize_audio_for_asr", _normalize)
+    monkeypatch.setattr(module, "audio_rms_db", lambda *_args, **_kwargs: -20.0)
+    monkeypatch.setattr(module, "transcribe", lambda *_args, **_kwargs: [_Seg(start=0.0, end=1.0, text="hello")])
+
+    engine = LocalizationEngine()
+    record = TaskRecord(task_id="task-speech-gate-1", service="localization", mode="baseline", input_video_url="https://example/video.mp4")
+
+    with pytest.raises(EngineRunError, match="NO_SPEECH_DETECTED"):
+        _run_engine(engine, record)
+
+
+def test_localization_speech_gate_allows_tone_audio(monkeypatch, tmp_path: Path):
+    from app.engines import localization_engine as module
+
+    _patch_engine_runtime(monkeypatch, module, tmp_path)
+    wav_src = tmp_path / "tone.wav"
+    _write_tone_wav(wav_src, tone_sec=2.5, silence_sec_before=0.0, silence_sec_after=0.0)
+
+    def _extract(_video_path, wav_out, **_kwargs):
+        Path(wav_out).write_bytes(wav_src.read_bytes())
+
+    def _normalize(in_wav, out_wav, **_kwargs):
+        Path(out_wav).write_bytes(Path(in_wav).read_bytes())
+
+    monkeypatch.setattr(module, "extract_audio", _extract)
+    monkeypatch.setattr(module, "normalize_audio_for_asr", _normalize)
+    monkeypatch.setattr(module, "audio_rms_db", lambda *_args, **_kwargs: -18.0)
+
+    def _transcribe_called(*_args, **_kwargs):
+        raise EngineRunError("ASR_CALLED")
+
+    monkeypatch.setattr(module, "transcribe", _transcribe_called)
+
+    engine = LocalizationEngine()
+    record = TaskRecord(task_id="task-speech-gate-2", service="localization", mode="baseline", input_video_url="https://example/video.mp4")
+
+    with pytest.raises(EngineRunError, match="ASR_CALLED"):
+        _run_engine(engine, record)
