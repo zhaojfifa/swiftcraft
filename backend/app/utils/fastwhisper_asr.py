@@ -3,11 +3,13 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
 _RUNTIME_LOGGED = False
 _LAST_TRANSCRIBE_STATUS: dict[str, str] = {"status": "init", "reason": ""}
+_RUNTIME_INSTALL_ATTEMPTED = False
 
 
 @dataclass
@@ -62,6 +64,53 @@ def get_last_transcribe_status() -> dict[str, str]:
 def reset_last_transcribe_status() -> None:
     global _LAST_TRANSCRIBE_STATUS
     _LAST_TRANSCRIBE_STATUS = {"status": "init", "reason": ""}
+
+
+def _env_runtime_install_enabled() -> bool:
+    value = os.getenv("ASR_RUNTIME_INSTALL_ON_MISSING")
+    if value is None:
+        return True
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _try_runtime_install() -> bool:
+    global _RUNTIME_INSTALL_ATTEMPTED
+    if _RUNTIME_INSTALL_ATTEMPTED:
+        return False
+    _RUNTIME_INSTALL_ATTEMPTED = True
+    if not _env_runtime_install_enabled():
+        return False
+    print("[asr] faster_whisper missing -> attempting runtime install")
+    commands = [
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-cache-dir",
+            "ctranslate2>=4.3.0",
+            "tokenizers",
+            "huggingface-hub",
+            "tqdm",
+            "numpy",
+        ],
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-cache-dir",
+            "--no-deps",
+            "faster-whisper==1.0.3",
+        ],
+    ]
+    for cmd in commands:
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=180)
+        except Exception as exc:
+            print(f"[asr] runtime install failed cmd={' '.join(cmd)} err={type(exc).__name__}: {exc}")
+            return False
+    return True
 
 
 def _probe_duration_sec(audio_wav_path: str) -> float:
@@ -229,10 +278,20 @@ def transcribe(
     try:
         from faster_whisper import WhisperModel  # type: ignore
     except ModuleNotFoundError:
-        print("[asr] faster_whisper_not_installed -> fallback")
-        _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": "module_not_found"}
-        duration = _probe_duration_sec(audio_wav_path)
-        return _empty_fallback_segments(duration)
+        if _try_runtime_install():
+            try:
+                from faster_whisper import WhisperModel  # type: ignore
+                print("[asr] runtime install succeeded")
+            except ModuleNotFoundError:
+                print("[asr] runtime install did not provide faster_whisper -> fallback")
+                _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": "module_not_found"}
+                duration = _probe_duration_sec(audio_wav_path)
+                return _empty_fallback_segments(duration)
+        else:
+            print("[asr] faster_whisper_not_installed -> fallback")
+            _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": "module_not_found"}
+            duration = _probe_duration_sec(audio_wav_path)
+            return _empty_fallback_segments(duration)
 
     try:
         model = WhisperModel(model_name, device=device, compute_type=compute_type)

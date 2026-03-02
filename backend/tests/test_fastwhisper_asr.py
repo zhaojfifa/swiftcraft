@@ -68,3 +68,14 @@ def test_transcribe_sets_runtime_exception_status(monkeypatch):
     assert status["status"] == "fallback"
     assert status["reason"].startswith("runtime_exception:")
     sys.modules.pop("faster_whisper", None)
+
+
+def test_transcribe_module_missing_without_runtime_install(monkeypatch):
+    monkeypatch.delenv("ASR_RUNTIME_INSTALL_ON_MISSING", raising=False)
+    monkeypatch.setenv("ASR_RUNTIME_INSTALL_ON_MISSING", "0")
+    monkeypatch.setattr(asr, "_probe_duration_sec", lambda *_args, **_kwargs: 3.0)
+    result = asr.transcribe("dummy.wav")
+    status = asr.get_last_transcribe_status()
+    assert len(result) >= 2
+    assert status["status"] == "fallback"
+    assert status["reason"] == "module_not_found" or status["reason"].startswith("runtime_exception:")
