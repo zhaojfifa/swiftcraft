@@ -4,6 +4,9 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
+from app.engines.base import EngineRunError
 from app.engines.localization_engine import LocalizationEngine
 from app.models.task import TaskRecord
 
@@ -182,3 +185,61 @@ def test_localization_multi_segment_translation(monkeypatch, tmp_path: Path):
     assert "[MY] world" in subtitle_text
     assert result.metadata["translation"]["qa"]["translated_lines"] >= 2
     assert result.metadata["translation"]["translated_segments"] >= 2
+
+
+def test_localization_tts_gate_fails_on_empty_text(monkeypatch, tmp_path: Path):
+    from app.engines import localization_engine as module
+
+    _patch_engine_runtime(monkeypatch, module, tmp_path)
+    monkeypatch.setattr(module, "extract_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"wav"))
+    monkeypatch.setattr(module, "normalize_audio_for_asr", lambda *_args, **_kwargs: _args[1].write_bytes(b"norm"))
+    monkeypatch.setattr(module, "audio_rms_db", lambda *_args, **_kwargs: -18.0)
+    monkeypatch.setattr(
+        module,
+        "transcribe",
+        lambda *_args, **_kwargs: [_Seg(start=0.0, end=1.0, text="hello"), _Seg(start=1.1, end=2.0, text="world")],
+    )
+    monkeypatch.setattr(
+        module,
+        "segments_to_srt",
+        lambda *_args, **_kwargs: (
+            "1\n00:00:00,000 --> 00:00:01,000\nhello\n\n"
+            "2\n00:00:01,100 --> 00:00:02,000\nworld\n"
+        ),
+    )
+    monkeypatch.setattr(module, "translate_srt", lambda *_args, **_kwargs: "1\n00:00:00,000 --> 00:00:01,000\n[MY] hello\n")
+    monkeypatch.setattr(module, "srt_to_text", lambda *_args, **_kwargs: "   ")
+    monkeypatch.setattr(module, "mix_ducking", lambda *_args, **_kwargs: _args[2].write_bytes(b"mixed"))
+    monkeypatch.setattr(module, "render_with_original_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"orig-audio"))
+    monkeypatch.setattr(module, "mux", lambda *_args, **_kwargs: _args[2].write_bytes(b"localized-mp4"))
+    monkeypatch.setattr(
+        module,
+        "probe_duration_sec",
+        lambda p: 5.0 if Path(p).name in {"source.mp4", "source.wav", "source_norm.wav", "mixed.wav", "localized.mp4"} else None,
+    )
+    monkeypatch.setattr(
+        module,
+        "probe_av_streams",
+        lambda *_args, **_kwargs: {
+            "has_audio": True,
+            "has_subtitle_stream": False,
+            "subtitle_codecs": [],
+            "audio_codecs": ["aac"],
+        },
+    )
+
+    engine = LocalizationEngine()
+    record = TaskRecord(task_id="task-tts-empty-1", service="localization", mode="baseline", input_video_url="https://example/video.mp4")
+    stages: list[tuple[str, int]] = []
+
+    with pytest.raises(EngineRunError, match="TTS_TEXT_EMPTY"):
+        asyncio.run(
+            engine.run(
+                task_id=record.task_id,
+                record=record,
+                inputs={"inputs": {"target_lang": "my", "voice_id": "mm_female_1"}},
+                on_log=lambda _msg: None,
+                on_stage=lambda stage, progress: stages.append((stage, progress)),
+            )
+        )
+    assert ("FAILED", 100) in stages

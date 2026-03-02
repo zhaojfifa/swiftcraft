@@ -41,6 +41,8 @@ class LocalizationEngine:
         started = time.perf_counter()
         metrics: Dict[str, int] = {}
         translation_meta: Dict[str, Any] = {}
+        transcription_meta: Dict[str, Any] = {}
+        tts_meta: Dict[str, Any] = {}
         workspace = Path(__file__).resolve().parents[3] / "video_workspace" / "tasks" / task_id / "localization"
         workspace.mkdir(parents=True, exist_ok=True)
 
@@ -75,6 +77,10 @@ class LocalizationEngine:
                 return probe_duration_sec(path, on_log=on_log)
             except TypeError:
                 return probe_duration_sec(path)
+
+        def _contains_fallback_marker(text: str) -> bool:
+            lowered = (text or "").lower()
+            return "localized narration." in lowered or "[no_subtitles]" in lowered
 
         try:
             on_stage("SUBMITTED", 1)
@@ -114,6 +120,7 @@ class LocalizationEngine:
 
             step = mark_step("transcribing", "TRANSCRIBING", 25)
             segments = transcribe(str(normalized_wav))
+            source_text = " ".join((str(getattr(seg, "text", "") or "").strip() for seg in segments)).strip()
             source_srt = segments_to_srt(segments)
             source_srt_path = workspace / "source.srt"
             source_srt_path.write_text(source_srt, encoding="utf-8")
@@ -121,8 +128,16 @@ class LocalizationEngine:
             first_ts = f"{segments[0].start:.3f}" if segments else "n/a"
             last_ts = f"{segments[-1].end:.3f}" if segments else "n/a"
             on_log(f"[loc] asr_segments={num_segments} first_ts={first_ts}s last_ts={last_ts}s")
-            if any((getattr(seg, "text", "") or "").strip() == "Localized narration." for seg in segments):
+            on_log(f"[loc] LOC_TEXT_SOURCE=asr text_len={len(source_text)} num_segments={num_segments}")
+            if _contains_fallback_marker(source_text):
                 on_log("[loc][warn] asr_fallback_phrase_detected -> check faster-whisper runtime / audio content")
+            transcription_meta = {
+                "source_lang_guess": (os.getenv("ASR_LANGUAGE_HINT") or os.getenv("FASTWHISPER_LANGUAGE") or "").strip() or "unknown",
+                "text_len": len(source_text),
+                "segments": num_segments,
+                "fallback_detected": _contains_fallback_marker(source_text),
+                "model_used": (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "small").strip() or "small",
+            }
             no_subtitles = not segments or (rms_db is not None and rms_db <= -40.0)
             end_step("transcribing", step)
 
@@ -162,6 +177,9 @@ class LocalizationEngine:
                 )
             else:
                 target_srt = translate_srt(source_srt, target_lang=target_lang)
+                translated_plain = (target_srt or "").strip()
+                if not translated_plain or _contains_fallback_marker(translated_plain):
+                    raise EngineRunError("TRANSLATION_EMPTY_OR_FALLBACK: translated subtitle content is empty/fallback")
             target_srt_path = workspace / "target.srt"
             target_srt_path.write_text(target_srt, encoding="utf-8")
             qa_path, qa = write_translation_artifacts(workspace, source_srt, target_srt, target_lang=target_lang)
@@ -192,6 +210,9 @@ class LocalizationEngine:
             dub_duration_sec = None
             if not no_subtitles:
                 dub_text = srt_to_text(target_srt)
+                on_log(f"[loc] LOC_TEXT_SOURCE=asr text_len={len(dub_text.strip())} num_segments={translated_segments}")
+                if not dub_text.strip():
+                    raise EngineRunError("TTS_TEXT_EMPTY: empty text passed to synthesizer")
                 dub_mp3_path = synthesize_mp3(
                     dub_text,
                     voice_id=voice_id,
@@ -203,8 +224,14 @@ class LocalizationEngine:
                     f"[loc] dub_audio_path={dub_mp3_path} duration_sec="
                     f"{dub_duration_sec if dub_duration_sec is not None else 'n/a'}"
                 )
+                tts_meta = {
+                    "voice_id": voice_id,
+                    "text_len": len(dub_text.strip()),
+                    "audio_duration_sec": dub_duration_sec,
+                }
             else:
                 on_log("[loc] skip_tts fallback_reason=SILENT_AUDIO_OR_EMPTY_ASR")
+                tts_meta = {"voice_id": voice_id, "text_len": 0, "audio_duration_sec": None}
             end_step("synthesizing", step)
 
             step = mark_step("rendering", "RENDERING", 78)
@@ -331,6 +358,8 @@ class LocalizationEngine:
                 },
                 "run_config_snapshot": run_config_snapshot,
                 "translation": translation_meta,
+                "transcription": {"qa": transcription_meta},
+                "tts": {"qa": tts_meta},
                 "metadata": {
                     "source_probe": source_probe,
                     "policy": {
@@ -359,6 +388,8 @@ class LocalizationEngine:
                     "run_config_snapshot": run_config_snapshot,
                     "manifest_preview": manifest,
                     "translation": translation_meta,
+                    "transcription": {"qa": transcription_meta},
+                    "tts": {"qa": tts_meta},
                     "policy": {"enforced": policy_flags},
                     "source_probe": source_probe,
                 },
