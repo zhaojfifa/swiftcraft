@@ -182,6 +182,8 @@ class LocalizationEngine:
                 )
                 attempt_text = _joined_asr_text(attempt_segments)
                 attempt_fallback = _contains_fallback_marker(attempt_text)
+                on_log(f"[loc] ASR_TEXT_LEN[{lang}]={len(attempt_text)}")
+                on_log(f"[loc] ASR_TEXT_PREVIEW[{lang}]={attempt_text[:120]}")
                 if idx == 1:
                     asr_retry_used = True
                 segments = attempt_segments

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import asyncio
+import re
 import threading
 import time
 import traceback
@@ -411,11 +412,19 @@ class TaskService:
         message = str(exc)
         lower = message.lower()
         reason_code = "engine_error"
-        if "content_policy_violation" in lower:
+        if "asr_empty_or_fallback" in lower:
+            reason_code = "asr_empty_or_fallback"
+        elif "no_speech_detected" in lower:
+            reason_code = "no_speech_detected"
+        elif "translation_empty_or_fallback" in lower:
+            reason_code = "translation_empty_or_fallback"
+        elif "tts_text_empty" in lower:
+            reason_code = "tts_text_empty"
+        elif "content_policy_violation" in lower:
             reason_code = "content_policy_violation"
         elif isinstance(exc, TimeoutError) or "timeout" in lower:
             reason_code = "timeout"
-        elif "fal" in lower:
+        elif re.search(r"\bfal(\.ai)?\b", lower):
             reason_code = "fal_error"
         return {
             "reason_code": reason_code,
