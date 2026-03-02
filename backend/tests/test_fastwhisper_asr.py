@@ -48,3 +48,23 @@ def test_transcribe_empty_raw_segments_fallback_multi_cues(monkeypatch):
     assert all(item.text.strip() for item in result)
 
     sys.modules.pop("faster_whisper", None)
+
+
+def test_env_int_parses_numeric(monkeypatch):
+    monkeypatch.setenv("ASR_BEAM_SIZE", "7")
+    assert asr._env_int("ASR_BEAM_SIZE", 5) == 7
+
+
+def test_transcribe_sets_runtime_exception_status(monkeypatch):
+    class BrokenWhisperModel:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("ct2 broken")
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=BrokenWhisperModel))
+    monkeypatch.setattr(asr, "_probe_duration_sec", lambda *_args, **_kwargs: 4.0)
+    result = asr.transcribe("dummy.wav")
+    status = asr.get_last_transcribe_status()
+    assert len(result) >= 2
+    assert status["status"] == "fallback"
+    assert status["reason"].startswith("runtime_exception:")
+    sys.modules.pop("faster_whisper", None)

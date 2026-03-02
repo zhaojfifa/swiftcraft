@@ -11,7 +11,12 @@ from app.engines.base import EngineResult, EngineRunError
 from app.models.task import TaskRecord
 from app.services.r2_client import R2Client
 from app.utils.dubbing_service import srt_to_text, synthesize_mp3
-from app.utils.fastwhisper_asr import segments_to_srt, transcribe
+from app.utils.fastwhisper_asr import (
+    get_last_transcribe_status,
+    reset_last_transcribe_status,
+    segments_to_srt,
+    transcribe,
+)
 from app.utils.ffmpeg_localization import (
     audio_rms_db,
     extract_audio,
@@ -155,7 +160,7 @@ class LocalizationEngine:
             end_step("extracting", step)
 
             step = mark_step("transcribing", "TRANSCRIBING", 25)
-            asr_model = (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "small").strip() or "small"
+            asr_model = (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "medium").strip() or "medium"
             asr_beam_size = _env_int("ASR_BEAM_SIZE", _env_int("FASTWHISPER_BEAM_SIZE", 5))
             asr_vad_filter = _env_bool("ASR_VAD_FILTER", _env_bool("FASTWHISPER_VAD_FILTER", True))
             normalized_duration_for_gate = (
@@ -168,11 +173,13 @@ class LocalizationEngine:
             segments: list[Any] = []
             raw_text = ""
             fallback_detected = True
+            runtime_unavailable_reason: str | None = None
 
             for idx, lang in enumerate(("zh", "en")):
                 if idx == 1 and silent_for_gate:
                     break
                 on_log(f"[loc] ASR_LANG_TRY={lang}")
+                reset_last_transcribe_status()
                 attempt_segments = transcribe(
                     str(normalized_wav),
                     model_name=asr_model_used,
@@ -180,8 +187,15 @@ class LocalizationEngine:
                     vad_filter=asr_vad_filter,
                     language=lang,
                 )
+                asr_status = get_last_transcribe_status()
+                on_log(f"[loc] ASR_RUNTIME_STATUS[{lang}]={asr_status.get('status')} reason={asr_status.get('reason')}")
                 attempt_text = _joined_asr_text(attempt_segments)
                 attempt_fallback = _contains_fallback_marker(attempt_text)
+                status_reason = str(asr_status.get("reason") or "")
+                if attempt_fallback and (
+                    status_reason == "module_not_found" or status_reason.startswith("runtime_exception:")
+                ):
+                    runtime_unavailable_reason = status_reason
                 on_log(f"[loc] ASR_TEXT_LEN[{lang}]={len(attempt_text)}")
                 on_log(f"[loc] ASR_TEXT_PREVIEW[{lang}]={attempt_text[:120]}")
                 if idx == 1:
@@ -198,6 +212,10 @@ class LocalizationEngine:
             on_log(f"[loc] ASR_RETRY_USED={'true' if asr_retry_used else 'false'} ASR_MODEL_USED={asr_model_used}")
             on_log(f"[loc] ASR_LANG_FINAL={asr_lang_final}")
 
+            if runtime_unavailable_reason and (not segments or fallback_detected):
+                raise EngineRunError(
+                    f"ASR_RUNTIME_UNAVAILABLE: {runtime_unavailable_reason}; ensure faster-whisper runtime is healthy"
+                )
             if (not segments or fallback_detected) and not silent_for_gate:
                 raise EngineRunError(
                     "ASR_EMPTY_OR_FALLBACK: transcribe returned empty/fallback text for non-silent audio"
@@ -221,7 +239,7 @@ class LocalizationEngine:
                 "text_len": len(source_text),
                 "segments": num_segments,
                 "fallback_detected": _contains_fallback_marker(source_text),
-                "model_used": (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "small").strip() or "small",
+                "model_used": (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "medium").strip() or "medium",
             }
             no_subtitles = not segments or (rms_db is not None and rms_db <= -40.0)
             end_step("transcribing", step)

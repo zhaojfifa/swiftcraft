@@ -414,6 +414,8 @@ class TaskService:
         reason_code = "engine_error"
         if "asr_empty_or_fallback" in lower:
             reason_code = "asr_empty_or_fallback"
+        elif "asr_runtime_unavailable" in lower:
+            reason_code = "asr_runtime_unavailable"
         elif "no_speech_detected" in lower:
             reason_code = "no_speech_detected"
         elif "translation_empty_or_fallback" in lower:
