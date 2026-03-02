@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, List, Optional
 
 _RUNTIME_LOGGED = False
+_LAST_TRANSCRIBE_STATUS: dict[str, str] = {"status": "init", "reason": ""}
 
 
 @dataclass
@@ -26,6 +27,10 @@ def _env_bool(name: str, default: bool) -> bool:
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name, "").strip()
     if not value:
+        return default
+    try:
+        return int(value)
+    except Exception:
         return default
 
 
@@ -48,10 +53,15 @@ def _env_first(names: list[str], default: str = "") -> str:
         if stripped:
             return stripped
     return default
-    try:
-        return int(value)
-    except Exception:
-        return default
+
+
+def get_last_transcribe_status() -> dict[str, str]:
+    return dict(_LAST_TRANSCRIBE_STATUS)
+
+
+def reset_last_transcribe_status() -> None:
+    global _LAST_TRANSCRIBE_STATUS
+    _LAST_TRANSCRIBE_STATUS = {"status": "init", "reason": ""}
 
 
 def _probe_duration_sec(audio_wav_path: str) -> float:
@@ -185,7 +195,9 @@ def transcribe(
     no_speech_threshold: float | None = None,
 ) -> List[ASRSegment]:
     global _RUNTIME_LOGGED
-    model_name = (model_name or _env_first(["ASR_MODEL", "FASTWHISPER_MODEL"], "small")).strip() or "small"
+    global _LAST_TRANSCRIBE_STATUS
+    _LAST_TRANSCRIBE_STATUS = {"status": "start", "reason": ""}
+    model_name = (model_name or _env_first(["ASR_MODEL", "FASTWHISPER_MODEL"], "medium")).strip() or "medium"
     device = os.getenv("FASTWHISPER_DEVICE", "cpu").strip() or "cpu"
     compute_type = os.getenv("FASTWHISPER_COMPUTE_TYPE", "int8").strip() or "int8"
     if beam_size is None:
@@ -218,6 +230,7 @@ def transcribe(
         from faster_whisper import WhisperModel  # type: ignore
     except ModuleNotFoundError:
         print("[asr] faster_whisper_not_installed -> fallback")
+        _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": "module_not_found"}
         duration = _probe_duration_sec(audio_wav_path)
         return _empty_fallback_segments(duration)
 
@@ -248,16 +261,20 @@ def transcribe(
             raw_segments, _ = model.transcribe(audio_wav_path, **fallback_kwargs)
     except Exception as exc:
         print(f"[asr] exception={type(exc).__name__}: {exc} -> fallback")
+        _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": f"runtime_exception:{type(exc).__name__}"}
         duration = _probe_duration_sec(audio_wav_path)
         return _empty_fallback_segments(duration)
 
     segments = _to_segments(raw_segments)
     total_duration = _probe_duration_sec(audio_wav_path)
     if len(segments) == 1 and (segments[0].end - segments[0].start) >= 2.5:
+        _LAST_TRANSCRIBE_STATUS = {"status": "ok", "reason": "single_segment_split"}
         return _split_single_segment(segments[0], total_duration=total_duration)
     if segments:
+        _LAST_TRANSCRIBE_STATUS = {"status": "ok", "reason": "segments"}
         return segments
     print("[asr] empty_segments -> fallback")
+    _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": "empty_segments"}
     return _empty_fallback_segments(total_duration)
 
 
