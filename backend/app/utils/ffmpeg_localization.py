@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -78,6 +79,63 @@ def _run_cmd(
     return cp
 
 
+def run_ffmpeg(cmd, *, timeout_sec: int = 120, tag: str = "ffmpeg", on_log=None) -> None:
+    """
+    Run ffmpeg with hard timeout.
+    - logs command
+    - captures stderr tail
+    - kills process group on timeout
+    """
+    log = on_log or (lambda msg: None)
+    try:
+        cmd_list = _normalize_cmd(cmd)
+    except NameError:
+        cmd_list = [c.decode("utf-8", "replace") if isinstance(c, (bytes, bytearray)) else str(c) for c in cmd]
+    try:
+        cmd_str = _fmt_cmd(cmd)
+    except NameError:
+        cmd_str = " ".join(cmd_list)
+
+    log(f"[{tag}] cmd={cmd_str}")
+    started = time.perf_counter()
+
+    popen_kwargs = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+    }
+    if hasattr(os, "setsid") and os.name != "nt":
+        popen_kwargs["preexec_fn"] = os.setsid
+    elif hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+    proc = subprocess.Popen(cmd_list, **popen_kwargs)
+    try:
+        out, err = proc.communicate(timeout=timeout_sec)
+    except subprocess.TimeoutExpired:
+        log(f"[{tag}][timeout] exceeded {timeout_sec}s -> killing process group")
+        try:
+            if hasattr(os, "killpg") and os.name != "nt":
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+        except Exception as e:
+            log(f"[{tag}][timeout][kill_error] {type(e).__name__}: {e}")
+        out, err = proc.communicate()
+        tail = (err or "")[-2000:]
+        raise RuntimeError(f"{tag} timeout after {timeout_sec}s. stderr_tail={tail!r}")
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    if proc.returncode != 0:
+        tail = (err or "")[-2000:]
+        raise RuntimeError(f"{tag} failed rc={proc.returncode} elapsed_ms={elapsed_ms}. stderr_tail={tail!r}")
+
+    tail = (err or "")[-500:]
+    if tail.strip():
+        log(f"[{tag}][stderr_tail] {tail.strip()}")
+    log(f"[{tag}] ok elapsed_ms={elapsed_ms}")
+
+
 def probe_duration_sec(path: Path, on_log: Optional[Callable[[str], None]] = None) -> Optional[float]:
     cmd = [
         "ffprobe",
@@ -117,7 +175,7 @@ def normalize_audio_for_asr(input_wav: Path, output_wav: Path, on_log: Optional[
         "16000",
         str(output_wav),
     ]
-    _run_cmd(cmd, label="normalize_audio", timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_NORM", "120")), on_log=on_log)
+    run_ffmpeg(cmd, timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_NORM", "120")), tag="ffmpeg_norm", on_log=on_log)
 
 
 def audio_rms_db(input_wav: Path, on_log: Optional[Callable[[str], None]] = None) -> Optional[float]:
@@ -212,7 +270,12 @@ def render_with_original_audio(video_in: Path, output_wav: Path, on_log: Optiona
         "48000",
         str(output_wav),
     ]
-    _run_cmd(cmd, label="render_with_original_audio", timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_RENDER_AUDIO", "120")), on_log=on_log)
+    run_ffmpeg(
+        cmd,
+        timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_RENDER_AUDIO", "120")),
+        tag="ffmpeg_render_audio",
+        on_log=on_log,
+    )
 
 
 def extract_audio(video_path: Path, wav_out: Path, on_log: Optional[Callable[[str], None]] = None) -> None:
@@ -231,7 +294,7 @@ def extract_audio(video_path: Path, wav_out: Path, on_log: Optional[Callable[[st
         "16000",
         str(wav_out),
     ]
-    _run_cmd(cmd, label="extract_audio", timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_EXTRACT", "120")), on_log=on_log)
+    run_ffmpeg(cmd, timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_EXTRACT", "120")), tag="ffmpeg_extract", on_log=on_log)
 
 
 def mix_ducking(
@@ -255,7 +318,12 @@ def mix_ducking(
             "48000",
             str(mixed_wav_out),
         ]
-        _run_cmd(cmd, label="mix_ducking_passthrough", timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MIX", "180")), on_log=on_log)
+        run_ffmpeg(
+            cmd,
+            timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MIX", "180")),
+            tag="ffmpeg_mix_passthrough",
+            on_log=on_log,
+        )
         return
 
     if ducking:
@@ -278,7 +346,7 @@ def mix_ducking(
         "-shortest",
         str(mixed_wav_out),
     ]
-    _run_cmd(cmd, label="mix_ducking", timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MIX", "180")), on_log=on_log)
+    run_ffmpeg(cmd, timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MIX", "180")), tag="ffmpeg_mix", on_log=on_log)
 
 
 def mux(
@@ -315,7 +383,7 @@ def mux(
             "-shortest",
             str(mp4_out),
         ]
-        _run_cmd(cmd, label="mux", timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MUX", "180")), on_log=on_log)
+        run_ffmpeg(cmd, timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MUX", "180")), tag="ffmpeg_mux", on_log=on_log)
         return
 
     cmd = [
@@ -338,4 +406,4 @@ def mux(
         "-shortest",
         str(mp4_out),
     ]
-    _run_cmd(cmd, label="mux", timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MUX", "180")), on_log=on_log)
+    run_ffmpeg(cmd, timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MUX", "180")), tag="ffmpeg_mux", on_log=on_log)

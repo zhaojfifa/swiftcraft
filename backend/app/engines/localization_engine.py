@@ -238,7 +238,7 @@ class LocalizationEngine:
                     mix_ducking(audio_wav, dub_mp3_path, mixed_wav, preserve_bgm=preserve_bgm, ducking=ducking, on_log=on_log)
                 mixed_audio_duration_sec = _probe_duration(mixed_wav)
                 on_log(
-                    "[loc][render] mix_done "
+                    "[loc][render] mix_end "
                     f"elapsed_ms={int((time.perf_counter() - mix_started) * 1000)} "
                     f"mixed_wav={mixed_wav} exists={mixed_wav.exists()} size={_file_size(mixed_wav)} "
                     f"mixed_audio_sec={mixed_audio_duration_sec if mixed_audio_duration_sec is not None else 'n/a'}"
@@ -257,7 +257,7 @@ class LocalizationEngine:
                 mux(source_video, mixed_wav, localized_mp4_path, source_video_duration_sec=source_video_duration_sec, on_log=on_log)
                 output_video_duration_sec = _probe_duration(localized_mp4_path)
                 on_log(
-                    "[loc][render] mux_done "
+                    "[loc][render] mux_end "
                     f"elapsed_ms={int((time.perf_counter() - mux_started) * 1000)} "
                     f"output_exists={localized_mp4_path.exists()} size={_file_size(localized_mp4_path)} "
                     f"output_video_sec={output_video_duration_sec if output_video_duration_sec is not None else 'n/a'}"
