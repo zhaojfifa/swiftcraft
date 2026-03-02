@@ -193,7 +193,7 @@ class LocalizationEngine:
                 attempt_fallback = _contains_fallback_marker(attempt_text)
                 status_reason = str(asr_status.get("reason") or "")
                 if attempt_fallback and (
-                    status_reason == "module_not_found" or status_reason.startswith("runtime_exception:")
+                    status_reason.startswith("module_not_found") or status_reason.startswith("runtime_exception:")
                 ):
                     runtime_unavailable_reason = status_reason
                 on_log(f"[loc] ASR_TEXT_LEN[{lang}]={len(attempt_text)}")

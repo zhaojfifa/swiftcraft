@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
@@ -277,24 +278,35 @@ def transcribe(
 
     try:
         from faster_whisper import WhisperModel  # type: ignore
-    except ModuleNotFoundError:
+    except ModuleNotFoundError as exc:
+        missing_module = getattr(exc, "name", "unknown")
         if _try_runtime_install():
             try:
                 from faster_whisper import WhisperModel  # type: ignore
                 print("[asr] runtime install succeeded")
-            except ModuleNotFoundError:
-                print("[asr] runtime install did not provide faster_whisper -> fallback")
-                _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": "module_not_found"}
+            except ModuleNotFoundError as retry_exc:
+                retry_missing_module = getattr(retry_exc, "name", missing_module)
+                print(
+                    f"[asr] runtime install did not provide faster_whisper -> fallback "
+                    f"missing_module={retry_missing_module}"
+                )
+                _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": f"module_not_found:{retry_missing_module}"}
                 duration = _probe_duration_sec(audio_wav_path)
                 return _empty_fallback_segments(duration)
         else:
-            print("[asr] faster_whisper_not_installed -> fallback")
-            _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": "module_not_found"}
+            print(f"[asr] faster_whisper_not_installed -> fallback missing_module={missing_module}")
+            _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": f"module_not_found:{missing_module}"}
             duration = _probe_duration_sec(audio_wav_path)
             return _empty_fallback_segments(duration)
 
     try:
+        model_load_started = time.perf_counter()
+        print(
+            f"[asr] model_load start model={model_name} device={device} compute={compute_type}"
+        )
         model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        model_load_elapsed_ms = int((time.perf_counter() - model_load_started) * 1000)
+        print(f"[asr] model_load ok elapsed_ms={model_load_elapsed_ms}")
         full_kwargs: dict[str, Any] = {
             "beam_size": beam_size,
             "vad_filter": vad_filter,
@@ -308,6 +320,11 @@ def transcribe(
             full_kwargs["language"] = language
         if no_speech_threshold is not None:
             full_kwargs["no_speech_threshold"] = no_speech_threshold
+        transcribe_started = time.perf_counter()
+        print(
+            f"[asr] transcribe start model={model_name} language={language} "
+            f"beam={beam_size} vad={vad_filter}"
+        )
         try:
             raw_segments, _ = model.transcribe(audio_wav_path, **full_kwargs)
         except TypeError:
@@ -318,6 +335,13 @@ def transcribe(
             if language:
                 fallback_kwargs["language"] = language
             raw_segments, _ = model.transcribe(audio_wav_path, **fallback_kwargs)
+        transcribe_elapsed_ms = int((time.perf_counter() - transcribe_started) * 1000)
+        preview_segments = _to_segments(raw_segments)
+        preview_text = " ".join(seg.text for seg in preview_segments).strip()
+        print(
+            f"[asr] transcribe ok elapsed_ms={transcribe_elapsed_ms} "
+            f"text_len={len(preview_text)}"
+        )
     except Exception as exc:
         print(f"[asr] exception={type(exc).__name__}: {exc} -> fallback")
         _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": f"runtime_exception:{type(exc).__name__}"}
