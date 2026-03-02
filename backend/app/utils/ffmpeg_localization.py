@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 
 def _run_ffmpeg(cmd: list[str]) -> None:
@@ -12,6 +13,27 @@ def _run_ffmpeg(cmd: list[str]) -> None:
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or "").strip()
         raise RuntimeError(f"ffmpeg command failed: {stderr[-400:]}") from exc
+
+
+def probe_duration_sec(path: Path) -> Optional[float]:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        value = float((result.stdout or "").strip())
+        if value >= 0:
+            return value
+        return None
+    except Exception:
+        return None
 
 
 def extract_audio(video_path: Path, wav_out: Path) -> None:
@@ -31,8 +53,26 @@ def extract_audio(video_path: Path, wav_out: Path) -> None:
     _run_ffmpeg(cmd)
 
 
-def mix_ducking(original_wav: Path, dub_mp3: Path, mixed_wav_out: Path, ducking: bool = True) -> None:
+def mix_ducking(
+    original_wav: Path,
+    dub_mp3: Path,
+    mixed_wav_out: Path,
+    preserve_bgm: bool = True,
+    ducking: bool = True,
+) -> None:
     mixed_wav_out.parent.mkdir(parents=True, exist_ok=True)
+    if not preserve_bgm:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(dub_mp3),
+            "-ar",
+            "48000",
+            str(mixed_wav_out),
+        ]
+        _run_ffmpeg(cmd)
+        return
     if ducking:
         filter_complex = "[0:a][1:a]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=400[a]"
     else:
@@ -55,8 +95,34 @@ def mix_ducking(original_wav: Path, dub_mp3: Path, mixed_wav_out: Path, ducking:
     _run_ffmpeg(cmd)
 
 
-def mux(video_in: Path, mixed_wav: Path, mp4_out: Path) -> None:
+def mux(video_in: Path, mixed_wav: Path, mp4_out: Path, source_video_duration_sec: Optional[float] = None) -> None:
     mp4_out.parent.mkdir(parents=True, exist_ok=True)
+    duration = source_video_duration_sec if source_video_duration_sec and source_video_duration_sec > 0 else None
+    if duration is not None:
+        duration_text = f"{duration:.3f}"
+        filter_complex = f"[1:a]apad,atrim=0:{duration_text}[dub];[dub]asetpts=N/SR/TB[aout]"
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(video_in),
+            "-i",
+            str(mixed_wav),
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "0:v:0",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(mp4_out),
+        ]
+        _run_ffmpeg(cmd)
+        return
     cmd = [
         "ffmpeg",
         "-y",
@@ -72,6 +138,8 @@ def mux(video_in: Path, mixed_wav: Path, mp4_out: Path) -> None:
         "copy",
         "-c:a",
         "aac",
+        "-af",
+        "apad",
         "-shortest",
         str(mp4_out),
     ]

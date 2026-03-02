@@ -48,7 +48,8 @@ def transcribe(audio_wav_path: str) -> List[ASRSegment]:
     model_name = os.getenv("FASTWHISPER_MODEL", "small").strip() or "small"
     device = os.getenv("FASTWHISPER_DEVICE", "cpu").strip() or "cpu"
     compute_type = os.getenv("FASTWHISPER_COMPUTE_TYPE", "int8").strip() or "int8"
-    vad_filter = os.getenv("FASTWHISPER_VAD_FILTER", "1").strip().lower() in {"1", "true", "yes", "on"}
+    # Baseline localization defaults to VAD off unless explicitly enabled by env.
+    vad_filter = os.getenv("FASTWHISPER_VAD_FILTER", "0").strip().lower() in {"1", "true", "yes", "on"}
 
     try:
         from faster_whisper import WhisperModel  # type: ignore
