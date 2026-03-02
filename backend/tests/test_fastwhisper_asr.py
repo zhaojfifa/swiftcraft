@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+import sys
+from types import SimpleNamespace
+
+from app.utils import fastwhisper_asr as asr
+
+
+def test_split_single_segment_into_multi_cues():
+    seg = asr.ASRSegment(
+        start=0.0,
+        end=5.0,
+        text="Hello world. This is a longer sample sentence, and it should split into multiple subtitle cues.",
+    )
+    split = asr._split_single_segment(seg, total_duration=5.0)
+    assert len(split) >= 2
+    assert abs(split[-1].end - 5.0) < 1e-6
+    assert all(item.end > item.start for item in split)
+
+
+def test_segments_to_srt_outputs_multiple_cues():
+    segments = [
+        asr.ASRSegment(start=0.0, end=1.5, text="Line one."),
+        asr.ASRSegment(start=1.5, end=3.0, text="Line two."),
+    ]
+    srt = asr.segments_to_srt(segments)
+    assert srt.count("-->") == 2
+    assert "00:00:00,000 --> 00:00:01,500" in srt
+    assert "00:00:01,500 --> 00:00:03,000" in srt
+
+
+def test_transcribe_empty_raw_segments_fallback_multi_cues(monkeypatch):
+    class FakeWhisperModel:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def transcribe(self, *_args, **_kwargs):
+            return [], {}
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=FakeWhisperModel))
+    monkeypatch.setattr(asr, "_probe_duration_sec", lambda *_args, **_kwargs: 6.0)
+    monkeypatch.setenv("FASTWHISPER_VAD_FILTER", "1")
+    monkeypatch.setenv("FASTWHISPER_WORD_TIMESTAMPS", "1")
+
+    result = asr.transcribe("dummy.wav")
+    assert len(result) >= 2
+    assert abs(result[-1].end - 6.0) < 1e-6
+    assert all(item.text.strip() for item in result)
+
+    sys.modules.pop("faster_whisper", None)
