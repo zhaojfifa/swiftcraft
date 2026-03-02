@@ -294,3 +294,104 @@ def test_localization_tts_gate_fails_on_empty_text(monkeypatch, tmp_path: Path):
             )
         )
     assert ("FAILED", 100) in stages
+
+
+def test_localization_asr_lang_fallback_zh_then_en(monkeypatch, tmp_path: Path):
+    from app.engines import localization_engine as module
+
+    _patch_engine_runtime(monkeypatch, module, tmp_path)
+    monkeypatch.setattr(module, "extract_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"wav"))
+    monkeypatch.setattr(module, "normalize_audio_for_asr", lambda *_args, **_kwargs: _args[1].write_bytes(b"norm"))
+    monkeypatch.setattr(module, "audio_rms_db", lambda *_args, **_kwargs: -20.0)
+    calls: list[str | None] = []
+
+    def _transcribe(*_args, **kwargs):
+        lang = kwargs.get("language")
+        calls.append(lang)
+        if lang == "zh":
+            return [_Seg(start=0.0, end=2.0, text="Localized narration.")]
+        return [_Seg(start=0.0, end=2.0, text="hello from english")]
+
+    monkeypatch.setattr(module, "transcribe", _transcribe)
+    monkeypatch.setattr(
+        module,
+        "segments_to_srt",
+        lambda *_args, **_kwargs: "1\n00:00:00,000 --> 00:00:02,000\nhello from english\n",
+    )
+    monkeypatch.setattr(module, "translate_srt", lambda srt, **_kwargs: srt)
+    monkeypatch.setattr(module, "srt_to_text", lambda s: s.replace("\n", " "))
+    monkeypatch.setattr(module, "synthesize_mp3", _fake_synthesize_mp3)
+    monkeypatch.setattr(module, "mix_ducking", lambda *_args, **_kwargs: _args[2].write_bytes(b"mixed"))
+    monkeypatch.setattr(module, "render_with_original_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"orig-audio"))
+    monkeypatch.setattr(module, "mux", lambda *_args, **_kwargs: _args[2].write_bytes(b"localized-mp4"))
+    monkeypatch.setattr(
+        module,
+        "probe_duration_sec",
+        lambda p: 5.0 if Path(p).name in {"source.mp4", "source.wav", "source_norm.wav", "mixed.wav", "localized.mp4"} else 2.0,
+    )
+    monkeypatch.setattr(
+        module,
+        "probe_av_streams",
+        lambda *_args, **_kwargs: {
+            "has_audio": True,
+            "has_subtitle_stream": False,
+            "subtitle_codecs": [],
+            "audio_codecs": ["aac"],
+        },
+    )
+
+    engine = LocalizationEngine()
+    record = TaskRecord(task_id="task-lang-fallback-1", service="localization", mode="baseline", input_video_url="https://example/video.mp4")
+    result, _logs, _stages = _run_engine(engine, record)
+
+    assert result.output_url is not None
+    assert calls[:2] == ["zh", "en"]
+
+
+def test_localization_asr_lang_zh_success_no_en_retry(monkeypatch, tmp_path: Path):
+    from app.engines import localization_engine as module
+
+    _patch_engine_runtime(monkeypatch, module, tmp_path)
+    monkeypatch.setattr(module, "extract_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"wav"))
+    monkeypatch.setattr(module, "normalize_audio_for_asr", lambda *_args, **_kwargs: _args[1].write_bytes(b"norm"))
+    monkeypatch.setattr(module, "audio_rms_db", lambda *_args, **_kwargs: -20.0)
+    calls: list[str | None] = []
+
+    def _transcribe(*_args, **kwargs):
+        calls.append(kwargs.get("language"))
+        return [_Seg(start=0.0, end=1.5, text="你好 世界")]
+
+    monkeypatch.setattr(module, "transcribe", _transcribe)
+    monkeypatch.setattr(
+        module,
+        "segments_to_srt",
+        lambda *_args, **_kwargs: "1\n00:00:00,000 --> 00:00:01,500\n你好 世界\n",
+    )
+    monkeypatch.setattr(module, "translate_srt", lambda srt, **_kwargs: srt)
+    monkeypatch.setattr(module, "srt_to_text", lambda s: s.replace("\n", " "))
+    monkeypatch.setattr(module, "synthesize_mp3", _fake_synthesize_mp3)
+    monkeypatch.setattr(module, "mix_ducking", lambda *_args, **_kwargs: _args[2].write_bytes(b"mixed"))
+    monkeypatch.setattr(module, "render_with_original_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"orig-audio"))
+    monkeypatch.setattr(module, "mux", lambda *_args, **_kwargs: _args[2].write_bytes(b"localized-mp4"))
+    monkeypatch.setattr(
+        module,
+        "probe_duration_sec",
+        lambda p: 5.0 if Path(p).name in {"source.mp4", "source.wav", "source_norm.wav", "mixed.wav", "localized.mp4"} else 2.0,
+    )
+    monkeypatch.setattr(
+        module,
+        "probe_av_streams",
+        lambda *_args, **_kwargs: {
+            "has_audio": True,
+            "has_subtitle_stream": False,
+            "subtitle_codecs": [],
+            "audio_codecs": ["aac"],
+        },
+    )
+
+    engine = LocalizationEngine()
+    record = TaskRecord(task_id="task-lang-fallback-2", service="localization", mode="baseline", input_video_url="https://example/video.mp4")
+    result, _logs, _stages = _run_engine(engine, record)
+
+    assert result.output_url is not None
+    assert calls == ["zh"]
