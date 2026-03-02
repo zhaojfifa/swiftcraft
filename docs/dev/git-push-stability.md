@@ -8,18 +8,19 @@ pwsh scripts/git-hooks/install.ps1
 
 This sets:
 
-- `core.hooksPath=tools/git-hooks`
+- `core.hooksPath=NUL` by default (avoids Git for Windows `sh.exe` issues in restricted environments)
+- `core.sshCommand` pinned to system OpenSSH over port `443`
+- `origin=ssh://git@ssh.github.com:443/zhaojfifa/swiftcraft.git`
 
-## Optional: pin SSH over 443 and normalize origin
+## Optional: enable hooks explicitly
 
 ```powershell
-pwsh scripts/git-hooks/install.ps1 -PinSsh
+pwsh scripts/git-hooks/install.ps1 -EnableHooks
 ```
 
-This additionally sets:
+When `sh.exe` is available, this sets:
 
-- `core.sshCommand=C:\Windows\System32\OpenSSH\ssh.exe -p 443 -i C:/Users/$env:USERNAME/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new`
-- `origin=ssh://git@ssh.github.com:443/zhaojfifa/swiftcraft.git`
+- `core.hooksPath=tools/git-hooks`
 
 ## Skip hooks temporarily
 
