@@ -1,0 +1,9 @@
+#!/usr/bin/env pwsh
+# SKIP_GIT_HOOKS=1 to bypass hooks for one command.
+if ($env:SKIP_GIT_HOOKS -eq "1") {
+  Write-Host "[git-hook] pre-push skipped (SKIP_GIT_HOOKS=1)"
+  exit 0
+}
+
+# Placeholder for future validations (lint/tests/secrets scan).
+exit 0
