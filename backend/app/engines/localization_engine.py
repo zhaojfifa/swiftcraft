@@ -76,6 +76,30 @@ class LocalizationEngine:
             except TypeError:
                 return probe_duration_sec(path)
 
+        def _env_bool(name: str, default: bool) -> bool:
+            value = os.getenv(name)
+            if value is None:
+                return default
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+
+        def _env_int(name: str, default: int) -> int:
+            value = os.getenv(name, "").strip()
+            if not value:
+                return default
+            try:
+                return int(value)
+            except Exception:
+                return default
+
+        def _joined_asr_text(current_segments: list[Any]) -> str:
+            return " ".join((str(getattr(seg, "text", "") or "").strip() for seg in current_segments)).strip()
+
+        def _is_asr_fallback_text(text: str) -> bool:
+            if not text:
+                return True
+            lowered = text.lower()
+            return "localized narration." in lowered or "[no_subtitles]" in lowered
+
         try:
             on_stage("SUBMITTED", 1)
             step = mark_step("analyzing", "ANALYZING", 5)
@@ -113,7 +137,51 @@ class LocalizationEngine:
             end_step("extracting", step)
 
             step = mark_step("transcribing", "TRANSCRIBING", 25)
-            segments = transcribe(str(normalized_wav))
+            asr_model = (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "small").strip() or "small"
+            asr_beam_size = _env_int("ASR_BEAM_SIZE", _env_int("FASTWHISPER_BEAM_SIZE", 5))
+            asr_vad_filter = _env_bool("ASR_VAD_FILTER", _env_bool("FASTWHISPER_VAD_FILTER", True))
+            asr_language_hint = (os.getenv("ASR_LANGUAGE_HINT") or os.getenv("FASTWHISPER_LANGUAGE") or "").strip() or None
+            asr_retry_used = False
+            asr_model_used = asr_model
+            segments = transcribe(
+                str(normalized_wav),
+                model_name=asr_model,
+                beam_size=asr_beam_size,
+                vad_filter=asr_vad_filter,
+                language=asr_language_hint,
+            )
+            raw_text = _joined_asr_text(segments)
+            initial_fallback_detected = _is_asr_fallback_text(raw_text)
+            normalized_duration_for_gate = (
+                normalized_wav_duration_sec if normalized_wav_duration_sec is not None else (audio_wav_duration_sec or 0.0)
+            )
+            silent_for_gate = normalized_duration_for_gate > 1.0 and (rms_db is not None and rms_db <= -35.0)
+            if (not segments or initial_fallback_detected) and not silent_for_gate:
+                asr_retry_used = True
+                asr_model_used = (os.getenv("ASR_MODEL_FALLBACK", "medium").strip() or "medium")
+                retry_beam = max(asr_beam_size + 2, 8)
+                retry_vad = not asr_vad_filter
+                on_log(
+                    "[loc] ASR_RETRY_USED=true "
+                    f"reason={'empty' if not segments else 'fallback_phrase'} "
+                    f"ASR_MODEL_USED={asr_model_used} beam={retry_beam} vad={retry_vad} lang={asr_language_hint}"
+                )
+                segments = transcribe(
+                    str(normalized_wav),
+                    model_name=asr_model_used,
+                    beam_size=retry_beam,
+                    vad_filter=retry_vad,
+                    language=asr_language_hint,
+                )
+                raw_text = _joined_asr_text(segments)
+            else:
+                on_log(f"[loc] ASR_RETRY_USED=false ASR_MODEL_USED={asr_model_used}")
+
+            fallback_detected = _is_asr_fallback_text(raw_text)
+            if (not segments or fallback_detected) and not silent_for_gate:
+                raise EngineRunError(
+                    "ASR_EMPTY_OR_FALLBACK: transcribe returned empty/fallback text for non-silent audio"
+                )
             source_srt = segments_to_srt(segments)
             source_srt_path = workspace / "source.srt"
             source_srt_path.write_text(source_srt, encoding="utf-8")
@@ -121,7 +189,10 @@ class LocalizationEngine:
             first_ts = f"{segments[0].start:.3f}" if segments else "n/a"
             last_ts = f"{segments[-1].end:.3f}" if segments else "n/a"
             on_log(f"[loc] asr_segments={num_segments} first_ts={first_ts}s last_ts={last_ts}s")
-            if any((getattr(seg, "text", "") or "").strip() == "Localized narration." for seg in segments):
+            on_log(f"[loc] ASR_SEGMENTS={num_segments}")
+            on_log(f"[loc] ASR_TEXT_LEN={len(raw_text)}")
+            on_log(f"[loc] ASR_TEXT_PREVIEW={raw_text[:120]}")
+            if fallback_detected:
                 on_log("[loc][warn] asr_fallback_phrase_detected -> check faster-whisper runtime / audio content")
             no_subtitles = not segments or (rms_db is not None and rms_db <= -40.0)
             end_step("transcribing", step)

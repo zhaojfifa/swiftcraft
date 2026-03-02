@@ -4,6 +4,9 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
+from app.engines.base import EngineRunError
 from app.engines.localization_engine import LocalizationEngine
 from app.models.task import TaskRecord
 
@@ -182,3 +185,55 @@ def test_localization_multi_segment_translation(monkeypatch, tmp_path: Path):
     assert "[MY] world" in subtitle_text
     assert result.metadata["translation"]["qa"]["translated_lines"] >= 2
     assert result.metadata["translation"]["translated_segments"] >= 2
+
+
+def test_localization_asr_fallback_phrase_fails_on_non_silent_audio(monkeypatch, tmp_path: Path):
+    from app.engines import localization_engine as module
+
+    _patch_engine_runtime(monkeypatch, module, tmp_path)
+    monkeypatch.setattr(module, "extract_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"wav"))
+    monkeypatch.setattr(module, "normalize_audio_for_asr", lambda *_args, **_kwargs: _args[1].write_bytes(b"norm"))
+    monkeypatch.setattr(module, "audio_rms_db", lambda *_args, **_kwargs: -20.0)
+
+    transcribe_calls = {"n": 0}
+
+    def _fake_transcribe(*_args, **_kwargs):
+        transcribe_calls["n"] += 1
+        return [_Seg(start=0.0, end=3.0, text="Localized narration.")]
+
+    monkeypatch.setattr(module, "transcribe", _fake_transcribe)
+    monkeypatch.setattr(
+        module,
+        "segments_to_srt",
+        lambda *_args, **_kwargs: "1\n00:00:00,000 --> 00:00:03,000\nLocalized narration.\n",
+    )
+    monkeypatch.setattr(module, "render_with_original_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"orig-audio"))
+    monkeypatch.setattr(module, "mix_ducking", lambda *_args, **_kwargs: _args[2].write_bytes(b"mixed"))
+    monkeypatch.setattr(module, "mux", lambda *_args, **_kwargs: _args[2].write_bytes(b"localized-mp4"))
+    monkeypatch.setattr(
+        module,
+        "probe_duration_sec",
+        lambda p: 5.0 if Path(p).name in {"source.mp4", "source.wav", "source_norm.wav"} else None,
+    )
+    monkeypatch.setattr(
+        module,
+        "probe_av_streams",
+        lambda *_args, **_kwargs: {
+            "has_audio": True,
+            "has_subtitle_stream": False,
+            "subtitle_codecs": [],
+            "audio_codecs": ["aac"],
+        },
+    )
+
+    engine = LocalizationEngine()
+    record = TaskRecord(
+        task_id="task-asr-fallback-1",
+        service="localization",
+        mode="baseline",
+        input_video_url="https://example/video.mp4",
+    )
+
+    with pytest.raises(EngineRunError, match="ASR_EMPTY_OR_FALLBACK"):
+        _run_engine(engine, record)
+    assert transcribe_calls["n"] >= 2

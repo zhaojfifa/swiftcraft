@@ -4,7 +4,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass
-from typing import Any, List
+from typing import Any, List, Optional
 
 _RUNTIME_LOGGED = False
 
@@ -27,6 +27,27 @@ def _env_int(name: str, default: int) -> int:
     value = os.getenv(name, "").strip()
     if not value:
         return default
+
+
+def _env_float(name: str, default: Optional[float] = None) -> Optional[float]:
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _env_first(names: list[str], default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value is None:
+            continue
+        stripped = value.strip()
+        if stripped:
+            return stripped
+    return default
     try:
         return int(value)
     except Exception:
@@ -154,17 +175,30 @@ def _empty_fallback_segments(duration: float) -> List[ASRSegment]:
     return _allocate_timings(0.0, total_duration, pieces)
 
 
-def transcribe(audio_wav_path: str) -> List[ASRSegment]:
+def transcribe(
+    audio_wav_path: str,
+    *,
+    model_name: str | None = None,
+    beam_size: int | None = None,
+    vad_filter: bool | None = None,
+    language: str | None = None,
+    no_speech_threshold: float | None = None,
+) -> List[ASRSegment]:
     global _RUNTIME_LOGGED
-    model_name = os.getenv("FASTWHISPER_MODEL", "small").strip() or "small"
+    model_name = (model_name or _env_first(["ASR_MODEL", "FASTWHISPER_MODEL"], "small")).strip() or "small"
     device = os.getenv("FASTWHISPER_DEVICE", "cpu").strip() or "cpu"
     compute_type = os.getenv("FASTWHISPER_COMPUTE_TYPE", "int8").strip() or "int8"
-    beam_size = _env_int("FASTWHISPER_BEAM_SIZE", 5)
-    vad_filter = _env_bool("FASTWHISPER_VAD_FILTER", True)
+    if beam_size is None:
+        beam_size = _env_int("ASR_BEAM_SIZE", _env_int("FASTWHISPER_BEAM_SIZE", 5))
+    if vad_filter is None:
+        vad_filter = _env_bool("ASR_VAD_FILTER", _env_bool("FASTWHISPER_VAD_FILTER", True))
     vad_min_silence_ms = _env_int("FASTWHISPER_VAD_MIN_SILENCE_MS", 250)
     vad_speech_pad_ms = _env_int("FASTWHISPER_VAD_SPEECH_PAD_MS", 150)
     word_timestamps = _env_bool("FASTWHISPER_WORD_TIMESTAMPS", True)
-    language = os.getenv("FASTWHISPER_LANGUAGE", "").strip() or None
+    if language is None:
+        language = _env_first(["ASR_LANGUAGE_HINT", "FASTWHISPER_LANGUAGE"], "") or None
+    if no_speech_threshold is None:
+        no_speech_threshold = _env_float("ASR_NO_SPEECH_THRESHOLD")
 
     if not _RUNTIME_LOGGED:
         try:
@@ -173,7 +207,8 @@ def transcribe(audio_wav_path: str) -> List[ASRSegment]:
             print(
                 f"[asr] python={sys.executable} ver={sys.version.split()[0]} "
                 f"model={model_name} device={device} compute={compute_type} "
-                f"vad={vad_filter} lang={language} beam={beam_size}"
+                f"vad={vad_filter} lang={language} beam={beam_size} "
+                f"no_speech_threshold={no_speech_threshold}"
             )
         except Exception:
             pass
@@ -199,6 +234,8 @@ def transcribe(audio_wav_path: str) -> List[ASRSegment]:
         }
         if language:
             full_kwargs["language"] = language
+        if no_speech_threshold is not None:
+            full_kwargs["no_speech_threshold"] = no_speech_threshold
         try:
             raw_segments, _ = model.transcribe(audio_wav_path, **full_kwargs)
         except TypeError:
