@@ -183,10 +183,11 @@ def mix_ducking(
         ]
         _run_ffmpeg(cmd)
         return
+    # Keep mixed audio stable for downstream mux by padding mixed output.
     if ducking:
-        filter_complex = "[0:a][1:a]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=400[a]"
+        filter_complex = "[0:a][1:a]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=400[a0];[a0]apad[a]"
     else:
-        filter_complex = "[0:a][1:a]amix=inputs=2:duration=longest:weights=1 1[a]"
+        filter_complex = "[0:a][1:a]amix=inputs=2:duration=longest:weights=1 1[a0];[a0]apad[a]"
     cmd = [
         "ffmpeg",
         "-y",

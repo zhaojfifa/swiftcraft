@@ -6,6 +6,8 @@ import subprocess
 from dataclasses import dataclass
 from typing import Any, List
 
+_RUNTIME_LOGGED = False
+
 
 @dataclass
 class ASRSegment:
@@ -67,7 +69,7 @@ def _split_text_sentences(text: str) -> List[str]:
         stripped = piece.strip()
         if not stripped:
             continue
-        chunks = re.split(r"(?<=[。！？!?.,;，；])\s*", stripped)
+        chunks = re.split(r"(?<=[\u3002\uff01\uff1f!?.,;\uff0c\uff1b])\s*", stripped)
         for chunk in chunks:
             chunk_text = chunk.strip()
             if chunk_text:
@@ -115,7 +117,6 @@ def _allocate_timings(start: float, end: float, pieces: List[str]) -> List[ASRSe
         ends.append(seg_end)
         cursor = seg_end
 
-    # Clamp and enforce monotonic/min-duration, while forcing the last cue to end at original end.
     min_dur = 0.12
     for idx in range(len(starts)):
         if idx > 0:
@@ -154,6 +155,7 @@ def _empty_fallback_segments(duration: float) -> List[ASRSegment]:
 
 
 def transcribe(audio_wav_path: str) -> List[ASRSegment]:
+    global _RUNTIME_LOGGED
     model_name = os.getenv("FASTWHISPER_MODEL", "small").strip() or "small"
     device = os.getenv("FASTWHISPER_DEVICE", "cpu").strip() or "cpu"
     compute_type = os.getenv("FASTWHISPER_COMPUTE_TYPE", "int8").strip() or "int8"
@@ -164,34 +166,53 @@ def transcribe(audio_wav_path: str) -> List[ASRSegment]:
     word_timestamps = _env_bool("FASTWHISPER_WORD_TIMESTAMPS", True)
     language = os.getenv("FASTWHISPER_LANGUAGE", "").strip() or None
 
+    if not _RUNTIME_LOGGED:
+        try:
+            import sys
+
+            print(
+                f"[asr] python={sys.executable} ver={sys.version.split()[0]} "
+                f"model={model_name} device={device} compute={compute_type} "
+                f"vad={vad_filter} lang={language} beam={beam_size}"
+            )
+        except Exception:
+            pass
+        _RUNTIME_LOGGED = True
+
     try:
         from faster_whisper import WhisperModel  # type: ignore
     except ModuleNotFoundError:
+        print("[asr] faster_whisper_not_installed -> fallback")
         duration = _probe_duration_sec(audio_wav_path)
         return _empty_fallback_segments(duration)
 
-    model = WhisperModel(model_name, device=device, compute_type=compute_type)
-    full_kwargs: dict[str, Any] = {
-        "beam_size": beam_size,
-        "vad_filter": vad_filter,
-        "word_timestamps": word_timestamps,
-        "vad_parameters": {
-            "min_silence_duration_ms": vad_min_silence_ms,
-            "speech_pad_ms": vad_speech_pad_ms,
-        },
-    }
-    if language:
-        full_kwargs["language"] = language
     try:
-        raw_segments, _ = model.transcribe(audio_wav_path, **full_kwargs)
-    except TypeError:
-        fallback_kwargs: dict[str, Any] = {
+        model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        full_kwargs: dict[str, Any] = {
             "beam_size": beam_size,
             "vad_filter": vad_filter,
+            "word_timestamps": word_timestamps,
+            "vad_parameters": {
+                "min_silence_duration_ms": vad_min_silence_ms,
+                "speech_pad_ms": vad_speech_pad_ms,
+            },
         }
         if language:
-            fallback_kwargs["language"] = language
-        raw_segments, _ = model.transcribe(audio_wav_path, **fallback_kwargs)
+            full_kwargs["language"] = language
+        try:
+            raw_segments, _ = model.transcribe(audio_wav_path, **full_kwargs)
+        except TypeError:
+            fallback_kwargs: dict[str, Any] = {
+                "beam_size": beam_size,
+                "vad_filter": vad_filter,
+            }
+            if language:
+                fallback_kwargs["language"] = language
+            raw_segments, _ = model.transcribe(audio_wav_path, **fallback_kwargs)
+    except Exception as exc:
+        print(f"[asr] exception={type(exc).__name__}: {exc} -> fallback")
+        duration = _probe_duration_sec(audio_wav_path)
+        return _empty_fallback_segments(duration)
 
     segments = _to_segments(raw_segments)
     total_duration = _probe_duration_sec(audio_wav_path)
@@ -199,6 +220,7 @@ def transcribe(audio_wav_path: str) -> List[ASRSegment]:
         return _split_single_segment(segments[0], total_duration=total_duration)
     if segments:
         return segments
+    print("[asr] empty_segments -> fallback")
     return _empty_fallback_segments(total_duration)
 
 
@@ -218,4 +240,3 @@ def segments_to_srt(segments: List[ASRSegment]) -> str:
         lines.append(seg.text.strip() or "...")
         lines.append("")
     return "\n".join(lines).strip() + "\n"
-

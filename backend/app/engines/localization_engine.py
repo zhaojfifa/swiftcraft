@@ -108,6 +108,8 @@ class LocalizationEngine:
             first_ts = f"{segments[0].start:.3f}" if segments else "n/a"
             last_ts = f"{segments[-1].end:.3f}" if segments else "n/a"
             on_log(f"[loc] asr_segments={num_segments} first_ts={first_ts}s last_ts={last_ts}s")
+            if any((getattr(seg, "text", "") or "").strip() == "Localized narration." for seg in segments):
+                on_log("[loc][warn] asr_fallback_phrase_detected -> check faster-whisper runtime / audio content")
             no_subtitles = not segments or (rms_db is not None and rms_db <= -40.0)
             end_step("transcribing", step)
 
