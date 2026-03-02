@@ -140,7 +140,6 @@ def probe_duration_sec(path: Path, on_log: Optional[Callable[[str], None]] = Non
     cmd = [
         "ffprobe",
         "-hide_banner",
-        "-nostdin",
         "-v",
         "error",
         "-show_entries",
@@ -213,7 +212,6 @@ def probe_av_streams(video_path: Path, on_log: Optional[Callable[[str], None]] =
     cmd = [
         "ffprobe",
         "-hide_banner",
-        "-nostdin",
         "-v",
         "error",
         "-show_entries",
@@ -327,9 +325,9 @@ def mix_ducking(
         return
 
     if ducking:
-        filter_complex = "[0:a][1:a]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=400[a0];[a0]apad[a]"
+        filter_complex = "[0:a]aresample=16000[a0];[1:a]aresample=16000[a1];[a0][a1]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=400[m];[m]anull[a]"
     else:
-        filter_complex = "[0:a][1:a]amix=inputs=2:duration=longest:weights=1 1[a0];[a0]apad[a]"
+        filter_complex = "[0:a]aresample=16000[a0];[1:a]aresample=16000[a1];[a0][a1]amix=inputs=2:duration=longest:weights=1 1[m];[m]anull[a]"
     cmd = [
         "ffmpeg",
         "-hide_banner",
@@ -341,6 +339,8 @@ def mix_ducking(
         str(dub_mp3),
         "-filter_complex",
         filter_complex,
+        "-map",
+        "[a]",
         "-c:a",
         "pcm_s16le",
         "-shortest",
