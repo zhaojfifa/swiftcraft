@@ -41,6 +41,8 @@ class LocalizationEngine:
         started = time.perf_counter()
         metrics: Dict[str, int] = {}
         translation_meta: Dict[str, Any] = {}
+        transcription_meta: Dict[str, Any] = {}
+        tts_meta: Dict[str, Any] = {}
         workspace = Path(__file__).resolve().parents[3] / "video_workspace" / "tasks" / task_id / "localization"
         workspace.mkdir(parents=True, exist_ok=True)
 
@@ -94,10 +96,8 @@ class LocalizationEngine:
         def _joined_asr_text(current_segments: list[Any]) -> str:
             return " ".join((str(getattr(seg, "text", "") or "").strip() for seg in current_segments)).strip()
 
-        def _is_asr_fallback_text(text: str) -> bool:
-            if not text:
-                return True
-            lowered = text.lower()
+        def _contains_fallback_marker(text: str) -> bool:
+            lowered = (text or "").lower()
             return "localized narration." in lowered or "[no_subtitles]" in lowered
 
         try:
@@ -141,7 +141,6 @@ class LocalizationEngine:
             asr_beam_size = _env_int("ASR_BEAM_SIZE", _env_int("FASTWHISPER_BEAM_SIZE", 5))
             asr_vad_filter = _env_bool("ASR_VAD_FILTER", _env_bool("FASTWHISPER_VAD_FILTER", True))
             asr_language_hint = (os.getenv("ASR_LANGUAGE_HINT") or os.getenv("FASTWHISPER_LANGUAGE") or "").strip() or None
-            asr_retry_used = False
             asr_model_used = asr_model
             segments = transcribe(
                 str(normalized_wav),
@@ -151,13 +150,12 @@ class LocalizationEngine:
                 language=asr_language_hint,
             )
             raw_text = _joined_asr_text(segments)
-            initial_fallback_detected = _is_asr_fallback_text(raw_text)
+            initial_fallback_detected = _contains_fallback_marker(raw_text)
             normalized_duration_for_gate = (
                 normalized_wav_duration_sec if normalized_wav_duration_sec is not None else (audio_wav_duration_sec or 0.0)
             )
             silent_for_gate = normalized_duration_for_gate > 1.0 and (rms_db is not None and rms_db <= -35.0)
             if (not segments or initial_fallback_detected) and not silent_for_gate:
-                asr_retry_used = True
                 asr_model_used = (os.getenv("ASR_MODEL_FALLBACK", "medium").strip() or "medium")
                 retry_beam = max(asr_beam_size + 2, 8)
                 retry_vad = not asr_vad_filter
@@ -177,11 +175,12 @@ class LocalizationEngine:
             else:
                 on_log(f"[loc] ASR_RETRY_USED=false ASR_MODEL_USED={asr_model_used}")
 
-            fallback_detected = _is_asr_fallback_text(raw_text)
+            fallback_detected = _contains_fallback_marker(raw_text)
             if (not segments or fallback_detected) and not silent_for_gate:
                 raise EngineRunError(
                     "ASR_EMPTY_OR_FALLBACK: transcribe returned empty/fallback text for non-silent audio"
                 )
+            source_text = raw_text
             source_srt = segments_to_srt(segments)
             source_srt_path = workspace / "source.srt"
             source_srt_path.write_text(source_srt, encoding="utf-8")
@@ -192,8 +191,16 @@ class LocalizationEngine:
             on_log(f"[loc] ASR_SEGMENTS={num_segments}")
             on_log(f"[loc] ASR_TEXT_LEN={len(raw_text)}")
             on_log(f"[loc] ASR_TEXT_PREVIEW={raw_text[:120]}")
+            on_log(f"[loc] LOC_TEXT_SOURCE=asr text_len={len(source_text)} num_segments={num_segments}")
             if fallback_detected:
                 on_log("[loc][warn] asr_fallback_phrase_detected -> check faster-whisper runtime / audio content")
+            transcription_meta = {
+                "source_lang_guess": (os.getenv("ASR_LANGUAGE_HINT") or os.getenv("FASTWHISPER_LANGUAGE") or "").strip() or "unknown",
+                "text_len": len(source_text),
+                "segments": num_segments,
+                "fallback_detected": _contains_fallback_marker(source_text),
+                "model_used": (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "small").strip() or "small",
+            }
             no_subtitles = not segments or (rms_db is not None and rms_db <= -40.0)
             end_step("transcribing", step)
 
@@ -233,6 +240,9 @@ class LocalizationEngine:
                 )
             else:
                 target_srt = translate_srt(source_srt, target_lang=target_lang)
+                translated_plain = (target_srt or "").strip()
+                if not translated_plain or _contains_fallback_marker(translated_plain):
+                    raise EngineRunError("TRANSLATION_EMPTY_OR_FALLBACK: translated subtitle content is empty/fallback")
             target_srt_path = workspace / "target.srt"
             target_srt_path.write_text(target_srt, encoding="utf-8")
             qa_path, qa = write_translation_artifacts(workspace, source_srt, target_srt, target_lang=target_lang)
@@ -263,6 +273,9 @@ class LocalizationEngine:
             dub_duration_sec = None
             if not no_subtitles:
                 dub_text = srt_to_text(target_srt)
+                on_log(f"[loc] LOC_TEXT_SOURCE=asr text_len={len(dub_text.strip())} num_segments={translated_segments}")
+                if not dub_text.strip():
+                    raise EngineRunError("TTS_TEXT_EMPTY: empty text passed to synthesizer")
                 dub_mp3_path = synthesize_mp3(
                     dub_text,
                     voice_id=voice_id,
@@ -274,8 +287,14 @@ class LocalizationEngine:
                     f"[loc] dub_audio_path={dub_mp3_path} duration_sec="
                     f"{dub_duration_sec if dub_duration_sec is not None else 'n/a'}"
                 )
+                tts_meta = {
+                    "voice_id": voice_id,
+                    "text_len": len(dub_text.strip()),
+                    "audio_duration_sec": dub_duration_sec,
+                }
             else:
                 on_log("[loc] skip_tts fallback_reason=SILENT_AUDIO_OR_EMPTY_ASR")
+                tts_meta = {"voice_id": voice_id, "text_len": 0, "audio_duration_sec": None}
             end_step("synthesizing", step)
 
             step = mark_step("rendering", "RENDERING", 78)
@@ -402,6 +421,8 @@ class LocalizationEngine:
                 },
                 "run_config_snapshot": run_config_snapshot,
                 "translation": translation_meta,
+                "transcription": {"qa": transcription_meta},
+                "tts": {"qa": tts_meta},
                 "metadata": {
                     "source_probe": source_probe,
                     "policy": {
@@ -430,6 +451,8 @@ class LocalizationEngine:
                     "run_config_snapshot": run_config_snapshot,
                     "manifest_preview": manifest,
                     "translation": translation_meta,
+                    "transcription": {"qa": transcription_meta},
+                    "tts": {"qa": tts_meta},
                     "policy": {"enforced": policy_flags},
                     "source_probe": source_probe,
                 },
