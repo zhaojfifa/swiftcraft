@@ -163,6 +163,7 @@ class LocalizationEngine:
                 "source_segments": source_segments,
                 "translated_segments": translated_segments,
                 "source_probe": source_probe,
+                "policy_enforced": ["cannot_remove_burned_in_subtitles_baseline"],
             }
             if no_subtitles:
                 qa["translated_lines"] = 0
@@ -254,6 +255,7 @@ class LocalizationEngine:
                 outputs["audio_url"] = audio_url
             elif no_subtitles:
                 outputs["audio_omitted_reason"] = "SILENT_AUDIO_OR_EMPTY_ASR"
+            policy_flags = ["cannot_remove_burned_in_subtitles_baseline"]
             manifest = {
                 "task_id": task_id,
                 "service": "localization",
@@ -267,8 +269,9 @@ class LocalizationEngine:
                 "run_config_snapshot": run_config_snapshot,
                 "translation": translation_meta,
                 "metadata": {
+                    "source_probe": source_probe,
                     "policy": {
-                        "enforced": ["cannot_remove_burned_in_subtitles_baseline"],
+                        "enforced": policy_flags,
                     }
                 },
             }
@@ -293,7 +296,8 @@ class LocalizationEngine:
                     "run_config_snapshot": run_config_snapshot,
                     "manifest_preview": manifest,
                     "translation": translation_meta,
-                    "policy": {"enforced": ["cannot_remove_burned_in_subtitles_baseline"]},
+                    "policy": {"enforced": policy_flags},
+                    "source_probe": source_probe,
                 },
             )
         except Exception as exc:
