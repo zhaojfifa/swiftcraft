@@ -53,8 +53,26 @@ def extract_audio(video_path: Path, wav_out: Path) -> None:
     _run_ffmpeg(cmd)
 
 
-def mix_ducking(original_wav: Path, dub_mp3: Path, mixed_wav_out: Path, ducking: bool = True) -> None:
+def mix_ducking(
+    original_wav: Path,
+    dub_mp3: Path,
+    mixed_wav_out: Path,
+    preserve_bgm: bool = True,
+    ducking: bool = True,
+) -> None:
     mixed_wav_out.parent.mkdir(parents=True, exist_ok=True)
+    if not preserve_bgm:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(dub_mp3),
+            "-ar",
+            "48000",
+            str(mixed_wav_out),
+        ]
+        _run_ffmpeg(cmd)
+        return
     if ducking:
         filter_complex = "[0:a][1:a]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=400[a]"
     else:
@@ -79,8 +97,9 @@ def mix_ducking(original_wav: Path, dub_mp3: Path, mixed_wav_out: Path, ducking:
 
 def mux(video_in: Path, mixed_wav: Path, mp4_out: Path, source_video_duration_sec: Optional[float] = None) -> None:
     mp4_out.parent.mkdir(parents=True, exist_ok=True)
-    if source_video_duration_sec is not None and source_video_duration_sec > 0:
-        duration_text = f"{source_video_duration_sec:.3f}"
+    duration = source_video_duration_sec if source_video_duration_sec and source_video_duration_sec > 0 else None
+    if duration is not None:
+        duration_text = f"{duration:.3f}"
         filter_complex = f"[1:a]apad,atrim=0:{duration_text}[dub];[dub]asetpts=N/SR/TB[aout]"
         cmd = [
             "ffmpeg",
@@ -126,4 +145,3 @@ def mux(video_in: Path, mixed_wav: Path, mp4_out: Path, source_video_duration_se
         str(mp4_out),
     ]
     _run_ffmpeg(cmd)
-
