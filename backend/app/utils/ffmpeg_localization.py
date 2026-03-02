@@ -1,20 +1,49 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
 
-def _run_ffmpeg(cmd: list[str]) -> None:
+def _stderr_tail(stderr: str, max_lines: int = 80, max_chars: int = 4000) -> str:
+    text = (stderr or "").strip()
+    if not text:
+        return ""
+    lines = text.splitlines()
+    if len(lines) > max_lines:
+        text = "\n".join(lines[-max_lines:])
+    if len(text) > max_chars:
+        text = text[-max_chars:]
+    return text
+
+
+def _run_cmd(cmd: list[str], timeout_sec: int = 120, label: str = "ffmpeg") -> subprocess.CompletedProcess[str]:
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        return subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout_sec)
     except FileNotFoundError as exc:
-        raise RuntimeError("ffmpeg is not installed") from exc
+        raise RuntimeError(f"{label} executable not found: {cmd[0]}") from exc
     except subprocess.CalledProcessError as exc:
-        stderr = (exc.stderr or "").strip()
-        raise RuntimeError(f"ffmpeg command failed: {stderr[-400:]}") from exc
+        stderr_tail = _stderr_tail(exc.stderr or "")
+        joined = " ".join(cmd)
+        raise RuntimeError(
+            f"{label} failed (code={exc.returncode}): {joined}\n"
+            f"{stderr_tail}"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        stderr_tail = _stderr_tail(getattr(exc, "stderr", "") or "")
+        joined = " ".join(cmd)
+        raise TimeoutError(
+            f"{label} timeout after {timeout_sec}s: {joined}\n"
+            f"{stderr_tail}"
+        ) from exc
+
+
+def _run_ffmpeg(cmd: list[str]) -> None:
+    timeout_sec = int(os.getenv("FFMPEG_TIMEOUT_SEC", "120") or "120")
+    _run_cmd(cmd, timeout_sec=timeout_sec, label="ffmpeg")
 
 
 def probe_duration_sec(path: Path) -> Optional[float]:
@@ -29,7 +58,8 @@ def probe_duration_sec(path: Path) -> Optional[float]:
         str(path),
     ]
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        timeout_sec = int(os.getenv("FFPROBE_TIMEOUT_SEC", "30") or "30")
+        result = _run_cmd(cmd, timeout_sec=timeout_sec, label="ffprobe")
         value = float((result.stdout or "").strip())
         if value >= 0:
             return value
@@ -70,7 +100,8 @@ def audio_rms_db(input_wav: Path) -> Optional[float]:
         "-",
     ]
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        timeout_sec = int(os.getenv("FFPROBE_TIMEOUT_SEC", "30") or "30")
+        result = _run_cmd(cmd, timeout_sec=timeout_sec, label="ffmpeg")
         stderr = (result.stderr or "").strip()
     except Exception:
         return None
@@ -104,7 +135,8 @@ def probe_av_streams(video_path: Path) -> dict[str, Any]:
         "audio_codecs": [],
     }
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        timeout_sec = int(os.getenv("FFPROBE_TIMEOUT_SEC", "30") or "30")
+        result = _run_cmd(cmd, timeout_sec=timeout_sec, label="ffprobe")
         payload = json.loads(result.stdout or "{}")
     except Exception:
         return out

@@ -63,6 +63,12 @@ class LocalizationEngine:
             metrics[name] = elapsed_ms
             on_log(f"[loc] step={name} ok elapsed_ms={elapsed_ms}")
 
+        def _file_size(path: Path) -> int:
+            try:
+                return path.stat().st_size
+            except Exception:
+                return -1
+
         try:
             on_stage("SUBMITTED", 1)
             step = mark_step("analyzing", "ANALYZING", 5)
@@ -195,36 +201,69 @@ class LocalizationEngine:
             end_step("synthesizing", step)
 
             step = mark_step("rendering", "RENDERING", 78)
-            mixed_wav = workspace / "mixed.wav"
-            if no_subtitles:
-                render_with_original_audio(source_video, mixed_wav)
-            else:
-                mix_ducking(audio_wav, dub_mp3_path, mixed_wav, preserve_bgm=preserve_bgm, ducking=ducking)
-            localized_mp4_path = workspace / "localized.mp4"
-            source_video_duration_sec = probe_duration_sec(source_video)
-            mixed_audio_duration_sec = probe_duration_sec(mixed_wav)
-            on_log(
-                "[loc][duration] pre_mux "
-                f"source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'} "
-                f"dub_audio_sec={dub_duration_sec if dub_duration_sec is not None else 'n/a'} "
-                f"mixed_audio_sec={mixed_audio_duration_sec if mixed_audio_duration_sec is not None else 'n/a'}"
-            )
-            mux(source_video, mixed_wav, localized_mp4_path, source_video_duration_sec=source_video_duration_sec)
-            output_video_duration_sec = probe_duration_sec(localized_mp4_path)
-            on_log(
-                "[loc][duration] post_mux "
-                f"output_video_sec={output_video_duration_sec if output_video_duration_sec is not None else 'n/a'}"
-            )
-            if (
-                source_video_duration_sec is not None
-                and output_video_duration_sec is not None
-                and source_video_duration_sec >= 3.0
-                and output_video_duration_sec < (source_video_duration_sec - 1.0)
-            ):
-                raise EngineRunError(
-                    "localized output duration regression detected: "
-                    f"source={source_video_duration_sec:.3f}s output={output_video_duration_sec:.3f}s"
+            try:
+                mixed_wav = workspace / "mixed.wav"
+                localized_mp4_path = workspace / "localized.mp4"
+                source_video_duration_sec = probe_duration_sec(source_video)
+                on_log(
+                    "[loc][render] mix_start "
+                    f"source_video={source_video} exists={source_video.exists()} size={_file_size(source_video)} "
+                    f"audio_wav={audio_wav} exists={audio_wav.exists()} size={_file_size(audio_wav)} "
+                    f"dub_mp3={dub_mp3_path} exists={bool(dub_mp3_path and dub_mp3_path.exists())} "
+                    f"dub_size={_file_size(dub_mp3_path) if dub_mp3_path else -1} "
+                    f"preserve_bgm={preserve_bgm} ducking={ducking} "
+                    f"source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'}"
                 )
+                mix_started = time.perf_counter()
+                if no_subtitles:
+                    render_with_original_audio(source_video, mixed_wav)
+                else:
+                    mix_ducking(audio_wav, dub_mp3_path, mixed_wav, preserve_bgm=preserve_bgm, ducking=ducking)
+                mixed_audio_duration_sec = probe_duration_sec(mixed_wav)
+                on_log(
+                    "[loc][render] mix_done "
+                    f"elapsed_ms={int((time.perf_counter() - mix_started) * 1000)} "
+                    f"mixed_wav={mixed_wav} exists={mixed_wav.exists()} size={_file_size(mixed_wav)} "
+                    f"mixed_audio_sec={mixed_audio_duration_sec if mixed_audio_duration_sec is not None else 'n/a'}"
+                )
+                on_log(
+                    "[loc][duration] pre_mux "
+                    f"source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'} "
+                    f"dub_audio_sec={dub_duration_sec if dub_duration_sec is not None else 'n/a'} "
+                    f"mixed_audio_sec={mixed_audio_duration_sec if mixed_audio_duration_sec is not None else 'n/a'}"
+                )
+                on_log(
+                    "[loc][render] mux_start "
+                    f"output={localized_mp4_path} source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'}"
+                )
+                mux_started = time.perf_counter()
+                mux(source_video, mixed_wav, localized_mp4_path, source_video_duration_sec=source_video_duration_sec)
+                output_video_duration_sec = probe_duration_sec(localized_mp4_path)
+                on_log(
+                    "[loc][render] mux_done "
+                    f"elapsed_ms={int((time.perf_counter() - mux_started) * 1000)} "
+                    f"output_exists={localized_mp4_path.exists()} size={_file_size(localized_mp4_path)} "
+                    f"output_video_sec={output_video_duration_sec if output_video_duration_sec is not None else 'n/a'}"
+                )
+                on_log(
+                    "[loc][duration] post_mux "
+                    f"output_video_sec={output_video_duration_sec if output_video_duration_sec is not None else 'n/a'}"
+                )
+                if (
+                    source_video_duration_sec is not None
+                    and output_video_duration_sec is not None
+                    and source_video_duration_sec >= 3.0
+                    and output_video_duration_sec < (source_video_duration_sec - 1.0)
+                ):
+                    raise EngineRunError(
+                        "localized output duration regression detected: "
+                        f"source={source_video_duration_sec:.3f}s output={output_video_duration_sec:.3f}s"
+                    )
+            except Exception as render_exc:
+                on_log(
+                    f"[loc][render] rendering_exception type={type(render_exc).__name__} msg={render_exc}"
+                )
+                raise
             end_step("rendering", step)
 
             step = mark_step("uploading", "UPLOADING", 90)
