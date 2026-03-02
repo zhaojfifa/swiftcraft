@@ -37,6 +37,17 @@ class TaskStage(str, Enum):
     FAILED = "FAILED"
 
 
+class TaskOutputsOut(BaseModel):
+    video_key: Optional[str] = None
+    video_url: Optional[str] = None
+    subtitle_key: Optional[str] = None
+    subtitle_url: Optional[str] = None
+    audio_key: Optional[str] = None
+    audio_url: Optional[str] = None
+    manifest_key: Optional[str] = None
+    manifest_url: Optional[str] = None
+
+
 class TaskResponseOut(BaseModel):
     task_id: str
     service_type: ServiceType
@@ -45,6 +56,7 @@ class TaskResponseOut(BaseModel):
     status: TaskStatus
     stage: TaskStage
     output_url: Optional[str] = None
+    outputs: Optional[TaskOutputsOut] = None
     input_image_url: Optional[str] = None
     logs: List[str] = Field(default_factory=list)
     metadata: Dict[str, object] = Field(default_factory=dict)

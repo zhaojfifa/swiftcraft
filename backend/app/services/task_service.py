@@ -22,6 +22,7 @@ from app.schemas.task import (
     LegacySwapRequest,
     LocalizationRequest,
     ServiceType,
+    TaskOutputsOut,
     TaskResponseOut,
     TaskStage,
     TaskStatus,
@@ -126,6 +127,36 @@ def _stage_from_record(record: TaskRecord) -> TaskStage:
     if record.status == "done":
         return TaskStage.DONE
     return mapping.get(stage, TaskStage.SUBMITTED)
+
+
+def _extract_outputs_from_metadata(metadata: Dict[str, Any]) -> TaskOutputsOut | None:
+    outputs: Dict[str, Any] = {}
+    raw_outputs = metadata.get("outputs")
+    if isinstance(raw_outputs, dict):
+        outputs.update(raw_outputs)
+    raw_manifest = metadata.get("manifest_preview")
+    if isinstance(raw_manifest, dict):
+        manifest_outputs = raw_manifest.get("outputs")
+        if isinstance(manifest_outputs, dict):
+            for key, value in manifest_outputs.items():
+                outputs.setdefault(key, value)
+    if not outputs:
+        return None
+    picked: Dict[str, str] = {}
+    for key in (
+        "video_key",
+        "video_url",
+        "subtitle_key",
+        "subtitle_url",
+        "audio_key",
+        "audio_url",
+        "manifest_key",
+        "manifest_url",
+    ):
+        value = outputs.get(key)
+        if isinstance(value, str) and value.strip():
+            picked[key] = value
+    return TaskOutputsOut(**picked) if picked else None
 
 
 class TaskService:
@@ -677,6 +708,7 @@ class TaskService:
             )
 
     def _to_response(self, record: TaskRecord, service_type: ServiceType) -> TaskResponseOut:
+        metadata = dict(record.metadata or {})
         return TaskResponseOut(
             task_id=record.task_id,
             service_type=service_type,
@@ -685,7 +717,8 @@ class TaskService:
             status=_status_from_record(record),
             stage=_stage_from_record(record),
             output_url=record.output_url,
+            outputs=_extract_outputs_from_metadata(metadata),
             input_image_url=record.input_image_url,
             logs=list(record.logs or []),
-            metadata=dict(record.metadata or {}),
+            metadata=metadata,
         )
