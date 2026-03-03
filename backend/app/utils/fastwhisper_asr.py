@@ -20,6 +20,7 @@ _MODEL_META: dict[str, str] = {"status": "cold", "model": "", "model_path": ""}
 _SEMAPHORE_LOCK = threading.Lock()
 _TRANSCRIBE_SEMAPHORE: threading.Semaphore | None = None
 _TRANSCRIBE_SEMAPHORE_SIZE = 0
+_HEARTBEAT_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 
 
 @dataclass
@@ -121,6 +122,28 @@ def _cache_root() -> str:
     return str(Path.home() / ".cache" / "huggingface")
 
 
+def _find_cached_model_snapshot(model_name: str) -> str:
+    root = Path(_cache_root())
+    repo_dir = root / "hub" / f"models--Systran--faster-whisper-{model_name}"
+    snapshots_dir = repo_dir / "snapshots"
+    if not snapshots_dir.exists():
+        return ""
+    candidates = [p for p in snapshots_dir.iterdir() if p.is_dir()]
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return str(candidates[0])
+
+
+def _rss_mb() -> int:
+    try:
+        import resource
+
+        return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024)
+    except Exception:
+        return -1
+
+
 def _asr_runtime_modules() -> dict[str, Any]:
     modules: dict[str, Any] = {}
     for name in ("faster_whisper", "ctranslate2", "tokenizers", "huggingface_hub", "requests", "onnxruntime", "av"):
@@ -179,6 +202,7 @@ def get_asr_runtime_info() -> dict[str, Any]:
     model_name = _resolve_model_name(None)
     compute_type = _resolve_compute_type()
     device = _resolve_device()
+    cached_model_path = _find_cached_model_snapshot(model_name)
     with _MODEL_LOCK:
         model_meta = dict(_MODEL_META)
         loaded = _MODEL_INSTANCE is not None
@@ -190,6 +214,8 @@ def get_asr_runtime_info() -> dict[str, Any]:
         "timeout_sec": _transcribe_timeout_sec(),
         "heartbeat_sec": _heartbeat_interval_sec(),
         "hf_home": _cache_root(),
+        "model_cache_path": cached_model_path,
+        "model_cache_ready": bool(cached_model_path),
         "runtime_modules": _asr_runtime_modules(),
         "model_loaded": loaded,
         "model_meta": model_meta,
@@ -243,30 +269,18 @@ def get_whisper_model(model_name: str | None = None) -> Any:
 
 def warmup_asr_model(model_name: str | None = None) -> dict[str, str]:
     chosen_model = _resolve_model_name(model_name)
-    print(f"[asr] warmup start model={chosen_model}")
-    try:
-        from faster_whisper.utils import download_model  # type: ignore
-
-        download_model(chosen_model)
-    except Exception as exc:
-        print(f"[asr][warn] warmup download failed model={chosen_model} err={type(exc).__name__}: {exc}")
-    try:
-        get_whisper_model(chosen_model)
-        print(f"[asr] warmup ok model={chosen_model}")
-        return {"status": "ok", "model": chosen_model}
-    except ModuleNotFoundError as exc:
-        missing = getattr(exc, "name", "unknown")
-        print(f"[asr][warn] warmup missing_module={missing}")
-        return {"status": "missing", "reason": f"module_not_found:{missing}", "model": chosen_model}
-    except Exception as exc:
-        print(f"[asr][warn] warmup failed model={chosen_model} err={type(exc).__name__}: {exc}")
-        return {"status": "error", "reason": f"{type(exc).__name__}:{exc}", "model": chosen_model}
+    model_path = _find_cached_model_snapshot(chosen_model)
+    status = "ok" if model_path else "missing_cache"
+    return {
+        "status": status,
+        "model": chosen_model,
+        "model_path": model_path,
+    }
 
 
 def _run_with_heartbeat(func: Any, *, phase: str, timeout_sec: int, heartbeat_sec: int) -> Any:
     started = time.perf_counter()
-    executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(func)
+    future = _HEARTBEAT_EXECUTOR.submit(func)
     try:
         while True:
             try:
@@ -278,7 +292,7 @@ def _run_with_heartbeat(func: Any, *, phase: str, timeout_sec: int, heartbeat_se
                     future.cancel()
                     raise TimeoutError(f"{phase} timeout after {timeout_sec}s")
     finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+        pass
 
 
 def _probe_duration_sec(audio_wav_path: str) -> float:
@@ -454,6 +468,7 @@ def transcribe(
 
     try:
         try:
+            print(f"[asr] rss_mb={_rss_mb()} phase=before_model_load")
             model = _run_with_heartbeat(
                 lambda: get_whisper_model(model_name),
                 phase="model_load",
@@ -514,6 +529,7 @@ def transcribe(
         transcribe_elapsed_ms = int((time.perf_counter() - transcribe_started) * 1000)
         preview_segments = _to_segments(raw_segments)
         preview_text = " ".join(seg.text for seg in preview_segments).strip()
+        print(f"[asr] rss_mb={_rss_mb()} phase=after_transcribe")
         print(
             f"[asr] transcribe ok elapsed_ms={transcribe_elapsed_ms} "
             f"segments={len(preview_segments)} text_len={len(preview_text)}"
