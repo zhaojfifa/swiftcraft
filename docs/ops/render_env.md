@@ -5,6 +5,11 @@ Use these environment variables so `faster-whisper` model assets are cached at b
 ```bash
 HF_HOME=/opt/render/.cache/huggingface
 ASR_MODEL=small
+ASR_MAX_CONCURRENCY=1
+ASR_TRANSCRIBE_TIMEOUT_SEC=120
+ASR_HEARTBEAT_SEC=10
+OMP_NUM_THREADS=2
+CT2_NUM_THREADS=2
 ```
 
 Optional:

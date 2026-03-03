@@ -192,6 +192,10 @@ class LocalizationEngine:
                 attempt_text = _joined_asr_text(attempt_segments)
                 attempt_fallback = _contains_fallback_marker(attempt_text)
                 status_reason = str(asr_status.get("reason") or "")
+                if status_reason == "timeout_model_load":
+                    raise EngineRunError("asr_timeout_model_load: model loading exceeded timeout")
+                if status_reason == "timeout_transcribe":
+                    raise EngineRunError("asr_timeout_transcribe: transcribe exceeded timeout")
                 if attempt_fallback and (
                     status_reason.startswith("module_not_found") or status_reason.startswith("runtime_exception:")
                 ):
