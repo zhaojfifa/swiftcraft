@@ -124,7 +124,7 @@ def _get_semaphore() -> threading.Semaphore:
 
 
 def _cache_root() -> str:
-    root = (os.getenv("HF_HOME", "") or "").strip()
+    root = (os.getenv("ASR_HF_CACHE_DIR", "") or os.getenv("HF_HOME", "") or "").strip()
     if root:
         root_path = Path(root)
     else:
@@ -133,21 +133,31 @@ def _cache_root() -> str:
     return str(root_path)
 
 
-def _find_cached_model_snapshot(model_name: str, logger: Logger = None) -> str:
-    root = Path(_cache_root())
-    repo_dir = root / "hub" / f"models--Systran--faster-whisper-{model_name}"
-    snapshots_dir = repo_dir / "snapshots"
-    _log(f"snapshot_probe model={model_name} snapshots_dir={snapshots_dir}", logger)
-    if not snapshots_dir.exists():
-        return ""
-    candidates = [p for p in snapshots_dir.iterdir() if p.is_dir()]
-    nested_candidates = [p for p in snapshots_dir.glob("*/*") if p.is_dir()]
-    candidates.extend(nested_candidates)
-    if not candidates:
-        return ""
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    _log(f"snapshot_probe hit model={model_name} path={candidates[0]}", logger)
-    return str(candidates[0])
+def _model_local_dir(model_name: str) -> Path:
+    base = Path((os.getenv("ASR_MODEL_DIR", "/var/data/asr_models") or "/var/data/asr_models")).expanduser()
+    base.mkdir(parents=True, exist_ok=True)
+    return base / f"faster-whisper-{model_name}"
+
+
+def _local_dir_ready(local_dir: Path) -> bool:
+    required = ("model.bin", "config.json", "tokenizer.json")
+    return any((local_dir / name).exists() for name in required)
+
+
+def _log_dir_tree(local_dir: Path, logger: Logger = None) -> None:
+    if not local_dir.exists():
+        _log(f"local_dir_tree missing path={local_dir}", logger)
+        return
+    top_entries = sorted(local_dir.iterdir(), key=lambda p: p.name)[:20]
+    _log(f"local_dir_tree path={local_dir} entries={len(top_entries)}", logger)
+    for entry in top_entries:
+        if entry.is_dir():
+            nested = sorted(entry.iterdir(), key=lambda p: p.name)[:20]
+            _log(f"local_dir_tree dir={entry.name} nested={len(nested)}", logger)
+            for child in nested:
+                _log(f"local_dir_tree - {entry.name}/{child.name}", logger)
+        else:
+            _log(f"local_dir_tree - {entry.name}", logger)
 
 
 def _env_offline() -> bool:
@@ -156,26 +166,36 @@ def _env_offline() -> bool:
 
 
 def _ensure_local_model_dir(model_name: str, logger: Logger = None) -> str:
-    snapshot_path = _find_cached_model_snapshot(model_name, logger=logger)
-    if snapshot_path:
-        return snapshot_path
+    local_dir = _model_local_dir(model_name)
+    _log(f"ensure_local_model_dir start model={model_name} local_dir={local_dir} rss_mb={_rss_mb()}", logger)
+    if _local_dir_ready(local_dir):
+        entries = len(list(local_dir.iterdir())) if local_dir.exists() else 0
+        _log(f"ensure_local_model_dir ready model={model_name} entries={entries} rss_mb={_rss_mb()}", logger)
+        return str(local_dir)
     if _env_offline():
-        raise RuntimeError(f"offline_snapshot_missing:{model_name}")
+        raise RuntimeError(f"offline_local_dir_missing:{local_dir}")
     started = time.perf_counter()
-    _log(f"snapshot_download start model={model_name} cache_dir={_cache_root()}", logger)
+    _log(
+        f"snapshot_download start model={model_name} local_dir={local_dir} cache_dir={_cache_root()} rss_mb={_rss_mb()}",
+        logger,
+    )
     from huggingface_hub import snapshot_download  # type: ignore
 
     snapshot_download(
         repo_id=f"Systran/faster-whisper-{model_name}",
-        cache_dir=_cache_root(),
+        local_dir=str(local_dir),
+        local_dir_use_symlinks=_env_bool("ASR_MODEL_LOCALDIR_USE_SYMLINKS", False),
+        cache_dir=(os.getenv("ASR_HF_CACHE_DIR") or None),
+        resume_download=True,
         allow_patterns=["*"],
     )
-    elapsed_s = round(time.perf_counter() - started, 3)
-    snapshot_path = _find_cached_model_snapshot(model_name, logger=logger)
-    if not snapshot_path:
-        raise RuntimeError(f"snapshot_download_missing_after_download:{model_name}")
-    _log(f"snapshot_download ok model={model_name} elapsed_s={elapsed_s} path={snapshot_path}", logger)
-    return snapshot_path
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    entries = len(list(local_dir.iterdir())) if local_dir.exists() else 0
+    _log(f"snapshot_download done local_dir={local_dir} elapsed_ms={elapsed_ms} entries={entries}", logger)
+    if not _local_dir_ready(local_dir):
+        _log_dir_tree(local_dir, logger)
+        raise RuntimeError(f"local_dir_not_ready_after_download:{local_dir}")
+    return str(local_dir)
 
 
 def _resolve_model_path_or_name(model_name: str, logger: Logger = None) -> str:
@@ -249,9 +269,9 @@ def get_asr_runtime_info() -> dict[str, Any]:
     model_name = _resolve_model_name(None)
     compute_type = _resolve_compute_type()
     device = _resolve_device()
-    cached_model_path = _find_cached_model_snapshot(model_name)
+    local_dir = _model_local_dir(model_name)
     try:
-        resolved_model_input = _resolve_model_path_or_name(model_name)
+        resolved_model_input = str(local_dir)
     except Exception as exc:
         resolved_model_input = f"unresolved:{type(exc).__name__}:{exc}"
     with _MODEL_LOCK:
@@ -265,8 +285,8 @@ def get_asr_runtime_info() -> dict[str, Any]:
         "timeout_sec": _transcribe_timeout_sec(),
         "heartbeat_sec": _heartbeat_interval_sec(),
         "hf_home": _cache_root(),
-        "model_cache_path": cached_model_path,
-        "model_cache_ready": bool(cached_model_path),
+        "model_cache_path": str(local_dir),
+        "model_cache_ready": _local_dir_ready(local_dir),
         "resolved_model_input": resolved_model_input,
         "runtime_modules": _asr_runtime_modules(),
         "model_loaded": loaded,
@@ -335,8 +355,8 @@ def get_whisper_model(model_name: str | None = None, logger: Logger = None) -> A
 
 def warmup_asr_model(model_name: str | None = None) -> dict[str, str]:
     chosen_model = _resolve_model_name(model_name)
-    model_path = _find_cached_model_snapshot(chosen_model)
-    status = "ok" if model_path else "missing_cache"
+    model_path = str(_model_local_dir(chosen_model))
+    status = "ok" if _local_dir_ready(Path(model_path)) else "missing_cache"
     return {
         "status": status,
         "model": chosen_model,

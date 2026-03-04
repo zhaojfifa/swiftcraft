@@ -329,7 +329,27 @@ class LocalizationEngine:
                 target_srt = translate_srt(source_srt, target_lang=target_lang)
                 translated_plain = (target_srt or "").strip()
                 if not translated_plain or _contains_fallback_marker(translated_plain):
-                    raise EngineRunError("TRANSLATION_EMPTY_OR_FALLBACK: translated subtitle content is empty/fallback")
+                    if fallback_detected or bool(asr_fallback_reason):
+                        source_video_duration_sec_for_marker = _probe_duration(source_video) or 5.0
+                        split_sec = max(0.5, source_video_duration_sec_for_marker / 2.0)
+                        tag = target_lang.upper()
+                        if target_lang.lower() == "en":
+                            line1 = "Localized narration."
+                            line2 = "(audio unavailable)"
+                        else:
+                            line1 = f"[{tag}] Localized narration."
+                            line2 = f"[{tag}] (audio unavailable)"
+                        target_srt = (
+                            "1\n"
+                            f"00:00:00,000 --> {_srt_ts(split_sec)}\n"
+                            f"{line1}\n\n"
+                            "2\n"
+                            f"{_srt_ts(split_sec)} --> {_srt_ts(source_video_duration_sec_for_marker)}\n"
+                            f"{line2}\n"
+                        )
+                        on_log("[loc][degrade] translation_fallback_used reason=asr_fallback")
+                    else:
+                        raise EngineRunError("TRANSLATION_EMPTY_OR_FALLBACK: translated subtitle content is empty/fallback")
             target_srt_path = workspace / "target.srt"
             target_srt_path.write_text(target_srt, encoding="utf-8")
             qa_path, qa = write_translation_artifacts(workspace, source_srt, target_srt, target_lang=target_lang)
