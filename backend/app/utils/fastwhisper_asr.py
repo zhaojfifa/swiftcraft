@@ -135,6 +135,22 @@ def _find_cached_model_snapshot(model_name: str) -> str:
     return str(candidates[0])
 
 
+def _env_offline() -> bool:
+    value = (os.getenv("HF_HUB_OFFLINE", "") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _resolve_model_path_or_name(model_name: str) -> str:
+    snapshot_path = _find_cached_model_snapshot(model_name)
+    if snapshot_path:
+        return snapshot_path
+    if _env_offline():
+        raise RuntimeError(
+            f"offline_snapshot_missing:{model_name}; set HF_HOME cache or disable HF_HUB_OFFLINE"
+        )
+    return model_name
+
+
 def _rss_mb() -> int:
     try:
         import resource
@@ -203,6 +219,10 @@ def get_asr_runtime_info() -> dict[str, Any]:
     compute_type = _resolve_compute_type()
     device = _resolve_device()
     cached_model_path = _find_cached_model_snapshot(model_name)
+    try:
+        resolved_model_input = _resolve_model_path_or_name(model_name)
+    except Exception as exc:
+        resolved_model_input = f"unresolved:{type(exc).__name__}:{exc}"
     with _MODEL_LOCK:
         model_meta = dict(_MODEL_META)
         loaded = _MODEL_INSTANCE is not None
@@ -216,6 +236,7 @@ def get_asr_runtime_info() -> dict[str, Any]:
         "hf_home": _cache_root(),
         "model_cache_path": cached_model_path,
         "model_cache_ready": bool(cached_model_path),
+        "resolved_model_input": resolved_model_input,
         "runtime_modules": _asr_runtime_modules(),
         "model_loaded": loaded,
         "model_meta": model_meta,
@@ -227,9 +248,10 @@ def _load_model_once(model_name: str) -> Any:
 
     device = _resolve_device()
     compute_type = _resolve_compute_type()
+    model_input = _resolve_model_path_or_name(model_name)
     print(f"[asr] model_load start model={model_name} compute_type={compute_type} device={device}")
     started = time.perf_counter()
-    model = WhisperModel(model_name, device=device, compute_type=compute_type)
+    model = WhisperModel(model_input, device=device, compute_type=compute_type)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     model_path = str(
         getattr(model, "model_size_or_path", None)
@@ -243,6 +265,7 @@ def _load_model_once(model_name: str) -> Any:
                 "status": "warm",
                 "model": model_name,
                 "model_path": model_path,
+                "resolved_model_input": str(model_input),
             }
         )
     return model
