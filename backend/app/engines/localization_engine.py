@@ -115,6 +115,14 @@ class LocalizationEngine:
             lowered = (text or "").lower()
             return "localized narration." in lowered or "[no_subtitles]" in lowered
 
+        def _rss_mb() -> int:
+            try:
+                import resource
+
+                return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024)
+            except Exception:
+                return -1
+
         try:
             on_stage("SUBMITTED", 1)
             step = mark_step("analyzing", "ANALYZING", 5)
@@ -180,14 +188,27 @@ class LocalizationEngine:
                     break
                 on_log(f"[loc] ASR_LANG_TRY={lang}")
                 reset_last_transcribe_status()
-                attempt_segments = transcribe(
-                    str(normalized_wav),
-                    model_name=asr_model_used,
-                    beam_size=asr_beam_size,
-                    vad_filter=asr_vad_filter,
-                    language=lang,
-                )
+                on_log(f"[loc] ASR_CALL_BEGIN[{lang}] wav={normalized_wav} rss_mb={_rss_mb()}")
+                try:
+                    attempt_segments = transcribe(
+                        str(normalized_wav),
+                        model_name=asr_model_used,
+                        beam_size=asr_beam_size,
+                        vad_filter=asr_vad_filter,
+                        language=lang,
+                    )
+                except Exception as exc:
+                    asr_status_fail = get_last_transcribe_status()
+                    on_log(
+                        f"[loc] ASR_CALL_FAIL[{lang}] reason={asr_status_fail.get('reason') or type(exc).__name__} "
+                        f"rss_mb={_rss_mb()} err={type(exc).__name__}: {exc}"
+                    )
+                    raise
                 asr_status = get_last_transcribe_status()
+                on_log(
+                    f"[loc] ASR_CALL_END[{lang}] status={asr_status.get('status')} reason={asr_status.get('reason')} "
+                    f"segs={len(attempt_segments)} rss_mb={_rss_mb()}"
+                )
                 on_log(f"[loc] ASR_RUNTIME_STATUS[{lang}]={asr_status.get('status')} reason={asr_status.get('reason')}")
                 attempt_text = _joined_asr_text(attempt_segments)
                 attempt_fallback = _contains_fallback_marker(attempt_text)
