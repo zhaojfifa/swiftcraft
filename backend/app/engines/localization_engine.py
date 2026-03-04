@@ -12,6 +12,7 @@ from app.models.task import TaskRecord
 from app.services.r2_client import R2Client
 from app.utils.dubbing_service import srt_to_text, synthesize_mp3
 from app.utils.fastwhisper_asr import (
+    ASRSegment,
     get_last_transcribe_status,
     reset_last_transcribe_status,
     segments_to_srt,
@@ -167,6 +168,11 @@ class LocalizationEngine:
                 raise EngineRunError("NO_SPEECH_DETECTED: speech_ratio below threshold")
             end_step("extracting", step)
 
+            on_log("[loc] step=transcribing enter")
+            record.stage = "TRANSCRIBING"
+            on_stage("TRANSCRIBING", 25)
+            on_log("[loc] stage_set=TRANSCRIBING persisted=1")
+
             step = mark_step("transcribing", "TRANSCRIBING", 25)
             asr_model = (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "medium").strip() or "medium"
             asr_beam_size = _env_int("ASR_BEAM_SIZE", _env_int("FASTWHISPER_BEAM_SIZE", 5))
@@ -182,14 +188,14 @@ class LocalizationEngine:
             raw_text = ""
             fallback_detected = True
             runtime_unavailable_reason: str | None = None
-
-            for idx, lang in enumerate(("zh", "en")):
-                if idx == 1 and silent_for_gate:
-                    break
-                on_log(f"[loc] ASR_LANG_TRY={lang}")
-                reset_last_transcribe_status()
-                on_log(f"[loc] ASR_CALL_BEGIN[{lang}] wav={normalized_wav} rss_mb={_rss_mb()}")
-                try:
+            asr_fallback_reason = ""
+            try:
+                for idx, lang in enumerate(("zh", "en")):
+                    if idx == 1 and silent_for_gate:
+                        break
+                    on_log(f"[loc] ASR_LANG_TRY={lang}")
+                    reset_last_transcribe_status()
+                    on_log(f"[loc] ASR_CALL_PREP lang={lang} wav={normalized_wav} rss_mb={_rss_mb()}")
                     attempt_segments = transcribe(
                         str(normalized_wav),
                         model_name=asr_model_used,
@@ -198,53 +204,69 @@ class LocalizationEngine:
                         language=lang,
                         logger=lambda m: on_log(f"[asr] {m}"),
                     )
-                except Exception as exc:
-                    asr_status_fail = get_last_transcribe_status()
+                    asr_status = get_last_transcribe_status()
                     on_log(
-                        f"[loc] ASR_CALL_FAIL[{lang}] reason={asr_status_fail.get('reason') or type(exc).__name__} "
-                        f"rss_mb={_rss_mb()} err={type(exc).__name__}: {exc}"
+                        f"[loc] ASR_CALL_DONE segments={len(attempt_segments)} "
+                        f"last_status={asr_status} rss_mb={_rss_mb()}"
                     )
-                    raise
-                asr_status = get_last_transcribe_status()
-                on_log(
-                    f"[loc] ASR_CALL_END[{lang}] status={asr_status.get('status')} reason={asr_status.get('reason')} "
-                    f"segs={len(attempt_segments)} rss_mb={_rss_mb()}"
-                )
-                on_log(f"[loc] ASR_RUNTIME_STATUS[{lang}]={asr_status.get('status')} reason={asr_status.get('reason')}")
-                attempt_text = _joined_asr_text(attempt_segments)
-                attempt_fallback = _contains_fallback_marker(attempt_text)
-                status_reason = str(asr_status.get("reason") or "")
-                if status_reason == "timeout_model_load":
-                    on_log("[loc][warn] asr_timeout_model_load -> using fallback subtitles/audio path")
-                if status_reason == "timeout_transcribe":
-                    on_log("[loc][warn] asr_timeout_transcribe -> using fallback subtitles/audio path")
-                if attempt_fallback and (
-                    status_reason.startswith("module_not_found") or status_reason.startswith("runtime_exception:")
-                ):
-                    runtime_unavailable_reason = status_reason
-                on_log(f"[loc] ASR_TEXT_LEN[{lang}]={len(attempt_text)}")
-                on_log(f"[loc] ASR_TEXT_PREVIEW[{lang}]={attempt_text[:120]}")
-                if idx == 1:
-                    asr_retry_used = True
-                segments = attempt_segments
-                raw_text = attempt_text
-                fallback_detected = attempt_fallback
-                if attempt_segments and not attempt_fallback:
-                    asr_lang_final = lang
-                    break
+                    on_log(
+                        f"[loc] ASR_RUNTIME_STATUS[{lang}]={asr_status.get('status')} "
+                        f"reason={asr_status.get('reason')}"
+                    )
+                    attempt_text = _joined_asr_text(attempt_segments)
+                    attempt_fallback = _contains_fallback_marker(attempt_text)
+                    status_reason = str(asr_status.get("reason") or "")
+                    if status_reason == "timeout_model_load":
+                        on_log("[loc][warn] asr_timeout_model_load -> using fallback subtitles/audio path")
+                    if status_reason == "timeout_transcribe":
+                        on_log("[loc][warn] asr_timeout_transcribe -> using fallback subtitles/audio path")
+                    if attempt_fallback and (
+                        status_reason.startswith("module_not_found") or status_reason.startswith("runtime_exception:")
+                    ):
+                        runtime_unavailable_reason = status_reason
+                    on_log(f"[loc] ASR_TEXT_LEN[{lang}]={len(attempt_text)}")
+                    on_log(f"[loc] ASR_TEXT_PREVIEW[{lang}]={attempt_text[:120]}")
+                    if idx == 1:
+                        asr_retry_used = True
+                    segments = attempt_segments
+                    raw_text = attempt_text
+                    fallback_detected = attempt_fallback
+                    if attempt_segments and not attempt_fallback:
+                        asr_lang_final = lang
+                        break
 
-            if asr_lang_final == "none" and segments and not fallback_detected:
-                asr_lang_final = "zh"
-            on_log(f"[loc] ASR_RETRY_USED={'true' if asr_retry_used else 'false'} ASR_MODEL_USED={asr_model_used}")
-            on_log(f"[loc] ASR_LANG_FINAL={asr_lang_final}")
+                if asr_lang_final == "none" and segments and not fallback_detected:
+                    asr_lang_final = "zh"
+                on_log(f"[loc] ASR_RETRY_USED={'true' if asr_retry_used else 'false'} ASR_MODEL_USED={asr_model_used}")
+                on_log(f"[loc] ASR_LANG_FINAL={asr_lang_final}")
 
-            if runtime_unavailable_reason and (not segments or fallback_detected):
-                on_log(
-                    "[loc][warn] ASR_RUNTIME_UNAVAILABLE -> continue with fallback subtitles "
-                    f"reason={runtime_unavailable_reason}"
-                )
-            if (not segments or fallback_detected) and not silent_for_gate:
-                on_log("[loc][warn] ASR_EMPTY_OR_FALLBACK -> continue with fallback subtitles")
+                if runtime_unavailable_reason and (not segments or fallback_detected):
+                    asr_fallback_reason = f"runtime_unavailable:{runtime_unavailable_reason}"
+                elif (not segments or fallback_detected) and not silent_for_gate:
+                    asr_fallback_reason = "empty_or_fallback"
+            except BaseException as exc:
+                asr_fallback_reason = f"crash:{type(exc).__name__}:{exc}"
+                on_log(f"[loc][err] ASR_CALL_CRASH type={type(exc).__name__} msg={exc} rss_mb={_rss_mb()}")
+
+            if asr_fallback_reason:
+                fallback_duration = normalized_wav_duration_sec or audio_wav_duration_sec or 5.0
+                cue_count = 2 if fallback_duration < 6.0 else (3 if fallback_duration < 12.0 else 4)
+                span = max(0.5, fallback_duration / cue_count)
+                segments = [
+                    ASRSegment(
+                        start=round(i * span, 3),
+                        end=round(min(fallback_duration, (i + 1) * span), 3),
+                        text="Localized narration.",
+                    )
+                    for i in range(cue_count)
+                ]
+                raw_text = " ".join(seg.text for seg in segments)
+                fallback_detected = True
+                on_log(f"[loc] ASR_FALLBACK_USED reason={asr_fallback_reason}")
+                on_stage("TRANSCRIBING", 30)
+            else:
+                on_stage("TRANSCRIBING", 30)
+
             source_text = raw_text
             source_srt = segments_to_srt(segments)
             source_srt_path = workspace / "source.srt"
