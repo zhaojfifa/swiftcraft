@@ -196,6 +196,7 @@ class LocalizationEngine:
                         beam_size=asr_beam_size,
                         vad_filter=asr_vad_filter,
                         language=lang,
+                        logger=lambda m: on_log(f"[asr] {m}"),
                     )
                 except Exception as exc:
                     asr_status_fail = get_last_transcribe_status()
@@ -214,9 +215,9 @@ class LocalizationEngine:
                 attempt_fallback = _contains_fallback_marker(attempt_text)
                 status_reason = str(asr_status.get("reason") or "")
                 if status_reason == "timeout_model_load":
-                    raise EngineRunError("asr_timeout_model_load: model loading exceeded timeout")
+                    on_log("[loc][warn] asr_timeout_model_load -> using fallback subtitles/audio path")
                 if status_reason == "timeout_transcribe":
-                    raise EngineRunError("asr_timeout_transcribe: transcribe exceeded timeout")
+                    on_log("[loc][warn] asr_timeout_transcribe -> using fallback subtitles/audio path")
                 if attempt_fallback and (
                     status_reason.startswith("module_not_found") or status_reason.startswith("runtime_exception:")
                 ):
@@ -238,14 +239,12 @@ class LocalizationEngine:
             on_log(f"[loc] ASR_LANG_FINAL={asr_lang_final}")
 
             if runtime_unavailable_reason and (not segments or fallback_detected):
-                raise EngineRunError(
-                    "ASR_RUNTIME_UNAVAILABLE: "
-                    f"{runtime_unavailable_reason}; install ASR deps at build time and verify requirements path"
+                on_log(
+                    "[loc][warn] ASR_RUNTIME_UNAVAILABLE -> continue with fallback subtitles "
+                    f"reason={runtime_unavailable_reason}"
                 )
             if (not segments or fallback_detected) and not silent_for_gate:
-                raise EngineRunError(
-                    "ASR_EMPTY_OR_FALLBACK: transcribe returned empty/fallback text for non-silent audio"
-                )
+                on_log("[loc][warn] ASR_EMPTY_OR_FALLBACK -> continue with fallback subtitles")
             source_text = raw_text
             source_srt = segments_to_srt(segments)
             source_srt_path = workspace / "source.srt"

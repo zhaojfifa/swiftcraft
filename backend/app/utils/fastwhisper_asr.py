@@ -9,7 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 _RUNTIME_LOGGED = False
 _LAST_TRANSCRIBE_STATUS: dict[str, str] = {"status": "init", "reason": ""}
@@ -21,6 +21,7 @@ _SEMAPHORE_LOCK = threading.Lock()
 _TRANSCRIBE_SEMAPHORE: threading.Semaphore | None = None
 _TRANSCRIBE_SEMAPHORE_SIZE = 0
 _HEARTBEAT_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+Logger = Optional[Callable[[str], None]]
 
 
 @dataclass
@@ -66,6 +67,13 @@ def _env_first(names: list[str], default: str = "") -> str:
         if stripped:
             return stripped
     return default
+
+
+def _log(msg: str, logger: Logger = None) -> None:
+    if logger:
+        logger(msg)
+    else:
+        print(msg)
 
 
 def get_last_transcribe_status() -> dict[str, str]:
@@ -118,20 +126,27 @@ def _get_semaphore() -> threading.Semaphore:
 def _cache_root() -> str:
     root = (os.getenv("HF_HOME", "") or "").strip()
     if root:
-        return root
-    return str(Path.home() / ".cache" / "huggingface")
+        root_path = Path(root)
+    else:
+        root_path = Path.home() / ".cache" / "huggingface"
+    (root_path / "hub").mkdir(parents=True, exist_ok=True)
+    return str(root_path)
 
 
-def _find_cached_model_snapshot(model_name: str) -> str:
+def _find_cached_model_snapshot(model_name: str, logger: Logger = None) -> str:
     root = Path(_cache_root())
     repo_dir = root / "hub" / f"models--Systran--faster-whisper-{model_name}"
     snapshots_dir = repo_dir / "snapshots"
+    _log(f"snapshot_probe model={model_name} snapshots_dir={snapshots_dir}", logger)
     if not snapshots_dir.exists():
         return ""
     candidates = [p for p in snapshots_dir.iterdir() if p.is_dir()]
+    nested_candidates = [p for p in snapshots_dir.glob("*/*") if p.is_dir()]
+    candidates.extend(nested_candidates)
     if not candidates:
         return ""
     candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    _log(f"snapshot_probe hit model={model_name} path={candidates[0]}", logger)
     return str(candidates[0])
 
 
@@ -140,15 +155,31 @@ def _env_offline() -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
-def _resolve_model_path_or_name(model_name: str) -> str:
-    snapshot_path = _find_cached_model_snapshot(model_name)
+def _ensure_local_model_dir(model_name: str, logger: Logger = None) -> str:
+    snapshot_path = _find_cached_model_snapshot(model_name, logger=logger)
     if snapshot_path:
         return snapshot_path
     if _env_offline():
-        raise RuntimeError(
-            f"offline_snapshot_missing:{model_name}; set HF_HOME cache or disable HF_HUB_OFFLINE"
-        )
-    return model_name
+        raise RuntimeError(f"offline_snapshot_missing:{model_name}")
+    started = time.perf_counter()
+    _log(f"snapshot_download start model={model_name} cache_dir={_cache_root()}", logger)
+    from huggingface_hub import snapshot_download  # type: ignore
+
+    snapshot_download(
+        repo_id=f"Systran/faster-whisper-{model_name}",
+        cache_dir=_cache_root(),
+        allow_patterns=["*"],
+    )
+    elapsed_s = round(time.perf_counter() - started, 3)
+    snapshot_path = _find_cached_model_snapshot(model_name, logger=logger)
+    if not snapshot_path:
+        raise RuntimeError(f"snapshot_download_missing_after_download:{model_name}")
+    _log(f"snapshot_download ok model={model_name} elapsed_s={elapsed_s} path={snapshot_path}", logger)
+    return snapshot_path
+
+
+def _resolve_model_path_or_name(model_name: str, logger: Logger = None) -> str:
+    return _ensure_local_model_dir(model_name, logger=logger)
 
 
 def _rss_mb() -> int:
@@ -174,14 +205,14 @@ def _asr_runtime_modules() -> dict[str, Any]:
     return modules
 
 
-def _try_runtime_install() -> bool:
+def _try_runtime_install(logger: Logger = None) -> bool:
     global _RUNTIME_INSTALL_ATTEMPTED
     if _RUNTIME_INSTALL_ATTEMPTED:
         return False
     _RUNTIME_INSTALL_ATTEMPTED = True
     if not _env_runtime_install_enabled():
         return False
-    print("[asr] faster_whisper missing -> attempting runtime install")
+    _log("faster_whisper missing -> attempting runtime install", logger)
     commands = [
         [
             sys.executable,
@@ -209,7 +240,7 @@ def _try_runtime_install() -> bool:
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=180)
         except Exception as exc:
-            print(f"[asr] runtime install failed cmd={' '.join(cmd)} err={type(exc).__name__}: {exc}")
+            _log(f"runtime install failed cmd={' '.join(cmd)} err={type(exc).__name__}: {exc}", logger)
             return False
     return True
 
@@ -243,22 +274,34 @@ def get_asr_runtime_info() -> dict[str, Any]:
     }
 
 
-def _load_model_once(model_name: str) -> Any:
+def _load_model_once(model_name: str, logger: Logger = None) -> Any:
     from faster_whisper import WhisperModel  # type: ignore
 
     device = _resolve_device()
     compute_type = _resolve_compute_type()
-    model_input = _resolve_model_path_or_name(model_name)
-    print(f"[asr] model_load start model={model_name} compute_type={compute_type} device={device}")
+    cpu_threads = max(1, _env_int("ASR_CPU_THREADS", 1))
+    num_workers = max(1, _env_int("ASR_NUM_WORKERS", 1))
+    model_input = _resolve_model_path_or_name(model_name, logger=logger)
+    _log(
+        f"model_load start model={model_name} compute_type={compute_type} device={device} "
+        f"cpu_threads={cpu_threads} num_workers={num_workers} rss_mb={_rss_mb()}",
+        logger,
+    )
     started = time.perf_counter()
-    model = WhisperModel(model_input, device=device, compute_type=compute_type)
+    model = WhisperModel(
+        model_input,
+        device=device,
+        compute_type=compute_type,
+        cpu_threads=cpu_threads,
+        num_workers=num_workers,
+    )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     model_path = str(
         getattr(model, "model_size_or_path", None)
         or getattr(getattr(model, "model", None), "model_path", "")
         or ""
     )
-    print(f"[asr] model_load ok elapsed_ms={elapsed_ms} model_path={model_path}")
+    _log(f"model_load ok elapsed_ms={elapsed_ms} model_path={model_path} rss_mb={_rss_mb()}", logger)
     with _MODEL_LOCK:
         _MODEL_META.update(
             {
@@ -271,7 +314,7 @@ def _load_model_once(model_name: str) -> Any:
     return model
 
 
-def get_whisper_model(model_name: str | None = None) -> Any:
+def get_whisper_model(model_name: str | None = None, logger: Logger = None) -> Any:
     global _MODEL_INSTANCE
     chosen_model = _resolve_model_name(model_name)
     with _MODEL_LOCK:
@@ -280,13 +323,13 @@ def get_whisper_model(model_name: str | None = None) -> Any:
     try:
         from faster_whisper import WhisperModel  # noqa: F401  # type: ignore
     except ModuleNotFoundError:
-        if not _try_runtime_install():
+        if not _try_runtime_install(logger=logger):
             raise
         from faster_whisper import WhisperModel  # noqa: F401  # type: ignore
     with _MODEL_LOCK:
         if _MODEL_INSTANCE is not None and _MODEL_META.get("model") == chosen_model:
             return _MODEL_INSTANCE
-        _MODEL_INSTANCE = _load_model_once(chosen_model)
+        _MODEL_INSTANCE = _load_model_once(chosen_model, logger=logger)
         return _MODEL_INSTANCE
 
 
@@ -301,7 +344,14 @@ def warmup_asr_model(model_name: str | None = None) -> dict[str, str]:
     }
 
 
-def _run_with_heartbeat(func: Any, *, phase: str, timeout_sec: int, heartbeat_sec: int) -> Any:
+def _run_with_heartbeat(
+    func: Any,
+    *,
+    phase: str,
+    timeout_sec: int,
+    heartbeat_sec: int,
+    logger: Logger = None,
+) -> Any:
     started = time.perf_counter()
     future = _HEARTBEAT_EXECUTOR.submit(func)
     try:
@@ -310,7 +360,7 @@ def _run_with_heartbeat(func: Any, *, phase: str, timeout_sec: int, heartbeat_se
                 return future.result(timeout=heartbeat_sec)
             except FutureTimeoutError:
                 elapsed = int(time.perf_counter() - started)
-                print(f"[asr] heartbeat phase={phase} elapsed_s={elapsed}")
+                _log(f"heartbeat phase={phase} elapsed_s={elapsed}", logger)
                 if elapsed >= timeout_sec:
                     future.cancel()
                     raise TimeoutError(f"{phase} timeout after {timeout_sec}s")
@@ -447,6 +497,7 @@ def transcribe(
     vad_filter: bool | None = None,
     language: str | None = None,
     no_speech_threshold: float | None = None,
+    logger: Logger = None,
 ) -> List[ASRSegment]:
     global _RUNTIME_LOGGED
     global _LAST_TRANSCRIBE_STATUS
@@ -472,11 +523,12 @@ def transcribe(
         try:
             import sys
 
-            print(
-                f"[asr] python={sys.executable} ver={sys.version.split()[0]} "
+            _log(
+                f"python={sys.executable} ver={sys.version.split()[0]} "
                 f"model={model_name} device={device} compute={compute_type} "
                 f"vad={vad_filter} lang={language} beam={beam_size} "
-                f"no_speech_threshold={no_speech_threshold}"
+                f"no_speech_threshold={no_speech_threshold}",
+                logger,
             )
         except Exception:
             pass
@@ -491,20 +543,28 @@ def transcribe(
 
     try:
         try:
-            print(f"[asr] rss_mb={_rss_mb()} phase=before_model_load")
+            _log(f"rss_mb={_rss_mb()} phase=before_model_load", logger)
             model = _run_with_heartbeat(
-                lambda: get_whisper_model(model_name),
+                lambda: get_whisper_model(model_name, logger=logger),
                 phase="model_load",
                 timeout_sec=timeout_sec,
                 heartbeat_sec=heartbeat_sec,
+                logger=logger,
             )
+            _log(f"rss_mb={_rss_mb()} phase=after_model_load", logger)
         except ModuleNotFoundError as exc:
             missing_module = getattr(exc, "name", "unknown")
-            print(f"[asr] faster_whisper_not_installed -> fallback missing_module={missing_module}")
+            _log(f"faster_whisper_not_installed -> fallback missing_module={missing_module}", logger)
             _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": f"module_not_found:{missing_module}"}
             duration = _probe_duration_sec(audio_wav_path)
             return _empty_fallback_segments(duration)
+        except RuntimeError as exc:
+            _log(f"model_resolve_failed -> fallback reason={exc}", logger)
+            _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": f"model_resolve_failed:{exc}"}
+            duration = _probe_duration_sec(audio_wav_path)
+            return _empty_fallback_segments(duration)
         except TimeoutError:
+            _log("model_load timeout -> fallback", logger)
             _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": "timeout_model_load"}
             duration = _probe_duration_sec(audio_wav_path)
             return _empty_fallback_segments(duration)
@@ -522,7 +582,8 @@ def transcribe(
             full_kwargs["language"] = language
         if no_speech_threshold is not None:
             full_kwargs["no_speech_threshold"] = no_speech_threshold
-        print(f"[asr] transcribe start lang={language or 'auto'} wav={audio_wav_path}")
+        _log(f"rss_mb={_rss_mb()} phase=before_transcribe", logger)
+        _log(f"transcribe start lang={language or 'auto'} wav={audio_wav_path}", logger)
         transcribe_started = time.perf_counter()
 
         def _do_transcribe() -> Any:
@@ -543,8 +604,10 @@ def transcribe(
                 phase="transcribe",
                 timeout_sec=timeout_sec,
                 heartbeat_sec=heartbeat_sec,
+                logger=logger,
             )
         except TimeoutError:
+            _log("transcribe timeout -> fallback", logger)
             _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": "timeout_transcribe"}
             duration = _probe_duration_sec(audio_wav_path)
             return _empty_fallback_segments(duration)
@@ -552,13 +615,14 @@ def transcribe(
         transcribe_elapsed_ms = int((time.perf_counter() - transcribe_started) * 1000)
         preview_segments = _to_segments(raw_segments)
         preview_text = " ".join(seg.text for seg in preview_segments).strip()
-        print(f"[asr] rss_mb={_rss_mb()} phase=after_transcribe")
-        print(
-            f"[asr] transcribe ok elapsed_ms={transcribe_elapsed_ms} "
-            f"segments={len(preview_segments)} text_len={len(preview_text)}"
+        _log(f"rss_mb={_rss_mb()} phase=after_transcribe", logger)
+        _log(
+            f"transcribe ok elapsed_ms={transcribe_elapsed_ms} "
+            f"segments={len(preview_segments)} text_len={len(preview_text)}",
+            logger,
         )
     except Exception as exc:
-        print(f"[asr] exception={type(exc).__name__}: {exc} -> fallback")
+        _log(f"exception={type(exc).__name__}: {exc} -> fallback", logger)
         _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": f"runtime_exception:{type(exc).__name__}"}
         duration = _probe_duration_sec(audio_wav_path)
         return _empty_fallback_segments(duration)
@@ -573,7 +637,7 @@ def transcribe(
     if segments:
         _LAST_TRANSCRIBE_STATUS = {"status": "ok", "reason": "segments"}
         return segments
-    print("[asr] empty_segments -> fallback")
+    _log("empty_segments -> fallback", logger)
     _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": "empty_segments"}
     return _empty_fallback_segments(total_duration)
 
