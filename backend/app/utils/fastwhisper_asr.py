@@ -468,6 +468,8 @@ def _run_subprocess_transcribe(
         raise RuntimeError(f"subprocess_status:{status}:{data.get('reason')}")
     raw_segments = data.get("segments") or []
     segs = _to_segments(raw_segments)
+    if not segs and raw_segments:
+        _log(f"asr_segments_parse_failed raw_count={len(raw_segments)}", logger)
     return segs, status, data
 
 
@@ -491,13 +493,31 @@ def _probe_duration_sec(audio_wav_path: str) -> float:
 
 def _to_segments(raw_segments: Any) -> List[ASRSegment]:
     segments: List[ASRSegment] = []
+
+    if not raw_segments:
+        return segments
+
     for seg in raw_segments:
-        start = float(getattr(seg, "start", 0.0) or 0.0)
-        end = float(getattr(seg, "end", start + 1.0) or (start + 1.0))
-        text = str(getattr(seg, "text", "") or "").strip()
+        if isinstance(seg, dict):
+            start = float(seg.get("start") or 0.0)
+            end = float(seg.get("end") or (start + 1.0))
+            text = str(seg.get("text") or "").strip()
+        else:
+            start = float(getattr(seg, "start", 0.0) or 0.0)
+            end = float(getattr(seg, "end", start + 1.0) or (start + 1.0))
+            text = str(getattr(seg, "text", "") or "").strip()
+
         if not text:
             continue
-        segments.append(ASRSegment(start=start, end=max(end, start + 0.1), text=text))
+
+        segments.append(
+            ASRSegment(
+                start=start,
+                end=max(end, start + 0.1),
+                text=text,
+            )
+        )
+
     return segments
 
 
