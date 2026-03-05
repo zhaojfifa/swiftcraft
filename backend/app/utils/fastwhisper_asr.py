@@ -415,7 +415,7 @@ def _run_subprocess_transcribe(
     num_workers: int,
     timeout_sec: int,
     logger: Logger = None,
-) -> tuple[list[ASRSegment], str]:
+) -> tuple[list[ASRSegment], str, dict[str, Any]]:
     payload: dict[str, Any] = {
         "wav_path": wav_path,
         "model_input": model_input,
@@ -430,6 +430,7 @@ def _run_subprocess_transcribe(
         "compute_type": compute_type,
         "cpu_threads": cpu_threads,
         "num_workers": num_workers,
+        "force_language": _env_bool("ASR_FORCE_LANGUAGE", False),
     }
     cmd = [sys.executable, "-m", "app.utils.asr_worker"]
     proc = subprocess.Popen(
@@ -467,7 +468,7 @@ def _run_subprocess_transcribe(
         raise RuntimeError(f"subprocess_status:{status}:{data.get('reason')}")
     raw_segments = data.get("segments") or []
     segs = _to_segments(raw_segments)
-    return segs, status
+    return segs, status, data
 
 
 def _probe_duration_sec(audio_wav_path: str) -> float:
@@ -718,9 +719,14 @@ def transcribe(
                     fallback_kwargs["language"] = language
                 return model.transcribe(audio_wav_path, **fallback_kwargs)
 
+        def _parse_result(result_data: Any) -> tuple[list[ASRSegment], int]:
+            segs = _to_segments(result_data)
+            text = " ".join(seg.text for seg in segs).strip()
+            return segs, len(text)
+
         try:
             if use_subprocess:
-                preview_segments, _ = _run_subprocess_transcribe(
+                preview_segments, _, worker_meta = _run_subprocess_transcribe(
                     wav_path=audio_wav_path,
                     model_input=model_input,
                     language=language,
@@ -737,6 +743,14 @@ def transcribe(
                     timeout_sec=timeout_sec,
                     logger=logger,
                 )
+                if worker_meta.get("retry_used"):
+                    _log(
+                        "empty_segments_retry -> rerun_without_vad "
+                        f"final_vad={worker_meta.get('final_vad_filter')} "
+                        f"final_beam={worker_meta.get('final_beam_size')} "
+                        f"final_lang={worker_meta.get('final_language')}",
+                        logger,
+                    )
                 raw_segments = preview_segments
             else:
                 raw_segments, _ = _run_with_heartbeat(
@@ -746,6 +760,46 @@ def transcribe(
                     heartbeat_sec=heartbeat_sec,
                     logger=logger,
                 )
+                retry_used = False
+                parsed_segments, parsed_text_len = _parse_result(raw_segments)
+                force_language = _env_bool("ASR_FORCE_LANGUAGE", False)
+                if not parsed_segments or parsed_text_len <= 0:
+                    retry_used = True
+                    _log("empty_segments_retry -> rerun_without_vad", logger)
+                    retry_kwargs = dict(full_kwargs)
+                    retry_kwargs["vad_filter"] = False
+                    retry_kwargs["beam_size"] = min(max(1, beam_size), 1)
+                    if not force_language:
+                        retry_kwargs.pop("language", None)
+                    try:
+                        raw_segments, _ = _run_with_heartbeat(
+                            lambda: model.transcribe(audio_wav_path, **retry_kwargs),
+                            phase="transcribe",
+                            timeout_sec=timeout_sec,
+                            heartbeat_sec=heartbeat_sec,
+                            logger=logger,
+                        )
+                    except TypeError:
+                        raw_segments, _ = _run_with_heartbeat(
+                            lambda: model.transcribe(
+                                audio_wav_path,
+                                beam_size=retry_kwargs.get("beam_size", 1),
+                                vad_filter=retry_kwargs.get("vad_filter", False),
+                            ),
+                            phase="transcribe",
+                            timeout_sec=timeout_sec,
+                            heartbeat_sec=heartbeat_sec,
+                            logger=logger,
+                        )
+                    _log(
+                        "retry_final_config "
+                        f"vad={retry_kwargs.get('vad_filter')} "
+                        f"beam={retry_kwargs.get('beam_size')} "
+                        f"lang={retry_kwargs.get('language')}",
+                        logger,
+                    )
+                if retry_used:
+                    parsed_segments, parsed_text_len = _parse_result(raw_segments)
         except TimeoutError:
             elapsed_ms = int((time.perf_counter() - transcribe_started) * 1000)
             _log(f"transcribe_timeout timeout_sec={timeout_sec} elapsed_ms={elapsed_ms} rss_mb={_rss_mb()}", logger)
