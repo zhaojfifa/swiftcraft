@@ -93,7 +93,7 @@ def _env_runtime_install_enabled() -> bool:
 
 
 def _resolve_model_name(model_name: str | None = None) -> str:
-    return (model_name or _env_first(["ASR_MODEL", "FASTWHISPER_MODEL"], "small")).strip() or "small"
+    return (model_name or _env_first(["ASR_MODEL", "FASTWHISPER_MODEL"], "tiny")).strip() or "tiny"
 
 
 def _resolve_compute_type() -> str:

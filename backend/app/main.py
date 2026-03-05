@@ -37,7 +37,7 @@ app.mount("/static/data", StaticFiles(directory=str(DATA_DIR)), name="data")
 
 @app.on_event("startup")
 async def startup_checks() -> None:
-    asr_model = (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "small").strip() or "small"
+    asr_model = (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "tiny").strip() or "tiny"
     print(f"[startup] asr_config model={asr_model} compute_type={os.getenv('ASR_COMPUTE_TYPE', os.getenv('FASTWHISPER_COMPUTE_TYPE', 'int8'))} device={os.getenv('FASTWHISPER_DEVICE', 'cpu')}")
 
 

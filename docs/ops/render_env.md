@@ -6,7 +6,7 @@ Use these environment variables so `faster-whisper` model assets are cached at b
 HF_HOME=/var/data/huggingface
 ASR_MODEL_DIR=/var/data/asr_models
 ASR_HF_CACHE_DIR=/var/data/hf_cache
-ASR_MODEL=small
+ASR_MODEL=tiny
 ASR_MAX_CONCURRENCY=1
 ASR_TRANSCRIBE_TIMEOUT_SEC=120
 ASR_HEARTBEAT_SEC=10
@@ -28,4 +28,4 @@ HF_TOKEN=your_huggingface_token
 
 Notes:
 - `scripts/render_preflight.sh` now performs ASR warmup with `download_model($ASR_MODEL)`.
-- Keep `ASR_MODEL` aligned with runtime capacity; `small` is the default recommendation for baseline localization.
+- For 1CPU/2GB baseline localization, prefer `ASR_MODEL=tiny` with `FASTWHISPER_COMPUTE_TYPE=int8`.

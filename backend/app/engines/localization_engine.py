@@ -176,7 +176,7 @@ class LocalizationEngine:
             on_log("[loc] stage_set=TRANSCRIBING persisted=1")
 
             step = mark_step("transcribing", "TRANSCRIBING", 25)
-            asr_model = (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "medium").strip() or "medium"
+            asr_model = (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "tiny").strip() or "tiny"
             asr_beam_size = _env_int("ASR_BEAM_SIZE", _env_int("FASTWHISPER_BEAM_SIZE", 5))
             asr_vad_filter = _env_bool("ASR_VAD_FILTER", _env_bool("FASTWHISPER_VAD_FILTER", True))
             normalized_duration_for_gate = (
@@ -328,7 +328,7 @@ class LocalizationEngine:
                 "text_len": len(source_text),
                 "segments": num_segments,
                 "fallback_detected": _contains_fallback_marker(source_text),
-                "model_used": (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "medium").strip() or "medium",
+                "model_used": (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "tiny").strip() or "tiny",
             }
             no_subtitles = not segments or (rms_db is not None and rms_db <= -40.0)
             end_step("transcribing", step)
