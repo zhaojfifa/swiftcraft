@@ -43,8 +43,8 @@ def main() -> int:
     retry_used = False
     retry_reason = ""
 
-    def _run_once(run_kwargs: dict[str, Any]) -> list[dict[str, Any]]:
-        raw_segments, _ = model.transcribe(wav_path, **run_kwargs)
+    def _run_once(run_kwargs: dict[str, Any]) -> tuple[list[dict[str, Any]], Any]:
+        raw_segments, info = model.transcribe(wav_path, **run_kwargs)
         segments: list[dict[str, Any]] = []
         for seg in raw_segments:
             segments.append(
@@ -54,9 +54,9 @@ def main() -> int:
                     "text": str(getattr(seg, "text", "") or ""),
                 }
             )
-        return segments
+        return segments, info
 
-    segments = _run_once(kwargs)
+    segments, info = _run_once(kwargs)
     text_len = len(" ".join((item.get("text", "").strip() for item in segments)).strip())
     if not segments or text_len <= 0:
         retry_used = True
@@ -66,7 +66,7 @@ def main() -> int:
         retry_kwargs["beam_size"] = min(max(1, int(payload.get("beam_size") or 1)), 1)
         if not force_language:
             retry_kwargs.pop("language", None)
-        segments = _run_once(retry_kwargs)
+        segments, info = _run_once(retry_kwargs)
         text_len = len(" ".join((item.get("text", "").strip() for item in segments)).strip())
         kwargs = retry_kwargs
 
@@ -81,6 +81,8 @@ def main() -> int:
                 "final_vad_filter": kwargs.get("vad_filter"),
                 "final_beam_size": kwargs.get("beam_size"),
                 "final_language": kwargs.get("language"),
+                "detected_language": getattr(info, "language", None),
+                "detected_language_probability": getattr(info, "language_probability", None),
             }
         )
     )
