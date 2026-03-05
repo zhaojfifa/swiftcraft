@@ -613,7 +613,7 @@ def transcribe(
         if no_speech_threshold is not None:
             full_kwargs["no_speech_threshold"] = no_speech_threshold
         _log(f"rss_mb={_rss_mb()} phase=before_transcribe", logger)
-        _log(f"transcribe start lang={language or 'auto'} wav={audio_wav_path}", logger)
+        _log(f"transcribe_start lang={language or 'auto'} wav={audio_wav_path}", logger)
         transcribe_started = time.perf_counter()
 
         def _do_transcribe() -> Any:
@@ -637,7 +637,7 @@ def transcribe(
                 logger=logger,
             )
         except TimeoutError:
-            _log("transcribe timeout -> fallback", logger)
+            _log(f"transcribe_timeout timeout_sec={timeout_sec}", logger)
             _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": "timeout_transcribe"}
             duration = _probe_duration_sec(audio_wav_path)
             return _empty_fallback_segments(duration)
@@ -647,7 +647,7 @@ def transcribe(
         preview_text = " ".join(seg.text for seg in preview_segments).strip()
         _log(f"rss_mb={_rss_mb()} phase=after_transcribe", logger)
         _log(
-            f"transcribe ok elapsed_ms={transcribe_elapsed_ms} "
+            f"transcribe_done elapsed_ms={transcribe_elapsed_ms} "
             f"segments={len(preview_segments)} text_len={len(preview_text)}",
             logger,
         )

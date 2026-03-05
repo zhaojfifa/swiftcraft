@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import os
-import queue
-import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict
@@ -191,7 +189,6 @@ class LocalizationEngine:
             fallback_detected = True
             runtime_unavailable_reason: str | None = None
             asr_fallback_reason = ""
-            asr_engine_hard_timeout_sec = _env_int("ASR_ENGINE_HARD_TIMEOUT_SEC", 120)
 
             def _fallback_segments(duration_sec: float) -> list[ASRSegment]:
                 fallback_duration = max(1.0, duration_sec or 5.0)
@@ -213,48 +210,15 @@ class LocalizationEngine:
                     on_log(f"[loc] ASR_LANG_TRY={lang}")
                     reset_last_transcribe_status()
                     on_log(f"[loc] ASR_CALL_PREP lang={lang} wav={normalized_wav} rss_mb={_rss_mb()}")
-                    result_q: queue.Queue = queue.Queue(maxsize=1)
-
-                    def _asr_target() -> None:
-                        try:
-                            segs = transcribe(
-                                str(normalized_wav),
-                                model_name=asr_model_used,
-                                beam_size=asr_beam_size,
-                                vad_filter=asr_vad_filter,
-                                language=lang,
-                                logger=lambda m: on_log(f"[asr] {m}"),
-                            )
-                            result_q.put(("ok", segs, get_last_transcribe_status(), None))
-                        except BaseException as exc:  # noqa: BLE001
-                            result_q.put(("err", [], get_last_transcribe_status(), exc))
-
-                    worker = threading.Thread(target=_asr_target, daemon=True, name=f"asr:{task_id[:8]}:{lang}")
-                    worker.start()
-                    worker.join(timeout=asr_engine_hard_timeout_sec)
-                    if worker.is_alive():
-                        asr_fallback_reason = "asr_hard_timeout"
-                        on_log("[loc][warn] asr_hard_timeout -> degrade")
-                        attempt_segments = _fallback_segments(
-                            normalized_wav_duration_sec or audio_wav_duration_sec or 5.0
-                        )
-                        asr_status = {"status": "fallback", "reason": "engine_hard_timeout"}
-                        segments = attempt_segments
-                        raw_text = _joined_asr_text(attempt_segments)
-                        fallback_detected = True
-                        break
-
-                    if result_q.empty():
-                        asr_fallback_reason = "asr_no_result"
-                        on_log("[loc][warn] asr_no_result -> degrade")
-                        attempt_segments = _fallback_segments(
-                            normalized_wav_duration_sec or audio_wav_duration_sec or 5.0
-                        )
-                        asr_status = {"status": "fallback", "reason": "engine_no_result"}
-                    else:
-                        outcome, attempt_segments, asr_status, asr_exc = result_q.get()
-                        if outcome == "err":
-                            raise asr_exc
+                    attempt_segments = transcribe(
+                        str(normalized_wav),
+                        model_name=asr_model_used,
+                        beam_size=asr_beam_size,
+                        vad_filter=asr_vad_filter,
+                        language=lang,
+                        logger=lambda m: on_log(f"[asr] {m}"),
+                    )
+                    asr_status = get_last_transcribe_status()
 
                     on_log(
                         f"[loc] ASR_CALL_DONE segments={len(attempt_segments)} "
@@ -268,9 +232,10 @@ class LocalizationEngine:
                     attempt_fallback = _contains_fallback_marker(attempt_text)
                     status_reason = str(asr_status.get("reason") or "")
                     if status_reason == "timeout_model_load":
-                        on_log("[loc][warn] asr_timeout_model_load -> using fallback subtitles/audio path")
+                        on_log("[loc][warn] asr_model_load_timeout -> using fallback subtitles/audio path")
                     if status_reason == "timeout_transcribe":
-                        on_log("[loc][warn] asr_timeout_transcribe -> using fallback subtitles/audio path")
+                        on_log("[loc][warn] asr_transcribe_timeout -> using fallback subtitles/audio path")
+                        asr_fallback_reason = "asr_hard_timeout"
                     if attempt_fallback and (
                         status_reason.startswith("module_not_found") or status_reason.startswith("runtime_exception:")
                     ):
