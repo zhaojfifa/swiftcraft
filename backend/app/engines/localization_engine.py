@@ -250,7 +250,7 @@ class LocalizationEngine:
                     status_reason = str(asr_status.get("reason") or "")
                     if status_reason == "timeout_model_load":
                         on_log("[loc][warn] asr_model_load_timeout -> using fallback subtitles/audio path")
-                    if status_reason == "timeout_transcribe":
+                    if status_reason in {"timeout_transcribe", "transcribe_timeout"}:
                         on_log("[loc][warn] asr_transcribe_timeout -> using fallback subtitles/audio path")
                         asr_fallback_reason = "asr_hard_timeout"
                     if attempt_fallback and (
