@@ -111,7 +111,7 @@ def main() -> int:
         retry_used = True
         retry_reason = "quality_or_empty_retry"
         retry_kwargs = dict(kwargs)
-        retry_kwargs["vad_filter"] = False
+        retry_kwargs["vad_filter"] = bool(payload.get("vad_filter", True))
         retry_kwargs["beam_size"] = 1
         if not force_language:
             retry_kwargs.pop("language", None)
