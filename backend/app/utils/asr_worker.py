@@ -81,7 +81,7 @@ def main() -> int:
     if best_of is not None:
         kwargs["best_of"] = max(1, int(best_of))
 
-    force_language = bool(payload.get("force_language", False))
+    force_language = bool(payload.get("force_language", False)) or bool(req_language)
     requested_beam = max(1, int(payload.get("beam_size") or 1))
     retry_used = False
     retry_reason = ""
@@ -104,6 +104,8 @@ def main() -> int:
         f"language={kwargs.get('language')} temp={kwargs.get('temperature')} "
         f"best_of={kwargs.get('best_of')} cond_prev={kwargs.get('condition_on_previous_text')}"
     )
+    if force_language and kwargs.get("language"):
+        _wlog(f"worker_forced_language language={kwargs.get('language')}")
     segments, info = _run_once(kwargs)
     text_len = len(" ".join((item.get("text", "").strip() for item in segments)).strip())
     text = " ".join((item.get("text", "").strip() for item in segments)).strip()

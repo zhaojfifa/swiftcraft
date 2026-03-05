@@ -519,6 +519,7 @@ def _build_worker_payload(
         best_of_payload: int | None = None
     else:
         best_of_payload = max(1, best_of)
+    effective_force_language = _env_bool("ASR_FORCE_LANGUAGE", False) or bool(language)
     payload: dict[str, Any] = {
         "wav_path": wav_path,
         "model_input": model_input,
@@ -533,7 +534,7 @@ def _build_worker_payload(
         "compute_type": compute_type,
         "cpu_threads": cpu_threads,
         "num_workers": num_workers,
-        "force_language": _env_bool("ASR_FORCE_LANGUAGE", False),
+        "force_language": effective_force_language,
         "temperature": temperatures,
         "best_of": best_of_payload,
         "condition_on_previous_text": condition_on_prev,
@@ -708,6 +709,7 @@ def transcribe(
         hinted_language = _env_first(["ASR_LANGUAGE_HINT", "FASTWHISPER_LANGUAGE"], "") or None
         language = hinted_language if force_language else None
     language = _normalize_language(language)
+    effective_force_language = force_language or bool(language)
     if no_speech_threshold is None:
         no_speech_threshold = _env_float("ASR_NO_SPEECH_THRESHOLD")
     timeout_sec = _transcribe_timeout_sec()
@@ -725,7 +727,7 @@ def transcribe(
                 f"python={sys.executable} ver={sys.version.split()[0]} "
                 f"model={model_name} device={device} compute={compute_type} "
                 f"vad={vad_filter} lang={language} beam={beam_size} "
-                f"word_ts={word_timestamps} force_lang={force_language} "
+                f"word_ts={word_timestamps} force_lang={effective_force_language} "
                 f"no_speech_threshold={no_speech_threshold}",
                 logger,
             )
@@ -816,6 +818,8 @@ def transcribe(
             text = " ".join(seg.text for seg in segs).strip()
             return segs, len(text)
 
+        detected_language: str | None = None
+        detected_language_probability: Any = None
         try:
             if use_subprocess:
                 preview_segments, _, worker_meta = _run_subprocess_transcribe(
@@ -850,6 +854,8 @@ def transcribe(
                     f"prob={worker_meta.get('detected_language_probability')}",
                     logger,
                 )
+                detected_language = worker_meta.get("detected_language")
+                detected_language_probability = worker_meta.get("detected_language_probability")
                 raw_segments = preview_segments
             else:
                 raw_segments, asr_info = _run_with_heartbeat(
@@ -865,6 +871,8 @@ def transcribe(
                     f"prob={getattr(asr_info, 'language_probability', None)}",
                     logger,
                 )
+                detected_language = getattr(asr_info, "language", None)
+                detected_language_probability = getattr(asr_info, "language_probability", None)
                 retry_used = False
                 parsed_segments, parsed_text_len = _parse_result(raw_segments)
                 if not parsed_segments or parsed_text_len <= 0:
@@ -931,10 +939,20 @@ def transcribe(
     segments = raw_segments if use_subprocess else _to_segments(raw_segments)
     total_duration = _probe_duration_sec(audio_wav_path)
     if len(segments) == 1 and (segments[0].end - segments[0].start) >= 2.5:
-        _LAST_TRANSCRIBE_STATUS = {"status": "ok", "reason": "single_segment_split"}
+        _LAST_TRANSCRIBE_STATUS = {
+            "status": "ok",
+            "reason": "single_segment_split",
+            "detected_language": str(detected_language or ""),
+            "detected_language_probability": str(detected_language_probability or ""),
+        }
         return _split_single_segment(segments[0], total_duration=total_duration)
     if segments:
-        _LAST_TRANSCRIBE_STATUS = {"status": "ok", "reason": "segments"}
+        _LAST_TRANSCRIBE_STATUS = {
+            "status": "ok",
+            "reason": "segments",
+            "detected_language": str(detected_language or ""),
+            "detected_language_probability": str(detected_language_probability or ""),
+        }
         return segments
     _log("empty_segments -> fallback", logger)
     _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": "empty_segments"}

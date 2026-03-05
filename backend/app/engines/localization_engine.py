@@ -197,6 +197,7 @@ class LocalizationEngine:
             # P0: baseline localization always uses Chinese ASR input language.
             # Do not allow env/request to switch to auto in this path.
             asr_lang_try = "zh"
+            asr_lang_defaulted = True
             normalized_duration_for_gate = (
                 normalized_wav_duration_sec if normalized_wav_duration_sec is not None else (audio_wav_duration_sec or 0.0)
             )
@@ -225,7 +226,7 @@ class LocalizationEngine:
 
             try:
                 lang = "zh"
-                on_log(f"[loc] ASR_LANG_TRY={lang}")
+                on_log(f"[loc] ASR_LANG_TRY={lang} defaulted={str(asr_lang_defaulted).lower()} target_lang={target_lang}")
                 reset_last_transcribe_status()
                 on_log(f"[loc] ASR_CALL_PREP lang={lang} wav={asr_wav} rss_mb={_rss_mb()}")
                 attempt_segments = transcribe(
@@ -270,6 +271,8 @@ class LocalizationEngine:
 
                 if asr_lang_final == "none" and segments and not fallback_detected:
                     asr_lang_final = detected_lang or "zh"
+                if asr_lang_final == "none":
+                    asr_lang_final = "zh"
                 on_log(f"[loc] ASR_RETRY_USED={'true' if asr_retry_used else 'false'} ASR_MODEL_USED={asr_model_used}")
                 on_log(f"[loc] ASR_LANG_FINAL={asr_lang_final}")
 
