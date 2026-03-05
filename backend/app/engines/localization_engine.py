@@ -28,6 +28,7 @@ from app.utils.ffmpeg_localization import (
     probe_duration_sec,
     render_with_original_audio,
     speech_ratio_from_silencedetect,
+    trim_audio_for_asr,
 )
 from app.utils.translate_mm import translate_srt, write_translation_artifacts
 
@@ -166,6 +167,22 @@ class LocalizationEngine:
             on_log(f"[loc] ASR_SPEECH_GATE_MIN={speech_ratio_min}")
             if speech_ratio is not None and speech_ratio < speech_ratio_min:
                 raise EngineRunError("NO_SPEECH_DETECTED: speech_ratio below threshold")
+
+            asr_max_audio_sec = _env_float("ASR_MAX_AUDIO_SEC", 30.0)
+            asr_wav = normalized_wav
+            asr_wav_duration_sec = normalized_wav_duration_sec
+            if (
+                asr_max_audio_sec > 0
+                and normalized_wav_duration_sec is not None
+                and normalized_wav_duration_sec > asr_max_audio_sec
+            ):
+                asr_wav = workspace / "source_norm_asr.wav"
+                trim_audio_for_asr(normalized_wav, asr_wav, asr_max_audio_sec, on_log=on_log)
+                asr_wav_duration_sec = _probe_duration(asr_wav)
+                on_log(
+                    f"[loc] asr_audio_trim applied original_sec={normalized_wav_duration_sec:.3f} "
+                    f"trimmed_sec={asr_wav_duration_sec if asr_wav_duration_sec is not None else asr_max_audio_sec}"
+                )
             end_step("extracting", step)
 
             on_log("[loc] step=transcribing enter")
@@ -209,9 +226,9 @@ class LocalizationEngine:
                         break
                     on_log(f"[loc] ASR_LANG_TRY={lang}")
                     reset_last_transcribe_status()
-                    on_log(f"[loc] ASR_CALL_PREP lang={lang} wav={normalized_wav} rss_mb={_rss_mb()}")
+                    on_log(f"[loc] ASR_CALL_PREP lang={lang} wav={asr_wav} rss_mb={_rss_mb()}")
                     attempt_segments = transcribe(
-                        str(normalized_wav),
+                        str(asr_wav),
                         model_name=asr_model_used,
                         beam_size=asr_beam_size,
                         vad_filter=asr_vad_filter,

@@ -177,6 +177,34 @@ def normalize_audio_for_asr(input_wav: Path, output_wav: Path, on_log: Optional[
     run_ffmpeg(cmd, timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_NORM", "120")), tag="ffmpeg_norm", on_log=on_log)
 
 
+def trim_audio_for_asr(
+    input_wav: Path,
+    output_wav: Path,
+    max_audio_sec: float,
+    on_log: Optional[Callable[[str], None]] = None,
+) -> None:
+    output_wav.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-i",
+        str(input_wav),
+        "-t",
+        f"{max_audio_sec:.3f}",
+        "-c",
+        "copy",
+        str(output_wav),
+    ]
+    run_ffmpeg(
+        cmd,
+        timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_NORM", "120")),
+        tag="ffmpeg_trim_asr",
+        on_log=on_log,
+    )
+
+
 def audio_rms_db(input_wav: Path, on_log: Optional[Callable[[str], None]] = None) -> Optional[float]:
     cmd = [
         "ffmpeg",
