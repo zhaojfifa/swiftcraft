@@ -192,8 +192,10 @@ class LocalizationEngine:
 
             step = mark_step("transcribing", "TRANSCRIBING", 25)
             asr_model = (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "tiny").strip() or "tiny"
-            asr_beam_size = _env_int("ASR_BEAM_SIZE", _env_int("FASTWHISPER_BEAM_SIZE", 1))
+            asr_beam_size = _env_int("ASR_BEAM_SIZE", _env_int("FASTWHISPER_BEAM_SIZE", 5))
             asr_vad_filter = _env_bool("ASR_VAD_FILTER", _env_bool("FASTWHISPER_VAD_FILTER", True))
+            asr_force_language = _env_bool("ASR_FORCE_LANGUAGE", False)
+            asr_forced_language = (os.getenv("ASR_LANGUAGE_HINT") or os.getenv("FASTWHISPER_LANGUAGE") or "").strip() or None
             normalized_duration_for_gate = (
                 normalized_wav_duration_sec if normalized_wav_duration_sec is not None else (audio_wav_duration_sec or 0.0)
             )
@@ -221,55 +223,50 @@ class LocalizationEngine:
                 ]
 
             try:
-                for idx, lang in enumerate(("zh", "en")):
-                    if idx == 1 and silent_for_gate:
-                        break
-                    on_log(f"[loc] ASR_LANG_TRY={lang}")
-                    reset_last_transcribe_status()
-                    on_log(f"[loc] ASR_CALL_PREP lang={lang} wav={asr_wav} rss_mb={_rss_mb()}")
-                    attempt_segments = transcribe(
-                        str(asr_wav),
-                        model_name=asr_model_used,
-                        beam_size=asr_beam_size,
-                        vad_filter=asr_vad_filter,
-                        language=lang,
-                        logger=lambda m: on_log(f"[asr] {m}"),
-                    )
-                    asr_status = get_last_transcribe_status()
+                lang = asr_forced_language if asr_force_language else None
+                on_log(f"[loc] ASR_LANG_TRY={lang or 'auto'}")
+                reset_last_transcribe_status()
+                on_log(f"[loc] ASR_CALL_PREP lang={lang or 'auto'} wav={asr_wav} rss_mb={_rss_mb()}")
+                attempt_segments = transcribe(
+                    str(asr_wav),
+                    model_name=asr_model_used,
+                    beam_size=asr_beam_size,
+                    vad_filter=asr_vad_filter,
+                    language=lang,
+                    logger=lambda m: on_log(f"[asr] {m}"),
+                )
+                asr_status = get_last_transcribe_status()
 
-                    on_log(
-                        f"[loc] ASR_CALL_DONE segments={len(attempt_segments)} "
-                        f"last_status={asr_status} rss_mb={_rss_mb()}"
-                    )
-                    on_log(
-                        f"[loc] ASR_RUNTIME_STATUS[{lang}]={asr_status.get('status')} "
-                        f"reason={asr_status.get('reason')}"
-                    )
-                    attempt_text = _joined_asr_text(attempt_segments)
-                    attempt_fallback = _contains_fallback_marker(attempt_text)
-                    status_reason = str(asr_status.get("reason") or "")
-                    if status_reason == "timeout_model_load":
-                        on_log("[loc][warn] asr_model_load_timeout -> using fallback subtitles/audio path")
-                    if status_reason in {"timeout_transcribe", "transcribe_timeout"}:
-                        on_log("[loc][warn] asr_transcribe_timeout -> using fallback subtitles/audio path")
-                        asr_fallback_reason = "asr_hard_timeout"
-                    if attempt_fallback and (
-                        status_reason.startswith("module_not_found") or status_reason.startswith("runtime_exception:")
-                    ):
-                        runtime_unavailable_reason = status_reason
-                    on_log(f"[loc] ASR_TEXT_LEN[{lang}]={len(attempt_text)}")
-                    on_log(f"[loc] ASR_TEXT_PREVIEW[{lang}]={attempt_text[:120]}")
-                    if idx == 1:
-                        asr_retry_used = True
-                    segments = attempt_segments
-                    raw_text = attempt_text
-                    fallback_detected = attempt_fallback
-                    if attempt_segments and not attempt_fallback:
-                        asr_lang_final = lang
-                        break
+                on_log(
+                    f"[loc] ASR_CALL_DONE segments={len(attempt_segments)} "
+                    f"last_status={asr_status} rss_mb={_rss_mb()}"
+                )
+                on_log(
+                    f"[loc] ASR_RUNTIME_STATUS[{lang or 'auto'}]={asr_status.get('status')} "
+                    f"reason={asr_status.get('reason')}"
+                )
+                attempt_text = _joined_asr_text(attempt_segments)
+                attempt_fallback = _contains_fallback_marker(attempt_text)
+                status_reason = str(asr_status.get("reason") or "")
+                if status_reason == "timeout_model_load":
+                    on_log("[loc][warn] asr_model_load_timeout -> using fallback subtitles/audio path")
+                if status_reason in {"timeout_transcribe", "transcribe_timeout"}:
+                    on_log("[loc][warn] asr_transcribe_timeout -> using fallback subtitles/audio path")
+                    asr_fallback_reason = "asr_hard_timeout"
+                if attempt_fallback and (
+                    status_reason.startswith("module_not_found") or status_reason.startswith("runtime_exception:")
+                ):
+                    runtime_unavailable_reason = status_reason
+                on_log(f"[loc] ASR_TEXT_LEN[{lang or 'auto'}]={len(attempt_text)}")
+                on_log(f"[loc] ASR_TEXT_PREVIEW[{lang or 'auto'}]={attempt_text[:120]}")
+                segments = attempt_segments
+                raw_text = attempt_text
+                fallback_detected = attempt_fallback
+                if attempt_segments and not attempt_fallback:
+                    asr_lang_final = lang or "auto"
 
                 if asr_lang_final == "none" and segments and not fallback_detected:
-                    asr_lang_final = "zh"
+                    asr_lang_final = lang or "auto"
                 on_log(f"[loc] ASR_RETRY_USED={'true' if asr_retry_used else 'false'} ASR_MODEL_USED={asr_model_used}")
                 on_log(f"[loc] ASR_LANG_FINAL={asr_lang_final}")
 

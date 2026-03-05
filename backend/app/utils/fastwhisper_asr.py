@@ -629,14 +629,16 @@ def transcribe(
     device = _resolve_device()
     compute_type = _resolve_compute_type()
     if beam_size is None:
-        beam_size = _env_int("ASR_BEAM_SIZE", _env_int("FASTWHISPER_BEAM_SIZE", 1))
+        beam_size = _env_int("ASR_BEAM_SIZE", _env_int("FASTWHISPER_BEAM_SIZE", 5))
     if vad_filter is None:
         vad_filter = _env_bool("ASR_VAD_FILTER", _env_bool("FASTWHISPER_VAD_FILTER", True))
     vad_min_silence_ms = _env_int("FASTWHISPER_VAD_MIN_SILENCE_MS", 250)
     vad_speech_pad_ms = _env_int("FASTWHISPER_VAD_SPEECH_PAD_MS", 150)
     word_timestamps = _env_bool("ASR_WORD_TIMESTAMPS", _env_bool("FASTWHISPER_WORD_TIMESTAMPS", False))
+    force_language = _env_bool("ASR_FORCE_LANGUAGE", False)
     if language is None:
-        language = _env_first(["ASR_LANGUAGE_HINT", "FASTWHISPER_LANGUAGE"], "") or None
+        hinted_language = _env_first(["ASR_LANGUAGE_HINT", "FASTWHISPER_LANGUAGE"], "") or None
+        language = hinted_language if force_language else None
     if no_speech_threshold is None:
         no_speech_threshold = _env_float("ASR_NO_SPEECH_THRESHOLD")
     timeout_sec = _transcribe_timeout_sec()
@@ -654,6 +656,7 @@ def transcribe(
                 f"python={sys.executable} ver={sys.version.split()[0]} "
                 f"model={model_name} device={device} compute={compute_type} "
                 f"vad={vad_filter} lang={language} beam={beam_size} "
+                f"word_ts={word_timestamps} force_lang={force_language} "
                 f"no_speech_threshold={no_speech_threshold}",
                 logger,
             )
@@ -771,18 +774,29 @@ def transcribe(
                         f"final_lang={worker_meta.get('final_language')}",
                         logger,
                     )
+                _log(
+                    "worker_detected_language "
+                    f"language={worker_meta.get('detected_language')} "
+                    f"prob={worker_meta.get('detected_language_probability')}",
+                    logger,
+                )
                 raw_segments = preview_segments
             else:
-                raw_segments, _ = _run_with_heartbeat(
+                raw_segments, asr_info = _run_with_heartbeat(
                     _do_transcribe,
                     phase="transcribe",
                     timeout_sec=timeout_sec,
                     heartbeat_sec=heartbeat_sec,
                     logger=logger,
                 )
+                _log(
+                    "worker_detected_language "
+                    f"language={getattr(asr_info, 'language', None)} "
+                    f"prob={getattr(asr_info, 'language_probability', None)}",
+                    logger,
+                )
                 retry_used = False
                 parsed_segments, parsed_text_len = _parse_result(raw_segments)
-                force_language = _env_bool("ASR_FORCE_LANGUAGE", False)
                 if not parsed_segments or parsed_text_len <= 0:
                     retry_used = True
                     _log("empty_segments_retry -> rerun_without_vad", logger)
