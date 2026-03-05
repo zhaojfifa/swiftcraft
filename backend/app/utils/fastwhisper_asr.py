@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import json
 import subprocess
 import sys
 import threading
@@ -110,6 +111,10 @@ def _transcribe_timeout_sec() -> int:
 
 def _heartbeat_interval_sec() -> int:
     return max(5, _env_int("ASR_HEARTBEAT_SEC", 10))
+
+
+def _use_subprocess_asr() -> bool:
+    return _env_bool("ASR_USE_SUBPROCESS", True)
 
 
 def _get_semaphore() -> threading.Semaphore:
@@ -393,6 +398,78 @@ def _run_with_heartbeat(
         pass
 
 
+def _run_subprocess_transcribe(
+    *,
+    wav_path: str,
+    model_input: str,
+    language: str | None,
+    beam_size: int,
+    vad_filter: bool,
+    word_timestamps: bool,
+    vad_min_silence_ms: int,
+    vad_speech_pad_ms: int,
+    no_speech_threshold: float | None,
+    device: str,
+    compute_type: str,
+    cpu_threads: int,
+    num_workers: int,
+    timeout_sec: int,
+    logger: Logger = None,
+) -> tuple[list[ASRSegment], str]:
+    payload: dict[str, Any] = {
+        "wav_path": wav_path,
+        "model_input": model_input,
+        "language": language,
+        "beam_size": beam_size,
+        "vad_filter": vad_filter,
+        "word_timestamps": word_timestamps,
+        "vad_min_silence_ms": vad_min_silence_ms,
+        "vad_speech_pad_ms": vad_speech_pad_ms,
+        "no_speech_threshold": no_speech_threshold,
+        "device": device,
+        "compute_type": compute_type,
+        "cpu_threads": cpu_threads,
+        "num_workers": num_workers,
+    }
+    cmd = [sys.executable, "-m", "app.utils.asr_worker"]
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    _log(f"subprocess_start pid={proc.pid}", logger)
+    started = time.perf_counter()
+    try:
+        stdout, stderr = proc.communicate(json.dumps(payload), timeout=timeout_sec)
+    except subprocess.TimeoutExpired:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        proc.kill()
+        _, stderr = proc.communicate()
+        _log(f"subprocess_timeout pid={proc.pid} timeout_sec={timeout_sec} elapsed_ms={elapsed_ms}", logger)
+        if stderr:
+            _log(f"subprocess_stderr_tail={stderr[-1200:]}", logger)
+        raise TimeoutError("transcribe_timeout")
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    _log(f"subprocess_done rc={proc.returncode} elapsed_ms={elapsed_ms}", logger)
+    if stderr:
+        _log(f"subprocess_stderr_tail={stderr[-1200:]}", logger)
+    if proc.returncode != 0:
+        raise RuntimeError(f"subprocess_failed rc={proc.returncode}")
+    try:
+        data = json.loads(stdout or "{}")
+    except Exception as exc:
+        raise RuntimeError(f"subprocess_output_invalid:{exc}") from exc
+    status = str(data.get("status") or "error")
+    if status != "ok":
+        raise RuntimeError(f"subprocess_status:{status}:{data.get('reason')}")
+    raw_segments = data.get("segments") or []
+    segs = _to_segments(raw_segments)
+    return segs, status
+
+
 def _probe_duration_sec(audio_wav_path: str) -> float:
     cmd = [
         "ffprobe",
@@ -531,12 +608,12 @@ def transcribe(
     device = _resolve_device()
     compute_type = _resolve_compute_type()
     if beam_size is None:
-        beam_size = _env_int("ASR_BEAM_SIZE", _env_int("FASTWHISPER_BEAM_SIZE", 5))
+        beam_size = _env_int("ASR_BEAM_SIZE", _env_int("FASTWHISPER_BEAM_SIZE", 1))
     if vad_filter is None:
         vad_filter = _env_bool("ASR_VAD_FILTER", _env_bool("FASTWHISPER_VAD_FILTER", True))
     vad_min_silence_ms = _env_int("FASTWHISPER_VAD_MIN_SILENCE_MS", 250)
     vad_speech_pad_ms = _env_int("FASTWHISPER_VAD_SPEECH_PAD_MS", 150)
-    word_timestamps = _env_bool("FASTWHISPER_WORD_TIMESTAMPS", True)
+    word_timestamps = _env_bool("ASR_WORD_TIMESTAMPS", _env_bool("FASTWHISPER_WORD_TIMESTAMPS", False))
     if language is None:
         language = _env_first(["ASR_LANGUAGE_HINT", "FASTWHISPER_LANGUAGE"], "") or None
     if no_speech_threshold is None:
@@ -544,6 +621,9 @@ def transcribe(
     timeout_sec = _transcribe_timeout_sec()
     heartbeat_sec = _heartbeat_interval_sec()
     model_load_in_thread = _env_bool("ASR_MODEL_LOAD_IN_THREAD", False)
+    use_subprocess = _use_subprocess_asr()
+    cpu_threads = max(1, _env_int("ASR_CPU_THREADS", 1))
+    num_workers = max(1, _env_int("ASR_NUM_WORKERS", 1))
 
     if not _RUNTIME_LOGGED:
         try:
@@ -568,9 +648,14 @@ def transcribe(
         return _empty_fallback_segments(duration)
 
     try:
+        model_input = ""
+        model = None
         try:
             _log(f"rss_mb={_rss_mb()} phase=before_model_load", logger)
-            if model_load_in_thread:
+            model_input = _ensure_local_model_dir(model_name, logger=logger)
+            if use_subprocess:
+                _log(f"model_ready model={model_name} local_path={model_input} rss_mb={_rss_mb()}", logger)
+            elif model_load_in_thread:
                 model = _run_with_heartbeat(
                     lambda: get_whisper_model(model_name, logger=logger),
                     phase="model_load",
@@ -581,7 +666,8 @@ def transcribe(
             else:
                 model = get_whisper_model(model_name, logger=logger)
             _log(f"rss_mb={_rss_mb()} phase=after_model_load", logger)
-            _log(f"model_ready model={model_name} rss_mb={_rss_mb()}", logger)
+            if not use_subprocess:
+                _log(f"model_ready model={model_name} rss_mb={_rss_mb()}", logger)
         except ModuleNotFoundError as exc:
             missing_module = getattr(exc, "name", "unknown")
             _log(f"faster_whisper_not_installed -> fallback missing_module={missing_module}", logger)
@@ -613,7 +699,11 @@ def transcribe(
         if no_speech_threshold is not None:
             full_kwargs["no_speech_threshold"] = no_speech_threshold
         _log(f"rss_mb={_rss_mb()} phase=before_transcribe", logger)
-        _log(f"transcribe_start lang={language or 'auto'} wav={audio_wav_path}", logger)
+        _log(
+            f"transcribe_start lang={language or 'auto'} beam={beam_size} vad={vad_filter} "
+            f"word_ts={word_timestamps} wav={audio_wav_path} rss_mb={_rss_mb()}",
+            logger,
+        )
         transcribe_started = time.perf_counter()
 
         def _do_transcribe() -> Any:
@@ -629,26 +719,47 @@ def transcribe(
                 return model.transcribe(audio_wav_path, **fallback_kwargs)
 
         try:
-            raw_segments, _ = _run_with_heartbeat(
-                _do_transcribe,
-                phase="transcribe",
-                timeout_sec=timeout_sec,
-                heartbeat_sec=heartbeat_sec,
-                logger=logger,
-            )
+            if use_subprocess:
+                preview_segments, _ = _run_subprocess_transcribe(
+                    wav_path=audio_wav_path,
+                    model_input=model_input,
+                    language=language,
+                    beam_size=beam_size,
+                    vad_filter=vad_filter,
+                    word_timestamps=word_timestamps,
+                    vad_min_silence_ms=vad_min_silence_ms,
+                    vad_speech_pad_ms=vad_speech_pad_ms,
+                    no_speech_threshold=no_speech_threshold,
+                    device=device,
+                    compute_type=compute_type,
+                    cpu_threads=cpu_threads,
+                    num_workers=num_workers,
+                    timeout_sec=timeout_sec,
+                    logger=logger,
+                )
+                raw_segments = preview_segments
+            else:
+                raw_segments, _ = _run_with_heartbeat(
+                    _do_transcribe,
+                    phase="transcribe",
+                    timeout_sec=timeout_sec,
+                    heartbeat_sec=heartbeat_sec,
+                    logger=logger,
+                )
         except TimeoutError:
-            _log(f"transcribe_timeout timeout_sec={timeout_sec}", logger)
-            _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": "timeout_transcribe"}
+            elapsed_ms = int((time.perf_counter() - transcribe_started) * 1000)
+            _log(f"transcribe_timeout timeout_sec={timeout_sec} elapsed_ms={elapsed_ms} rss_mb={_rss_mb()}", logger)
+            _LAST_TRANSCRIBE_STATUS = {"status": "timeout", "reason": "transcribe_timeout"}
             duration = _probe_duration_sec(audio_wav_path)
             return _empty_fallback_segments(duration)
 
         transcribe_elapsed_ms = int((time.perf_counter() - transcribe_started) * 1000)
-        preview_segments = _to_segments(raw_segments)
+        preview_segments = raw_segments if use_subprocess else _to_segments(raw_segments)
         preview_text = " ".join(seg.text for seg in preview_segments).strip()
         _log(f"rss_mb={_rss_mb()} phase=after_transcribe", logger)
         _log(
             f"transcribe_done elapsed_ms={transcribe_elapsed_ms} "
-            f"segments={len(preview_segments)} text_len={len(preview_text)}",
+            f"segments={len(preview_segments)} text_len={len(preview_text)} rss_mb={_rss_mb()}",
             logger,
         )
     except Exception as exc:
@@ -659,7 +770,7 @@ def transcribe(
     finally:
         semaphore.release()
 
-    segments = _to_segments(raw_segments)
+    segments = raw_segments if use_subprocess else _to_segments(raw_segments)
     total_duration = _probe_duration_sec(audio_wav_path)
     if len(segments) == 1 and (segments[0].end - segments[0].start) >= 2.5:
         _LAST_TRANSCRIBE_STATUS = {"status": "ok", "reason": "single_segment_split"}
