@@ -127,6 +127,13 @@ class LocalizationEngine:
 
         try:
             on_stage("SUBMITTED", 1)
+            loc_inputs = inputs.get("inputs") if isinstance(inputs.get("inputs"), dict) else {}
+            target_lang = str((loc_inputs or {}).get("target_lang") or "my").strip().lower() or "my"
+            voice_id = str((loc_inputs or {}).get("voice_id") or "mm_female_1")
+            subtitle_mode = str((loc_inputs or {}).get("subtitle_mode") or "sidecar")
+            preserve_bgm = bool((loc_inputs or {}).get("preserve_bgm", True))
+            ducking = bool((loc_inputs or {}).get("ducking", True))
+
             step = mark_step("analyzing", "ANALYZING", 5)
             source_url = (record.input_video_url or "").strip()
             if not source_url and record.input_key:
@@ -283,6 +290,10 @@ class LocalizationEngine:
             except BaseException as exc:
                 asr_fallback_reason = f"crash:{type(exc).__name__}:{exc}"
                 on_log(f"[loc][err] ASR_CALL_CRASH type={type(exc).__name__} msg={exc} rss_mb={_rss_mb()}")
+                if _env_bool("LOCALIZATION_FAIL_ON_ASR_CRASH", False):
+                    raise EngineRunError(
+                        f"ASR_CRASH: type={type(exc).__name__} msg={exc}"
+                    ) from exc
 
             if asr_fallback_reason:
                 fallback_duration = normalized_wav_duration_sec or audio_wav_duration_sec or 5.0
@@ -318,12 +329,6 @@ class LocalizationEngine:
             no_subtitles = not segments or (rms_db is not None and rms_db <= -40.0)
             end_step("transcribing", step)
 
-            loc_inputs = inputs.get("inputs") if isinstance(inputs.get("inputs"), dict) else {}
-            target_lang = str((loc_inputs or {}).get("target_lang") or "my")
-            voice_id = str((loc_inputs or {}).get("voice_id") or "mm_female_1")
-            subtitle_mode = str((loc_inputs or {}).get("subtitle_mode") or "sidecar")
-            preserve_bgm = bool((loc_inputs or {}).get("preserve_bgm", True))
-            ducking = bool((loc_inputs or {}).get("ducking", True))
             run_config_snapshot = {
                 "service_type": "localization",
                 "mode": record.mode,
