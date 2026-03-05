@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import queue
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict
@@ -189,6 +191,21 @@ class LocalizationEngine:
             fallback_detected = True
             runtime_unavailable_reason: str | None = None
             asr_fallback_reason = ""
+            asr_engine_hard_timeout_sec = _env_int("ASR_ENGINE_HARD_TIMEOUT_SEC", 120)
+
+            def _fallback_segments(duration_sec: float) -> list[ASRSegment]:
+                fallback_duration = max(1.0, duration_sec or 5.0)
+                cue_count = 2 if fallback_duration < 6.0 else (3 if fallback_duration < 12.0 else 4)
+                span = max(0.5, fallback_duration / cue_count)
+                return [
+                    ASRSegment(
+                        start=round(i * span, 3),
+                        end=round(min(fallback_duration, (i + 1) * span), 3),
+                        text="Localized narration.",
+                    )
+                    for i in range(cue_count)
+                ]
+
             try:
                 for idx, lang in enumerate(("zh", "en")):
                     if idx == 1 and silent_for_gate:
@@ -196,15 +213,49 @@ class LocalizationEngine:
                     on_log(f"[loc] ASR_LANG_TRY={lang}")
                     reset_last_transcribe_status()
                     on_log(f"[loc] ASR_CALL_PREP lang={lang} wav={normalized_wav} rss_mb={_rss_mb()}")
-                    attempt_segments = transcribe(
-                        str(normalized_wav),
-                        model_name=asr_model_used,
-                        beam_size=asr_beam_size,
-                        vad_filter=asr_vad_filter,
-                        language=lang,
-                        logger=lambda m: on_log(f"[asr] {m}"),
-                    )
-                    asr_status = get_last_transcribe_status()
+                    result_q: queue.Queue = queue.Queue(maxsize=1)
+
+                    def _asr_target() -> None:
+                        try:
+                            segs = transcribe(
+                                str(normalized_wav),
+                                model_name=asr_model_used,
+                                beam_size=asr_beam_size,
+                                vad_filter=asr_vad_filter,
+                                language=lang,
+                                logger=lambda m: on_log(f"[asr] {m}"),
+                            )
+                            result_q.put(("ok", segs, get_last_transcribe_status(), None))
+                        except BaseException as exc:  # noqa: BLE001
+                            result_q.put(("err", [], get_last_transcribe_status(), exc))
+
+                    worker = threading.Thread(target=_asr_target, daemon=True, name=f"asr:{task_id[:8]}:{lang}")
+                    worker.start()
+                    worker.join(timeout=asr_engine_hard_timeout_sec)
+                    if worker.is_alive():
+                        asr_fallback_reason = "asr_hard_timeout"
+                        on_log("[loc][warn] asr_hard_timeout -> degrade")
+                        attempt_segments = _fallback_segments(
+                            normalized_wav_duration_sec or audio_wav_duration_sec or 5.0
+                        )
+                        asr_status = {"status": "fallback", "reason": "engine_hard_timeout"}
+                        segments = attempt_segments
+                        raw_text = _joined_asr_text(attempt_segments)
+                        fallback_detected = True
+                        break
+
+                    if result_q.empty():
+                        asr_fallback_reason = "asr_no_result"
+                        on_log("[loc][warn] asr_no_result -> degrade")
+                        attempt_segments = _fallback_segments(
+                            normalized_wav_duration_sec or audio_wav_duration_sec or 5.0
+                        )
+                        asr_status = {"status": "fallback", "reason": "engine_no_result"}
+                    else:
+                        outcome, attempt_segments, asr_status, asr_exc = result_q.get()
+                        if outcome == "err":
+                            raise asr_exc
+
                     on_log(
                         f"[loc] ASR_CALL_DONE segments={len(attempt_segments)} "
                         f"last_status={asr_status} rss_mb={_rss_mb()}"
@@ -250,16 +301,7 @@ class LocalizationEngine:
 
             if asr_fallback_reason:
                 fallback_duration = normalized_wav_duration_sec or audio_wav_duration_sec or 5.0
-                cue_count = 2 if fallback_duration < 6.0 else (3 if fallback_duration < 12.0 else 4)
-                span = max(0.5, fallback_duration / cue_count)
-                segments = [
-                    ASRSegment(
-                        start=round(i * span, 3),
-                        end=round(min(fallback_duration, (i + 1) * span), 3),
-                        text="Localized narration.",
-                    )
-                    for i in range(cue_count)
-                ]
+                segments = _fallback_segments(fallback_duration)
                 raw_text = " ".join(seg.text for seg in segments)
                 fallback_detected = True
                 on_log(f"[loc] ASR_FALLBACK_USED reason={asr_fallback_reason}")

@@ -304,7 +304,8 @@ def _load_model_once(model_name: str, logger: Logger = None) -> Any:
     model_input = _resolve_model_path_or_name(model_name, logger=logger)
     _log(
         f"model_load start model={model_name} compute_type={compute_type} device={device} "
-        f"cpu_threads={cpu_threads} num_workers={num_workers} rss_mb={_rss_mb()}",
+        f"cpu_threads={cpu_threads} num_workers={num_workers} rss_mb={_rss_mb()} "
+        f"pid={os.getpid()} tid={threading.get_ident()}",
         logger,
     )
     started = time.perf_counter()
@@ -321,7 +322,11 @@ def _load_model_once(model_name: str, logger: Logger = None) -> Any:
         or getattr(getattr(model, "model", None), "model_path", "")
         or ""
     )
-    _log(f"model_load ok elapsed_ms={elapsed_ms} model_path={model_path} rss_mb={_rss_mb()}", logger)
+    _log(
+        f"model_load ok elapsed_ms={elapsed_ms} model_path={model_path} rss_mb={_rss_mb()} "
+        f"pid={os.getpid()} tid={threading.get_ident()}",
+        logger,
+    )
     with _MODEL_LOCK:
         _MODEL_META.update(
             {
@@ -538,6 +543,7 @@ def transcribe(
         no_speech_threshold = _env_float("ASR_NO_SPEECH_THRESHOLD")
     timeout_sec = _transcribe_timeout_sec()
     heartbeat_sec = _heartbeat_interval_sec()
+    model_load_in_thread = _env_bool("ASR_MODEL_LOAD_IN_THREAD", False)
 
     if not _RUNTIME_LOGGED:
         try:
@@ -564,14 +570,18 @@ def transcribe(
     try:
         try:
             _log(f"rss_mb={_rss_mb()} phase=before_model_load", logger)
-            model = _run_with_heartbeat(
-                lambda: get_whisper_model(model_name, logger=logger),
-                phase="model_load",
-                timeout_sec=timeout_sec,
-                heartbeat_sec=heartbeat_sec,
-                logger=logger,
-            )
+            if model_load_in_thread:
+                model = _run_with_heartbeat(
+                    lambda: get_whisper_model(model_name, logger=logger),
+                    phase="model_load",
+                    timeout_sec=timeout_sec,
+                    heartbeat_sec=heartbeat_sec,
+                    logger=logger,
+                )
+            else:
+                model = get_whisper_model(model_name, logger=logger)
             _log(f"rss_mb={_rss_mb()} phase=after_model_load", logger)
+            _log(f"model_ready model={model_name} rss_mb={_rss_mb()}", logger)
         except ModuleNotFoundError as exc:
             missing_module = getattr(exc, "name", "unknown")
             _log(f"faster_whisper_not_installed -> fallback missing_module={missing_module}", logger)
