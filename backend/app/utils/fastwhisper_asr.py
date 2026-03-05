@@ -837,14 +837,15 @@ def transcribe(
                 )
                 if worker_meta.get("retry_used"):
                     _log(
-                        "empty_segments_retry -> rerun_without_vad "
+                        "empty_segments_retry "
                         f"final_vad={worker_meta.get('final_vad_filter')} "
                         f"final_beam={worker_meta.get('final_beam_size')} "
                         f"final_lang={worker_meta.get('final_language')}",
                         logger,
                     )
                 _log(
-                    "worker_detected_language "
+                    "decode_effective "
+                    f"input_vad={vad_filter} input_beam={beam_size} input_lang={language} "
                     f"language={worker_meta.get('detected_language')} "
                     f"prob={worker_meta.get('detected_language_probability')}",
                     logger,
