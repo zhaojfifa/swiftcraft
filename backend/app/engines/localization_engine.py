@@ -196,6 +196,7 @@ class LocalizationEngine:
             asr_vad_filter = _env_bool("ASR_VAD_FILTER", _env_bool("FASTWHISPER_VAD_FILTER", True))
             asr_force_language = _env_bool("ASR_FORCE_LANGUAGE", False)
             asr_forced_language = (os.getenv("ASR_LANGUAGE_HINT") or os.getenv("FASTWHISPER_LANGUAGE") or "").strip() or None
+            asr_lang_try = (os.getenv("ASR_LANG_TRY", "zh") or "zh").strip().lower()
             normalized_duration_for_gate = (
                 normalized_wav_duration_sec if normalized_wav_duration_sec is not None else (audio_wav_duration_sec or 0.0)
             )
@@ -223,7 +224,12 @@ class LocalizationEngine:
                 ]
 
             try:
-                lang = asr_forced_language if asr_force_language else None
+                if asr_force_language and asr_forced_language:
+                    lang = asr_forced_language
+                elif asr_lang_try == "auto":
+                    lang = None
+                else:
+                    lang = asr_lang_try
                 on_log(f"[loc] ASR_LANG_TRY={lang or 'auto'}")
                 reset_last_transcribe_status()
                 on_log(f"[loc] ASR_CALL_PREP lang={lang or 'auto'} wav={asr_wav} rss_mb={_rss_mb()}")
