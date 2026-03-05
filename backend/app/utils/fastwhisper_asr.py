@@ -70,6 +70,19 @@ def _env_first(names: list[str], default: str = "") -> str:
     return default
 
 
+def _parse_temperatures(value: str) -> list[float]:
+    values: list[float] = []
+    for chunk in (value or "").split(","):
+        token = chunk.strip()
+        if not token:
+            continue
+        try:
+            values.append(float(token))
+        except Exception:
+            continue
+    return values or [0.0, 0.2, 0.4]
+
+
 def _log(msg: str, logger: Logger = None) -> None:
     if logger:
         logger(msg)
@@ -427,22 +440,21 @@ def _run_subprocess_transcribe(
     timeout_sec: int,
     logger: Logger = None,
 ) -> tuple[list[ASRSegment], str, dict[str, Any]]:
-    payload: dict[str, Any] = {
-        "wav_path": wav_path,
-        "model_input": model_input,
-        "language": language,
-        "beam_size": beam_size,
-        "vad_filter": vad_filter,
-        "word_timestamps": word_timestamps,
-        "vad_min_silence_ms": vad_min_silence_ms,
-        "vad_speech_pad_ms": vad_speech_pad_ms,
-        "no_speech_threshold": no_speech_threshold,
-        "device": device,
-        "compute_type": compute_type,
-        "cpu_threads": cpu_threads,
-        "num_workers": num_workers,
-        "force_language": _env_bool("ASR_FORCE_LANGUAGE", False),
-    }
+    payload: dict[str, Any] = _build_worker_payload(
+        wav_path=wav_path,
+        model_input=model_input,
+        language=language,
+        beam_size=beam_size,
+        vad_filter=vad_filter,
+        word_timestamps=word_timestamps,
+        vad_min_silence_ms=vad_min_silence_ms,
+        vad_speech_pad_ms=vad_speech_pad_ms,
+        no_speech_threshold=no_speech_threshold,
+        device=device,
+        compute_type=compute_type,
+        cpu_threads=cpu_threads,
+        num_workers=num_workers,
+    )
     cmd = [sys.executable, "-m", "app.utils.asr_worker"]
     proc = subprocess.Popen(
         cmd,
@@ -482,6 +494,51 @@ def _run_subprocess_transcribe(
     if not segs and raw_segments:
         _log(f"asr_segments_parse_failed raw_count={len(raw_segments)}", logger)
     return segs, status, data
+
+
+def _build_worker_payload(
+    *,
+    wav_path: str,
+    model_input: str,
+    language: str | None,
+    beam_size: int,
+    vad_filter: bool,
+    word_timestamps: bool,
+    vad_min_silence_ms: int,
+    vad_speech_pad_ms: int,
+    no_speech_threshold: float | None,
+    device: str,
+    compute_type: str,
+    cpu_threads: int,
+    num_workers: int,
+) -> dict[str, Any]:
+    best_of = _env_int("ASR_BEST_OF", 5)
+    temperatures = _parse_temperatures(os.getenv("ASR_TEMPERATURES", "0,0.2,0.4"))
+    condition_on_prev = _env_bool("ASR_CONDITION_ON_PREV", False)
+    if beam_size == 1:
+        best_of_payload: int | None = None
+    else:
+        best_of_payload = max(1, best_of)
+    payload: dict[str, Any] = {
+        "wav_path": wav_path,
+        "model_input": model_input,
+        "language": language,
+        "beam_size": beam_size,
+        "vad_filter": vad_filter,
+        "word_timestamps": word_timestamps,
+        "vad_min_silence_ms": vad_min_silence_ms,
+        "vad_speech_pad_ms": vad_speech_pad_ms,
+        "no_speech_threshold": no_speech_threshold,
+        "device": device,
+        "compute_type": compute_type,
+        "cpu_threads": cpu_threads,
+        "num_workers": num_workers,
+        "force_language": _env_bool("ASR_FORCE_LANGUAGE", False),
+        "temperature": temperatures,
+        "best_of": best_of_payload,
+        "condition_on_previous_text": condition_on_prev,
+    }
+    return payload
 
 
 def _probe_duration_sec(audio_wav_path: str) -> float:

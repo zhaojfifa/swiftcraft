@@ -79,3 +79,43 @@ def test_transcribe_module_missing_without_runtime_install(monkeypatch):
     assert len(result) >= 2
     assert status["status"] == "fallback"
     assert status["reason"] == "module_not_found" or status["reason"].startswith("runtime_exception:")
+
+
+def test_worker_payload_defaults_vad_true(monkeypatch):
+    monkeypatch.delenv("ASR_VAD_FILTER", raising=False)
+    payload = asr._build_worker_payload(
+        wav_path="a.wav",
+        model_input="/tmp/model",
+        language=None,
+        beam_size=5,
+        vad_filter=True,
+        word_timestamps=False,
+        vad_min_silence_ms=250,
+        vad_speech_pad_ms=150,
+        no_speech_threshold=None,
+        device="cpu",
+        compute_type="int8",
+        cpu_threads=1,
+        num_workers=1,
+    )
+    assert payload["vad_filter"] is True
+
+
+def test_worker_payload_lang_zh_keeps_beam_at_least_five():
+    payload = asr._build_worker_payload(
+        wav_path="a.wav",
+        model_input="/tmp/model",
+        language="zh",
+        beam_size=5,
+        vad_filter=True,
+        word_timestamps=False,
+        vad_min_silence_ms=250,
+        vad_speech_pad_ms=150,
+        no_speech_threshold=None,
+        device="cpu",
+        compute_type="int8",
+        cpu_threads=1,
+        num_workers=1,
+    )
+    assert payload["language"] == "zh"
+    assert int(payload["beam_size"]) >= 5

@@ -63,6 +63,7 @@ def main() -> int:
         "beam_size": max(1, int(payload.get("beam_size") or 1)),
         "vad_filter": bool(payload.get("vad_filter", True)),
         "word_timestamps": bool(payload.get("word_timestamps", False)),
+        "condition_on_previous_text": bool(payload.get("condition_on_previous_text", False)),
         "vad_parameters": {
             "min_silence_duration_ms": int(payload.get("vad_min_silence_ms") or 250),
             "speech_pad_ms": int(payload.get("vad_speech_pad_ms") or 150),
@@ -73,6 +74,12 @@ def main() -> int:
     no_speech_threshold = payload.get("no_speech_threshold")
     if no_speech_threshold is not None:
         kwargs["no_speech_threshold"] = float(no_speech_threshold)
+    temperature = payload.get("temperature")
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    best_of = payload.get("best_of")
+    if best_of is not None:
+        kwargs["best_of"] = max(1, int(best_of))
 
     force_language = bool(payload.get("force_language", False))
     requested_beam = max(1, int(payload.get("beam_size") or 1))
@@ -94,7 +101,8 @@ def main() -> int:
 
     _wlog(
         f"decode_start beam={kwargs.get('beam_size')} vad={kwargs.get('vad_filter')} "
-        f"language={kwargs.get('language')}"
+        f"language={kwargs.get('language')} temp={kwargs.get('temperature')} "
+        f"best_of={kwargs.get('best_of')} cond_prev={kwargs.get('condition_on_previous_text')}"
     )
     segments, info = _run_once(kwargs)
     text_len = len(" ".join((item.get("text", "").strip() for item in segments)).strip())
@@ -138,6 +146,7 @@ def main() -> int:
                 "status": "ok",
                 "segments": segments,
                 "text_len": text_len,
+                "segments_count": len(segments),
                 "retry_used": retry_used,
                 "retry_reason": retry_reason,
                 "final_vad_filter": kwargs.get("vad_filter"),
