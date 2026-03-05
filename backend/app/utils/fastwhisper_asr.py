@@ -117,6 +117,17 @@ def _use_subprocess_asr() -> bool:
     return _env_bool("ASR_USE_SUBPROCESS", True)
 
 
+def _normalize_language(language: str | None) -> str | None:
+    if language is None:
+        return None
+    text = str(language).strip()
+    if not text:
+        return None
+    if text.lower() == "auto":
+        return None
+    return text
+
+
 def _get_semaphore() -> threading.Semaphore:
     global _TRANSCRIBE_SEMAPHORE
     global _TRANSCRIBE_SEMAPHORE_SIZE
@@ -639,6 +650,7 @@ def transcribe(
     if language is None:
         hinted_language = _env_first(["ASR_LANGUAGE_HINT", "FASTWHISPER_LANGUAGE"], "") or None
         language = hinted_language if force_language else None
+    language = _normalize_language(language)
     if no_speech_threshold is None:
         no_speech_threshold = _env_float("ASR_NO_SPEECH_THRESHOLD")
     timeout_sec = _transcribe_timeout_sec()

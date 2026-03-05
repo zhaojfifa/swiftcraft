@@ -1,8 +1,43 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from typing import Any
+
+
+def _wlog(msg: str) -> None:
+    print(f"[asr-worker] {msg}", file=sys.stderr, flush=True)
+
+
+def _norm_language(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.lower() == "auto":
+        return None
+    return text
+
+
+def _is_bad_decode(text: str, segments_count: int) -> bool:
+    if segments_count <= 0:
+        return True
+    normalized = (text or "").strip()
+    if not normalized:
+        return True
+    lowered = normalized.lower()
+    if "localized narration" in lowered:
+        return True
+    if normalized.count("\ufffd") >= 2:
+        return True
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", normalized))
+    alpha_count = len(re.findall(r"[A-Za-z]", normalized))
+    if cjk_count + alpha_count == 0:
+        return False
+    cjk_ratio = cjk_count / max(1, cjk_count + alpha_count)
+    return cjk_ratio < 0.6
 
 
 def main() -> int:
@@ -23,6 +58,7 @@ def main() -> int:
         num_workers=max(1, int(payload.get("num_workers") or 1)),
     )
 
+    req_language = _norm_language(payload.get("language"))
     kwargs: dict[str, Any] = {
         "beam_size": max(1, int(payload.get("beam_size") or 1)),
         "vad_filter": bool(payload.get("vad_filter", True)),
@@ -32,14 +68,14 @@ def main() -> int:
             "speech_pad_ms": int(payload.get("vad_speech_pad_ms") or 150),
         },
     }
-    language = payload.get("language")
-    if language:
-        kwargs["language"] = str(language)
+    if req_language:
+        kwargs["language"] = req_language
     no_speech_threshold = payload.get("no_speech_threshold")
     if no_speech_threshold is not None:
         kwargs["no_speech_threshold"] = float(no_speech_threshold)
 
     force_language = bool(payload.get("force_language", False))
+    requested_beam = max(1, int(payload.get("beam_size") or 1))
     retry_used = False
     retry_reason = ""
 
@@ -56,16 +92,42 @@ def main() -> int:
             )
         return segments, info
 
+    _wlog(
+        f"decode_start beam={kwargs.get('beam_size')} vad={kwargs.get('vad_filter')} "
+        f"language={kwargs.get('language')}"
+    )
     segments, info = _run_once(kwargs)
     text_len = len(" ".join((item.get("text", "").strip() for item in segments)).strip())
-    if not segments or text_len <= 0:
+    text = " ".join((item.get("text", "").strip() for item in segments)).strip()
+    if _is_bad_decode(text, len(segments)):
         retry_used = True
-        retry_reason = "empty_segments_retry"
+        retry_reason = "quality_or_empty_retry"
         retry_kwargs = dict(kwargs)
         retry_kwargs["vad_filter"] = False
-        retry_kwargs["beam_size"] = min(max(1, int(payload.get("beam_size") or 1)), 1)
+        retry_kwargs["beam_size"] = 1
         if not force_language:
             retry_kwargs.pop("language", None)
+        _wlog(
+            "decode_retry reason=quality_or_empty "
+            f"beam={retry_kwargs.get('beam_size')} vad={retry_kwargs.get('vad_filter')} "
+            f"language={retry_kwargs.get('language')}"
+        )
+        segments, info = _run_once(retry_kwargs)
+        text_len = len(" ".join((item.get("text", "").strip() for item in segments)).strip())
+        text = " ".join((item.get("text", "").strip() for item in segments)).strip()
+        kwargs = retry_kwargs
+
+    if _is_bad_decode(text, len(segments)) and req_language is not None and not force_language:
+        retry_used = True
+        retry_reason = "autodetect_retry"
+        retry_kwargs = dict(kwargs)
+        retry_kwargs["beam_size"] = max(1, min(5, requested_beam))
+        retry_kwargs["vad_filter"] = bool(payload.get("vad_filter", True))
+        retry_kwargs.pop("language", None)
+        _wlog(
+            "decode_retry reason=autodetect "
+            f"beam={retry_kwargs.get('beam_size')} vad={retry_kwargs.get('vad_filter')} language=None"
+        )
         segments, info = _run_once(retry_kwargs)
         text_len = len(" ".join((item.get("text", "").strip() for item in segments)).strip())
         kwargs = retry_kwargs
