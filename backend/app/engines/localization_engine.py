@@ -28,9 +28,11 @@ from app.utils.ffmpeg_localization import (
     probe_duration_sec,
     render_with_original_audio,
     speech_ratio_from_silencedetect,
+    stretch_audio_to_duration,
     trim_audio_for_asr,
 )
 from app.utils.translate_mm import translate_srt, write_translation_artifacts
+from app.utils.zh_normalize import normalize_zh_text
 
 
 class LocalizationEngine:
@@ -116,6 +118,18 @@ class LocalizationEngine:
         def _contains_fallback_marker(text: str) -> bool:
             lowered = (text or "").lower()
             return "localized narration." in lowered or "[no_subtitles]" in lowered
+
+        def _merged_tts_text_from_srt(srt_text: str) -> str:
+            lines: list[str] = []
+            for raw in srt_text.splitlines():
+                line = raw.strip()
+                if not line or line.isdigit() or "-->" in line:
+                    continue
+                line = normalize_zh_text(line)
+                if line:
+                    lines.append(line)
+            merged = "，".join(lines).strip("， ")
+            return merged
 
         def _rss_mb() -> int:
             try:
@@ -305,7 +319,13 @@ class LocalizationEngine:
             else:
                 on_stage("TRANSCRIBING", 30)
 
-            source_text = raw_text
+            asr_text_raw = raw_text
+            for seg in segments:
+                seg.text = normalize_zh_text(str(getattr(seg, "text", "") or ""))
+            asr_text_norm = normalize_zh_text(" ".join(seg.text for seg in segments))
+            on_log(f"[loc] ASR_TEXT_PREVIEW_RAW={asr_text_raw[:120]}")
+            on_log(f"[loc] ASR_TEXT_PREVIEW_NORM={asr_text_norm[:120]}")
+            source_text = asr_text_norm
             source_srt = segments_to_srt(segments)
             source_srt_path = workspace / "source.srt"
             source_srt_path.write_text(source_srt, encoding="utf-8")
@@ -325,6 +345,8 @@ class LocalizationEngine:
                 "segments": num_segments,
                 "fallback_detected": _contains_fallback_marker(source_text),
                 "model_used": (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "tiny").strip() or "tiny",
+                "asr_text_raw": asr_text_raw,
+                "asr_text_norm": asr_text_norm,
             }
             no_subtitles = not segments or (rms_db is not None and rms_db <= -40.0)
             end_step("transcribing", step)
@@ -411,7 +433,13 @@ class LocalizationEngine:
             dub_mp3_path: Path | None = None
             dub_duration_sec = None
             if not no_subtitles:
-                dub_text = srt_to_text(target_srt)
+                if (audio_wav_duration_sec or 0.0) <= 8.0:
+                    dub_text = _merged_tts_text_from_srt(target_srt)
+                    if not dub_text.strip():
+                        dub_text = srt_to_text(target_srt)
+                    on_log("[loc] tts_text_strategy=merged_short_audio")
+                else:
+                    dub_text = srt_to_text(target_srt)
                 on_log(f"[loc] LOC_TEXT_SOURCE=asr text_len={len(dub_text.strip())} num_segments={translated_segments}")
                 if not dub_text.strip():
                     raise EngineRunError("TTS_TEXT_EMPTY: empty text passed to synthesizer")
@@ -426,6 +454,29 @@ class LocalizationEngine:
                     f"[loc] dub_audio_path={dub_mp3_path} duration_sec="
                     f"{dub_duration_sec if dub_duration_sec is not None else 'n/a'}"
                 )
+                source_video_duration_sec_for_tts = _probe_duration(source_video)
+                if (
+                    dub_duration_sec is not None
+                    and source_video_duration_sec_for_tts is not None
+                    and source_video_duration_sec_for_tts > 0
+                    and dub_duration_sec < (0.7 * source_video_duration_sec_for_tts)
+                ):
+                    aligned_mp3 = workspace / "dub_aligned.mp3"
+                    target_dub_sec = source_video_duration_sec_for_tts * 0.9
+                    stretch_audio_to_duration(
+                        dub_mp3_path,
+                        aligned_mp3,
+                        target_dub_sec,
+                        on_log=on_log,
+                    )
+                    aligned_sec = _probe_duration(aligned_mp3)
+                    on_log(
+                        "[loc] dub_duration_align "
+                        f"original_sec={dub_duration_sec:.3f} target_sec={target_dub_sec:.3f} "
+                        f"aligned_sec={aligned_sec if aligned_sec is not None else 'n/a'}"
+                    )
+                    dub_mp3_path = aligned_mp3
+                    dub_duration_sec = aligned_sec or target_dub_sec
                 tts_meta = {
                     "voice_id": voice_id,
                     "text_len": len(dub_text.strip()),

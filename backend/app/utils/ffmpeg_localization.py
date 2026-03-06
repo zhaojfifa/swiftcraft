@@ -338,6 +338,53 @@ def probe_av_streams(video_path: Path, on_log: Optional[Callable[[str], None]] =
     return out
 
 
+def stretch_audio_to_duration(
+    input_audio: Path,
+    output_audio: Path,
+    target_duration_sec: float,
+    on_log: Optional[Callable[[str], None]] = None,
+) -> None:
+    source_duration = probe_duration_sec(input_audio, on_log=on_log) or 0.0
+    if source_duration <= 0 or target_duration_sec <= 0:
+        raise RuntimeError("stretch_audio_to_duration invalid duration")
+
+    # atempo supports [0.5, 2.0], so split into a chain if needed.
+    speed = source_duration / target_duration_sec
+    speed = max(0.25, min(4.0, speed))
+    factors: list[float] = []
+    cur = speed
+    while cur < 0.5:
+        factors.append(0.5)
+        cur /= 0.5
+    while cur > 2.0:
+        factors.append(2.0)
+        cur /= 2.0
+    factors.append(cur)
+    atempo = ",".join(f"atempo={max(0.5, min(2.0, f)):.6f}" for f in factors)
+
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-i",
+        str(input_audio),
+        "-filter:a",
+        atempo,
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "64k",
+        str(output_audio),
+    ]
+    run_ffmpeg(
+        cmd,
+        timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MIX", "180")),
+        tag="ffmpeg_tts_align",
+        on_log=on_log,
+    )
+
+
 def render_with_original_audio(video_in: Path, output_wav: Path, on_log: Optional[Callable[[str], None]] = None) -> None:
     output_wav.parent.mkdir(parents=True, exist_ok=True)
     cmd = [

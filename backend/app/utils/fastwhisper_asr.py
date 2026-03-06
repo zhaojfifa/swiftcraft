@@ -437,6 +437,7 @@ def _run_subprocess_transcribe(
     compute_type: str,
     cpu_threads: int,
     num_workers: int,
+    audio_duration_sec: float | None,
     timeout_sec: int,
     logger: Logger = None,
 ) -> tuple[list[ASRSegment], str, dict[str, Any]]:
@@ -454,6 +455,7 @@ def _run_subprocess_transcribe(
         compute_type=compute_type,
         cpu_threads=cpu_threads,
         num_workers=num_workers,
+        audio_duration_sec=audio_duration_sec,
     )
     cmd = [sys.executable, "-m", "app.utils.asr_worker"]
     proc = subprocess.Popen(
@@ -511,11 +513,16 @@ def _build_worker_payload(
     compute_type: str,
     cpu_threads: int,
     num_workers: int,
+    audio_duration_sec: float | None,
 ) -> dict[str, Any]:
-    best_of = _env_int("ASR_BEST_OF", 5)
-    temperatures = _parse_temperatures(os.getenv("ASR_TEMPERATURES", "0,0.2,0.4"))
+    short_audio = bool(audio_duration_sec is not None and audio_duration_sec <= 10.0)
+    best_of_default = 1 if short_audio else 5
+    temp_default = "0" if short_audio else "0,0.2,0.4"
+    best_of = _env_int("ASR_BEST_OF", best_of_default)
+    temperatures = _parse_temperatures(os.getenv("ASR_TEMPERATURES", temp_default))
     condition_on_prev = _env_bool("ASR_CONDITION_ON_PREV", False)
-    if beam_size == 1:
+    effective_beam_size = min(beam_size, 3) if short_audio else beam_size
+    if effective_beam_size == 1:
         best_of_payload: int | None = None
     else:
         best_of_payload = max(1, best_of)
@@ -524,7 +531,7 @@ def _build_worker_payload(
         "wav_path": wav_path,
         "model_input": model_input,
         "language": language,
-        "beam_size": beam_size,
+        "beam_size": effective_beam_size,
         "vad_filter": vad_filter,
         "word_timestamps": word_timestamps,
         "vad_min_silence_ms": vad_min_silence_ms,
@@ -538,6 +545,7 @@ def _build_worker_payload(
         "temperature": temperatures,
         "best_of": best_of_payload,
         "condition_on_previous_text": condition_on_prev,
+        "audio_duration_sec": audio_duration_sec,
     }
     return payload
 
@@ -701,8 +709,8 @@ def transcribe(
         beam_size = _env_int("ASR_BEAM_SIZE", _env_int("FASTWHISPER_BEAM_SIZE", 5))
     if vad_filter is None:
         vad_filter = _env_bool("ASR_VAD_FILTER", _env_bool("FASTWHISPER_VAD_FILTER", True))
-    vad_min_silence_ms = _env_int("FASTWHISPER_VAD_MIN_SILENCE_MS", 250)
-    vad_speech_pad_ms = _env_int("FASTWHISPER_VAD_SPEECH_PAD_MS", 150)
+    vad_min_silence_ms = _env_int("FASTWHISPER_VAD_MIN_SILENCE_MS", 350)
+    vad_speech_pad_ms = _env_int("FASTWHISPER_VAD_SPEECH_PAD_MS", 250)
     word_timestamps = _env_bool("ASR_WORD_TIMESTAMPS", _env_bool("FASTWHISPER_WORD_TIMESTAMPS", False))
     force_language = _env_bool("ASR_FORCE_LANGUAGE", False)
     if language is None:
@@ -745,6 +753,7 @@ def transcribe(
     try:
         model_input = ""
         model = None
+        audio_duration_sec = _probe_duration_sec(audio_wav_path)
         try:
             _log(f"rss_mb={_rss_mb()} phase=before_model_load", logger)
             model_input = _ensure_local_model_dir(model_name, logger=logger)
@@ -836,6 +845,7 @@ def transcribe(
                     compute_type=compute_type,
                     cpu_threads=cpu_threads,
                     num_workers=num_workers,
+                    audio_duration_sec=audio_duration_sec,
                     timeout_sec=timeout_sec,
                     logger=logger,
                 )
