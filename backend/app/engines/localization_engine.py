@@ -593,6 +593,8 @@ class LocalizationEngine:
                     original_text_norm = str(row.get("origin") or "")
                     original_text_raw = str(row.get("origin_raw") or original_text_norm)
                     translated_text = str(row.get("translated") or "")
+                    translation_initial = str(row.get("translation_initial") or translated_text)
+                    translation_final = str(row.get("translation_final") or translated_text)
                     final_tts_text = text
                     ultra_short_mode = target_sec <= 0.8
                     if ultra_short_mode:
@@ -608,7 +610,10 @@ class LocalizationEngine:
 
                     seg_path = workspace / f"segment_{idx:03d}.mp3"
                     seg_retry_used = False
+                    expand_retry_used = False
                     seg_atempo = 1.0
+                    tts_retry_type = "none"
+                    warning_flags: list[str] = []
                     synthesize_mp3(
                         text,
                         voice_id=voice_id,
@@ -634,9 +639,11 @@ class LocalizationEngine:
                             final_tts_text = shorter
                             tts_sec = _probe_duration(seg_path) or 0.0
                             ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
+                            tts_retry_type = "concise"
                         on_log(f"[loc] TTS_CONCISE_RETRY_USED index={idx}")
                         if ultra_short_mode:
                             on_log(f"[loc] TTS_ULTRA_SHORT_REWRITE_USED index={idx}")
+                            tts_retry_type = "ultra_short"
                         alignment_strategy = "segment_tts+concise_retry"
 
                     if ultra_short_mode and ratio > 1.35:
@@ -656,6 +663,7 @@ class LocalizationEngine:
                             tts_sec = _probe_duration(seg_path) or 0.0
                             ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
                             seg_retry_used = True
+                            tts_retry_type = "ultra_short"
 
                     if ratio > 1.5:
                         on_log(f"[loc] TTS_SEGMENT_TOO_FAST index={idx} factor={ratio:.3f}")
@@ -674,25 +682,8 @@ class LocalizationEngine:
                             final_tts_text = shorter_again
                             tts_sec = _probe_duration(seg_path) or 0.0
                             ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
+                            tts_retry_type = "duration_rewrite"
 
-                    if ratio > 1.25 and tts_sec > 0 and target_sec > 0:
-                        aligned_seg = workspace / f"segment_{idx:03d}_aligned.mp3"
-                        try:
-                            stretch_audio_to_duration(seg_path, aligned_seg, target_sec, on_log=on_log)
-                            seg_atempo = tts_sec / target_sec
-                            if seg_atempo > 2.0:
-                                on_log(f"[loc][warn] TTS_SEGMENT_TOO_FAST index={idx} factor={seg_atempo:.3f}")
-                            seg_path = aligned_seg
-                            tts_sec = _probe_duration(seg_path) or target_sec
-                            ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
-                            on_log(f"[loc] TTS_ATEMPO_APPLIED index={idx} factor={seg_atempo:.3f}")
-                            alignment_strategy = "segment_tts+atempo"
-                            if seg_atempo > 2.5:
-                                on_log(f"[loc][warn] TTS_SEGMENT_ATEMPO_HARD_WARNING index={idx} factor={seg_atempo:.3f}")
-                        except Exception as ex_align:
-                            on_log(f"[loc][warn] TTS_ATEMPO_SKIP index={idx} reason={type(ex_align).__name__}")
-
-                    expand_retry_used = False
                     if target_sec >= 1.5 and ratio < 0.75:
                         on_log(f"[loc] TTS_SEGMENT_TOO_SHORT index={idx} ratio={ratio:.3f}")
                         try:
@@ -701,6 +692,7 @@ class LocalizationEngine:
                             expanded = final_tts_text
                         if expanded and expanded != final_tts_text:
                             on_log(f"[loc] TTS_TEXT_EXPAND_FOR_DURATION index={idx}")
+                            on_log(f"[loc] TTS_EXPAND_REWRITE_TEXT_USED index={idx}")
                             synthesize_mp3(
                                 expanded,
                                 voice_id=voice_id,
@@ -710,7 +702,33 @@ class LocalizationEngine:
                             final_tts_text = expanded
                             tts_sec = _probe_duration(seg_path) or tts_sec
                             ratio = (tts_sec / target_sec) if target_sec > 0 else ratio
+                            on_log(f"[loc] TTS_EXPAND_RETRY_AUDIO_SEC index={idx} sec={tts_sec:.3f}")
+                            on_log(f"[loc] TTS_EXPAND_RETRY_RATIO index={idx} ratio={ratio:.3f}")
                             expand_retry_used = True
+                            tts_retry_type = "expand"
+
+                    atempo_threshold = 2.0 if ultra_short_mode else 1.25
+                    if ratio > atempo_threshold and tts_sec > 0 and target_sec > 0:
+                        if ultra_short_mode:
+                            on_log(f"[loc] TTS_ULTRA_SHORT_ATEMPO_ESCALATED index={idx}")
+                        aligned_seg = workspace / f"segment_{idx:03d}_aligned.mp3"
+                        try:
+                            stretch_audio_to_duration(seg_path, aligned_seg, target_sec, on_log=on_log)
+                            seg_atempo = tts_sec / target_sec
+                            if seg_atempo > 2.0:
+                                on_log(f"[loc][warn] TTS_SEGMENT_TOO_FAST index={idx} factor={seg_atempo:.3f}")
+                                warning_flags.append("segment_too_fast_gt_2_0")
+                            seg_path = aligned_seg
+                            tts_sec = _probe_duration(seg_path) or target_sec
+                            ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
+                            on_log(f"[loc] TTS_ATEMPO_APPLIED index={idx} factor={seg_atempo:.3f}")
+                            alignment_strategy = "segment_tts+atempo"
+                            tts_retry_type = "duration_rewrite" if tts_retry_type == "none" else tts_retry_type
+                            if seg_atempo > 2.5:
+                                on_log(f"[loc][warn] TTS_SEGMENT_ATEMPO_HARD_WARNING index={idx} factor={seg_atempo:.3f}")
+                                warning_flags.append("segment_atempo_gt_2_5")
+                        except Exception as ex_align:
+                            on_log(f"[loc][warn] TTS_ATEMPO_SKIP index={idx} reason={type(ex_align).__name__}")
 
                     silence_pad_sec = 0.0
                     if ratio < 0.55:
@@ -730,11 +748,20 @@ class LocalizationEngine:
                         segment_assets.append(seg_path)
                         cursor_sec = seg_start + tts_sec
 
+                    if ultra_short_mode:
+                        on_log(f"[loc] TTS_ULTRA_SHORT_FINAL_TEXT index={idx} text={final_tts_text[:80]}")
+                        on_log(f"[loc] TTS_ULTRA_SHORT_FINAL_RATIO index={idx} ratio={ratio:.3f}")
+
                     tts_alignment_rows.append(
                         {
                             "index": idx,
+                            "duration_bucket": "ultra_short" if ultra_short_mode else ("short" if target_sec < 1.5 else "normal"),
                             "src_text_raw": original_text_raw,
                             "src_text_norm": original_text_norm,
+                            "translation_initial": translation_initial,
+                            "translation_final": translation_final,
+                            "tts_text_initial": translated_text,
+                            "tts_text_final": final_tts_text,
                             "translated_text": translated_text,
                             "final_tts_text": final_tts_text,
                             "src_dur": target_sec,
@@ -744,8 +771,10 @@ class LocalizationEngine:
                             "silence_pad_sec": silence_pad_sec,
                             "concise_retry": seg_retry_used,
                             "expand_retry": expand_retry_used,
+                            "tts_retry_type": tts_retry_type,
                             "atempo_factor": seg_atempo,
                             "ultra_short_mode": ultra_short_mode,
+                            "warning_flags": warning_flags,
                         }
                     )
                     on_log(

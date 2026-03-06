@@ -53,10 +53,15 @@ class GeminiTranslator:
         ultra_short: bool = False,
         expand: bool = False,
         strict_json_only: bool = False,
+        bucket: str | None = None,
     ) -> str:
         payload = [{"index": int(s["index"]), "text": str(s.get("text") or "")} for s in segments]
-        if ultra_short:
+        if bucket == "ultra_short" or ultra_short:
             style_line = "ultra-short spoken Burmese phrase only; very brief; no explanation; no added detail."
+        elif bucket == "short":
+            style_line = "short spoken Burmese for dubbing; keep only core meaning; no explanations."
+        elif bucket == "normal":
+            style_line = "natural spoken Burmese for dubbing; concise but complete; avoid literary wording."
         elif expand:
             style_line = "natural spoken Burmese for dubbing; concise but not too short; fit timing naturally."
         elif concise:
@@ -67,11 +72,22 @@ class GeminiTranslator:
         return (
             "Translate Chinese (zh) subtitles to target language.\n"
             f"target_lang={target_lang}\n"
-            f"Rules: keep same index; {style_line}\n"
+            f"Rules: one segment in, one segment out; keep same index; {style_line}\n"
+            "Use spoken dubbing Burmese, not written/literary translation. Must fit segment timing.\n"
             f"{strict_line}\n"
             'Return exactly: {"segments":[{"index":1,"text":"..."}, ...]}\n'
             f"Input segments: {json.dumps(payload, ensure_ascii=False)}"
         )
+
+    def _duration_bucket(self, seg: dict[str, Any]) -> str:
+        start = float(seg.get("start") or 0.0)
+        end = float(seg.get("end") or start)
+        dur = max(0.0, end - start)
+        if dur <= 0.8:
+            return "ultra_short"
+        if dur < 1.5:
+            return "short"
+        return "normal"
 
     def _extract_content_text(self, payload: dict[str, Any]) -> str:
         # OpenAI-compatible response
@@ -142,6 +158,7 @@ class GeminiTranslator:
         ultra_short: bool = False,
         expand: bool = False,
         strict_json_only: bool = False,
+        bucket: str | None = None,
     ) -> tuple[dict[int, str], bool, str]:
         if not self.api_key:
             raise RuntimeError("missing_gemini_api_key")
@@ -154,6 +171,7 @@ class GeminiTranslator:
             ultra_short=ultra_short,
             expand=expand,
             strict_json_only=strict_json_only,
+            bucket=bucket,
         )
         body = {
             "model": self.model,
@@ -182,6 +200,7 @@ class GeminiTranslator:
         ultra_short: bool = False,
         expand: bool = False,
         strict_json_only: bool = False,
+        bucket: str | None = None,
     ) -> str:
         if not self.api_key:
             raise RuntimeError("missing_gemini_api_key")
@@ -194,6 +213,7 @@ class GeminiTranslator:
             ultra_short=ultra_short,
             expand=expand,
             strict_json_only=strict_json_only,
+            bucket=bucket,
         )
         body = {
             "model": self.model,
@@ -271,6 +291,9 @@ class GeminiTranslator:
         if not segments:
             return GeminiTranslationResult(translated_segments=[], missing_indexes=[], retry_used=False)
         ultra_short_batch = all((float(s.get("end") or 0.0) - float(s.get("start") or 0.0)) <= 0.8 for s in segments)
+        for seg in segments:
+            if logger:
+                logger(f"[loc] TRANSLATION_DURATION_BUCKET index={int(seg.get('index') or 0)} bucket={self._duration_bucket(seg)}")
         json_repair_used = False
         raw_saved = False
         try:
@@ -279,6 +302,7 @@ class GeminiTranslator:
                 target_lang=target_lang,
                 concise=False,
                 ultra_short=ultra_short_batch,
+                bucket="ultra_short" if ultra_short_batch else None,
             )
             json_repair_used = json_repair_used or repaired
         except Exception:
@@ -290,6 +314,7 @@ class GeminiTranslator:
                     concise=False,
                     strict_json_only=False,
                     ultra_short=ultra_short_batch,
+                    bucket="ultra_short" if ultra_short_batch else None,
                 )
                 if raw_save_path:
                     raw_save_path.write_text(raw or "", encoding="utf-8")
@@ -302,6 +327,7 @@ class GeminiTranslator:
                 concise=False,
                 strict_json_only=True,
                 ultra_short=ultra_short_batch,
+                bucket="ultra_short" if ultra_short_batch else None,
             )
             json_repair_used = True or repaired
         missing = [int(s["index"]) for s in segments if int(s["index"]) not in items]
@@ -318,11 +344,13 @@ class GeminiTranslator:
                 target_lang=target_lang,
                 concise=False,
                 ultra_short=all((float(s.get("end") or 0.0) - float(s.get("start") or 0.0)) <= 0.8 for s in subset),
+                bucket="ultra_short" if subset and all((float(s.get("end") or 0.0) - float(s.get("start") or 0.0)) <= 0.8 for s in subset) else None,
             )
             json_repair_used = json_repair_used or repaired
             items.update(retry_items)
             missing = [int(s["index"]) for s in segments if int(s["index"]) not in items]
 
+        initial_items = dict(items)
         too_long_indexes: list[int] = []
         for seg in segments:
             idx = int(seg["index"])
@@ -342,6 +370,7 @@ class GeminiTranslator:
                 target_lang=target_lang,
                 concise=True,
                 ultra_short=all((float(s.get("end") or 0.0) - float(s.get("start") or 0.0)) <= 0.8 for s in subset),
+                bucket="short",
             )
             json_repair_used = json_repair_used or repaired
             for idx, value in concise_items.items():
@@ -361,6 +390,7 @@ class GeminiTranslator:
                     target_lang=target_lang,
                     concise=True,
                     strict_json_only=True,
+                    bucket="short",
                 )
                 json_repair_used = json_repair_used or repaired
                 for idx, value in strong_items.items():
@@ -368,6 +398,35 @@ class GeminiTranslator:
                         items[idx] = value.strip()
             if logger:
                 logger(f"[loc] TRANSLATION_CONCISE_RETRY_STRONG_USED={'true' if strong_retry_used else 'false'}")
+
+        # Segment-level retry for very long translations (ratio > 2.0).
+        for seg in segments:
+            idx = int(seg["index"])
+            current = str(items.get(idx) or "").strip()
+            ratio = self._text_ratio(str(seg.get("text") or ""), current)
+            if ratio <= 2.0:
+                continue
+            bucket = self._duration_bucket(seg)
+            if logger:
+                logger(f"[loc] TRANSLATION_SEGMENT_RETRY_USED index={idx}")
+                logger(f"[loc] TRANSLATION_SEGMENT_RETRY_REASON index={idx} reason=too_long")
+            try:
+                seg_items, repaired, _ = self._request_items(
+                    [seg],
+                    target_lang=target_lang,
+                    concise=True,
+                    ultra_short=(bucket == "ultra_short"),
+                    strict_json_only=True,
+                    bucket=bucket,
+                )
+                json_repair_used = json_repair_used or repaired
+                seg_value = str(seg_items.get(idx) or "").strip()
+                if seg_value:
+                    items[idx] = seg_value
+            except Exception:
+                # Keep current translation if segment retry fails.
+                pass
+
         translated_segments = []
         ratios: list[float] = []
         for seg in segments:
@@ -381,6 +440,9 @@ class GeminiTranslator:
                     "start": float(seg.get("start") or 0.0),
                     "end": float(seg.get("end") or 0.0),
                     "origin": str(seg.get("text") or ""),
+                    "duration_bucket": self._duration_bucket(seg),
+                    "translation_initial": str(initial_items.get(idx) or ""),
+                    "translation_final": translated,
                     "translated": translated,
                 }
             )
