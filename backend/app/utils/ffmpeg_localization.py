@@ -385,6 +385,73 @@ def stretch_audio_to_duration(
     )
 
 
+def write_silence_audio(
+    output_audio: Path,
+    duration_sec: float,
+    on_log: Optional[Callable[[str], None]] = None,
+) -> None:
+    output_audio.parent.mkdir(parents=True, exist_ok=True)
+    dur = max(0.01, float(duration_sec))
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=r=24000:cl=mono",
+        "-t",
+        f"{dur:.3f}",
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "64k",
+        str(output_audio),
+    ]
+    run_ffmpeg(
+        cmd,
+        timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MIX", "180")),
+        tag="ffmpeg_silence",
+        on_log=on_log,
+    )
+
+
+def concat_audio_files(
+    audio_files: list[Path],
+    output_audio: Path,
+    on_log: Optional[Callable[[str], None]] = None,
+) -> None:
+    output_audio.parent.mkdir(parents=True, exist_ok=True)
+    list_file = output_audio.parent / f"{output_audio.stem}_concat.txt"
+    lines: list[str] = []
+    for p in audio_files:
+        escaped = str(p).replace("'", "'\\''")
+        lines.append("file '" + escaped + "'")
+    list_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(list_file),
+        "-c",
+        "copy",
+        str(output_audio),
+    ]
+    run_ffmpeg(
+        cmd,
+        timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MIX", "180")),
+        tag="ffmpeg_concat_audio",
+        on_log=on_log,
+    )
+
+
 def render_with_original_audio(video_in: Path, output_wav: Path, on_log: Optional[Callable[[str], None]] = None) -> None:
     output_wav.parent.mkdir(parents=True, exist_ok=True)
     cmd = [

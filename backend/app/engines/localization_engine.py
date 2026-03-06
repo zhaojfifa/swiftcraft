@@ -31,9 +31,12 @@ from app.utils.ffmpeg_localization import (
     speech_ratio_from_silencedetect,
     stretch_audio_to_duration,
     trim_audio_for_asr,
+    write_silence_audio,
+    concat_audio_files,
 )
 from app.utils.translate_gemini import (
     build_translation_qa,
+    concise_rewrite_with_gemini,
     retry_missing_segments_with_gemini,
     write_translation_qa,
 )
@@ -421,6 +424,9 @@ class LocalizationEngine:
             translated_segments: list[dict[str, Any]] = []
             translation_missing_indexes: list[int] = []
             translation_retry_used = False
+            translation_concise_retry_used = False
+            translation_length_ratio_avg = 0.0
+            translation_length_ratio_max = 0.0
             translation_fallback_used = False
             translated_segments_path = workspace / "translated_segments.json"
             on_log(f"[loc] TRANSLATION_PROVIDER={translation_provider}")
@@ -453,6 +459,9 @@ class LocalizationEngine:
                         translated_segments = gemini_result.translated_segments
                         translation_missing_indexes = gemini_result.missing_indexes
                         translation_retry_used = gemini_result.retry_used
+                        translation_concise_retry_used = bool(getattr(gemini_result, "concise_retry_used", False))
+                        translation_length_ratio_avg = float(getattr(gemini_result, "length_ratio_avg", 0.0) or 0.0)
+                        translation_length_ratio_max = float(getattr(gemini_result, "length_ratio_max", 0.0) or 0.0)
                     else:
                         target_srt_mm = translate_srt(source_srt, target_lang=target_lang)
                         translated_segments = []
@@ -506,6 +515,9 @@ class LocalizationEngine:
                 missing_indexes=translation_missing_indexes,
                 retry_used=translation_retry_used,
                 fallback_used=translation_fallback_used,
+                concise_retry_used=translation_concise_retry_used,
+                length_ratio_avg=translation_length_ratio_avg,
+                length_ratio_max=translation_length_ratio_max,
             )
             qa_path = write_translation_qa(workspace, qa)
             on_log(f"[loc] TRANSLATION_QA chars_src={qa.get('source_chars')} chars_tgt={qa.get('target_chars')}")
@@ -518,6 +530,9 @@ class LocalizationEngine:
                 "translated_segments": translated_segment_count,
                 "missing_indexes": translation_missing_indexes,
                 "retry_used": translation_retry_used,
+                "concise_retry_used": translation_concise_retry_used,
+                "length_ratio_avg": translation_length_ratio_avg,
+                "length_ratio_max": translation_length_ratio_max,
                 "fallback_used": translation_fallback_used,
                 "translated_segments_path": str(translated_segments_path),
                 "source_probe": source_probe,
@@ -535,68 +550,155 @@ class LocalizationEngine:
             dub_duration_sec = None
             tts_input_source = "translated_segments"
             tts_text_strategy = "segment_tts"
+            tts_alignment_rows: list[dict[str, Any]] = []
+            tts_alignment_qa_path = workspace / "tts_alignment_qa.json"
             if not no_subtitles:
-                if (audio_wav_duration_sec or 0.0) <= 8.0:
-                    dub_text = _merged_tts_text_from_translated_segments(translated_segments)
-                    if not dub_text.strip():
-                        dub_text = _merged_tts_text_from_srt(target_srt)
-                    if not dub_text.strip():
-                        dub_text = srt_to_text(target_srt)
-                    tts_text_strategy = "merged_short_audio"
-                else:
-                    dub_text = _merged_tts_text_from_translated_segments(translated_segments)
-                    if not dub_text.strip():
-                        dub_text = srt_to_text(target_srt)
+                on_log("[loc] TTS_SEGMENT_MODE=per_segment")
                 on_log(f"[loc] TTS_INPUT_SOURCE={tts_input_source}")
-                on_log(f"[loc] TTS_TEXT_STRATEGY={tts_text_strategy}")
-                on_log(f"[loc] LOC_TEXT_SOURCE=translated_segments text_len={len(dub_text.strip())} num_segments={translated_segment_count}")
-                if not dub_text.strip():
+                source_video_duration_sec_for_tts = _probe_duration(source_video) or 0.0
+                segment_assets: list[Path] = []
+                cursor_sec = 0.0
+                alignment_strategy = "segment_tts"
+                dub_text_len = 0
+                for row in translated_segments:
+                    idx = int(row.get("index") or 0)
+                    if idx <= 0:
+                        continue
+                    seg_start = float(row.get("start") or 0.0)
+                    seg_end = float(row.get("end") or seg_start + 0.2)
+                    target_sec = max(0.2, seg_end - seg_start)
+                    text = str(row.get("translated") or "").strip()
+                    if not text:
+                        text = str(row.get("origin") or "").strip() or "[UNTRANSLATED]"
+                    dub_text_len += len(text)
+
+                    # Preserve timing gaps before each segment.
+                    gap_sec = max(0.0, seg_start - cursor_sec)
+                    if gap_sec > 0.01:
+                        gap_path = workspace / f"segment_gap_{idx:03d}.mp3"
+                        write_silence_audio(gap_path, gap_sec, on_log=on_log)
+                        segment_assets.append(gap_path)
+                        cursor_sec += gap_sec
+
+                    seg_path = workspace / f"segment_{idx:03d}.mp3"
+                    seg_retry_used = False
+                    seg_atempo = 1.0
+                    synthesize_mp3(
+                        text,
+                        voice_id=voice_id,
+                        provider="azure-speech",
+                        output_path=seg_path,
+                    )
+                    tts_sec = _probe_duration(seg_path) or 0.0
+                    ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
+
+                    if ratio > 1.25:
+                        seg_retry_used = True
+                        try:
+                            shorter = concise_rewrite_with_gemini(text, target_lang=target_lang)
+                        except Exception:
+                            shorter = text
+                        if shorter and shorter != text:
+                            synthesize_mp3(
+                                shorter,
+                                voice_id=voice_id,
+                                provider="azure-speech",
+                                output_path=seg_path,
+                            )
+                            tts_sec = _probe_duration(seg_path) or 0.0
+                            ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
+                        on_log(f"[loc] TTS_CONCISE_RETRY_USED index={idx}")
+                        alignment_strategy = "segment_tts+concise_retry"
+
+                    if ratio > 1.25 and tts_sec > 0 and target_sec > 0:
+                        aligned_seg = workspace / f"segment_{idx:03d}_aligned.mp3"
+                        try:
+                            stretch_audio_to_duration(seg_path, aligned_seg, target_sec, on_log=on_log)
+                            seg_atempo = tts_sec / target_sec
+                            seg_path = aligned_seg
+                            tts_sec = _probe_duration(seg_path) or target_sec
+                            ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
+                            on_log(f"[loc] TTS_ATEMPO_APPLIED index={idx} factor={seg_atempo:.3f}")
+                            alignment_strategy = "segment_tts+atempo"
+                        except Exception as ex_align:
+                            on_log(f"[loc][warn] TTS_ATEMPO_SKIP index={idx} reason={type(ex_align).__name__}")
+
+                    if ratio < 0.55:
+                        # Light pad only (do not aggressively stretch).
+                        pad_sec = min(max(0.0, target_sec - tts_sec), target_sec * 0.3)
+                        if pad_sec > 0.01:
+                            pad_path = workspace / f"segment_pad_{idx:03d}.mp3"
+                            write_silence_audio(pad_path, pad_sec, on_log=on_log)
+                            segment_assets.append(seg_path)
+                            segment_assets.append(pad_path)
+                            cursor_sec = seg_start + tts_sec + pad_sec
+                        else:
+                            segment_assets.append(seg_path)
+                            cursor_sec = seg_start + tts_sec
+                    else:
+                        segment_assets.append(seg_path)
+                        cursor_sec = seg_start + tts_sec
+
+                    tts_alignment_rows.append(
+                        {
+                            "index": idx,
+                            "target_sec": target_sec,
+                            "tts_sec": tts_sec,
+                            "ratio": ratio,
+                            "concise_retry": seg_retry_used,
+                            "atempo": seg_atempo,
+                        }
+                    )
+                    on_log(
+                        f"[loc] TTS_SEGMENT index={idx} src_dur={target_sec:.3f} "
+                        f"tts_dur={tts_sec:.3f} ratio={ratio:.3f}"
+                    )
+
+                if not segment_assets:
                     raise EngineRunError("TTS_TEXT_EMPTY: empty text passed to synthesizer")
-                dub_mp3_path = synthesize_mp3(
-                    dub_text,
-                    voice_id=voice_id,
-                    provider="azure-speech",
-                    output_path=workspace / "dub.mp3",
-                )
+
+                dub_mp3_path = workspace / "dub.mp3"
+                concat_audio_files(segment_assets, dub_mp3_path, on_log=on_log)
                 dub_duration_sec = _probe_duration(dub_mp3_path)
-                on_log(
-                    f"[loc] dub_audio_path={dub_mp3_path} duration_sec="
-                    f"{dub_duration_sec if dub_duration_sec is not None else 'n/a'}"
-                )
-                source_video_duration_sec_for_tts = _probe_duration(source_video)
+                on_log(f"[loc] DUB_TOTAL_SEC_BEFORE_RENDER={dub_duration_sec if dub_duration_sec is not None else 'n/a'}")
                 if (
                     dub_duration_sec is not None
-                    and source_video_duration_sec_for_tts is not None
                     and source_video_duration_sec_for_tts > 0
-                    and dub_duration_sec < (0.7 * source_video_duration_sec_for_tts)
+                    and dub_duration_sec > source_video_duration_sec_for_tts * 1.03
                 ):
                     aligned_mp3 = workspace / "dub_aligned.mp3"
-                    target_dub_sec = source_video_duration_sec_for_tts * 0.9
-                    try:
-                        stretch_audio_to_duration(
-                            dub_mp3_path,
-                            aligned_mp3,
-                            target_dub_sec,
-                            on_log=on_log,
-                        )
-                        aligned_sec = _probe_duration(aligned_mp3)
-                        on_log(
-                            "[loc] dub_duration_align "
-                            f"original_sec={dub_duration_sec:.3f} target_sec={target_dub_sec:.3f} "
-                            f"aligned_sec={aligned_sec if aligned_sec is not None else 'n/a'}"
-                        )
-                        dub_mp3_path = aligned_mp3
-                        dub_duration_sec = aligned_sec or target_dub_sec
-                        tts_text_strategy = "merged_aligned_audio"
-                        on_log(f"[loc] TTS_TEXT_STRATEGY={tts_text_strategy}")
-                    except Exception as align_exc:
-                        on_log(f"[loc][warn] dub_duration_align_skip reason={type(align_exc).__name__}")
+                    target_total = source_video_duration_sec_for_tts * 0.99
+                    stretch_audio_to_duration(dub_mp3_path, aligned_mp3, target_total, on_log=on_log)
+                    dub_mp3_path = aligned_mp3
+                    dub_duration_sec = _probe_duration(aligned_mp3)
+                    alignment_strategy = f"{alignment_strategy}+atempo"
+                on_log(f"[loc] DUB_TOTAL_SEC_AFTER_ALIGN={dub_duration_sec if dub_duration_sec is not None else 'n/a'}")
+                on_log(f"[loc] DUB_ALIGNMENT_STRATEGY={alignment_strategy}")
+                tts_text_strategy = alignment_strategy
+
+                tts_alignment_qa_path.write_text(
+                    json.dumps(
+                        {
+                            "segment_count": len(tts_alignment_rows),
+                            "segment_alignment": tts_alignment_rows,
+                            "strategy": alignment_strategy,
+                            "audio_duration_sec": dub_duration_sec,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+
                 tts_meta = {
                     "voice_id": voice_id,
                     "input_source": tts_input_source,
                     "text_strategy": tts_text_strategy,
-                    "text_len": len(dub_text.strip()),
+                    "segment_count": len(tts_alignment_rows),
+                    "segment_alignment": tts_alignment_rows,
+                    "text_len": dub_text_len,
                     "audio_duration_sec": dub_duration_sec,
+                    "alignment_qa_local_path": str(tts_alignment_qa_path),
                 }
                 on_log(f"[loc] TTS_AUDIO_SEC={dub_duration_sec if dub_duration_sec is not None else 'n/a'}")
             else:
@@ -605,6 +707,8 @@ class LocalizationEngine:
                     "voice_id": voice_id,
                     "input_source": "none",
                     "text_strategy": "none",
+                    "segment_count": 0,
+                    "segment_alignment": [],
                     "text_len": 0,
                     "audio_duration_sec": None,
                 }
@@ -698,6 +802,7 @@ class LocalizationEngine:
             origin_segments_key = f"outputs/{task_id}/origin_segments.json"
             translated_segments_key = f"outputs/{task_id}/translated_segments.json"
             translation_qa_key = f"outputs/{task_id}/translation_qa.json"
+            tts_alignment_qa_key = f"outputs/{task_id}/tts_alignment_qa.json"
 
             output_url = self.r2.upload_bytes(output_key, localized_mp4_path.read_bytes(), content_type="video/mp4")
             subtitle_url = self.r2.upload_bytes(subtitle_key, target_srt_path.read_bytes(), content_type="text/plain")
@@ -716,6 +821,13 @@ class LocalizationEngine:
                 qa_path.read_bytes(),
                 content_type="application/json",
             )
+            tts_alignment_qa_url = None
+            if tts_alignment_qa_path.exists():
+                tts_alignment_qa_url = self.r2.upload_bytes(
+                    tts_alignment_qa_key,
+                    tts_alignment_qa_path.read_bytes(),
+                    content_type="application/json",
+                )
             audio_key = None
             audio_url = None
             if dub_mp3_path is not None:
@@ -740,6 +852,9 @@ class LocalizationEngine:
                 "translation_qa_key": translation_qa_key,
                 "translation_qa_url": translation_qa_url,
             }
+            if tts_alignment_qa_url:
+                outputs["tts_alignment_qa_key"] = tts_alignment_qa_key
+                outputs["tts_alignment_qa_url"] = tts_alignment_qa_url
             if audio_key and audio_url:
                 outputs["audio_key"] = audio_key
                 outputs["audio_url"] = audio_url

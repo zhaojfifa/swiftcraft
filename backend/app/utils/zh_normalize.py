@@ -5,12 +5,8 @@ import unicodedata
 
 
 _REPLACEMENTS = (
-    ("戴上", "带上"),
-    ("指算", "尺寸"),
-    ("指数", "尺寸"),
-    ("指數", "尺寸"),
     ("吋", "寸"),
-    ("飛機", "飞机"),
+    ("飛", "飞"),
 )
 
 
@@ -38,4 +34,3 @@ def normalize_zh_text(text: str) -> str:
     s = _normalize_numbers_and_units(s)
     s = _normalize_spacing_and_punct(s)
     return s
-
