@@ -37,6 +37,7 @@ from app.utils.ffmpeg_localization import (
 from app.utils.translate_gemini import (
     build_translation_qa,
     concise_rewrite_with_gemini,
+    expand_rewrite_with_gemini,
     retry_missing_segments_with_gemini,
     write_translation_qa,
 )
@@ -362,6 +363,7 @@ class LocalizationEngine:
                 on_stage("TRANSCRIBING", 30)
 
             asr_text_raw = raw_text
+            origin_segments_raw = _origin_segments_payload(segments)
             for seg in segments:
                 seg.text = normalize_zh_text(str(getattr(seg, "text", "") or ""))
             asr_text_norm = normalize_zh_text(" ".join(seg.text for seg in segments))
@@ -372,6 +374,9 @@ class LocalizationEngine:
             source_srt_path = workspace / "source.srt"
             source_srt_path.write_text(source_srt, encoding="utf-8")
             origin_segments = _origin_segments_payload(segments)
+            raw_text_by_index = {int(r.get("index") or 0): str(r.get("text") or "") for r in origin_segments_raw}
+            for row in origin_segments:
+                row["text_raw"] = raw_text_by_index.get(int(row.get("index") or 0), str(row.get("text") or ""))
             origin_segments_path = workspace / "origin_segments.json"
             origin_segments_path.write_text(json.dumps(origin_segments, ensure_ascii=False, indent=2), encoding="utf-8")
             num_segments = len(segments)
@@ -427,8 +432,11 @@ class LocalizationEngine:
             translation_concise_retry_used = False
             translation_length_ratio_avg = 0.0
             translation_length_ratio_max = 0.0
+            translation_json_repair_used = False
+            translation_raw_response_saved = False
             translation_fallback_used = False
             translated_segments_path = workspace / "translated_segments.json"
+            translation_raw_path = workspace / "translation_raw.txt"
             on_log(f"[loc] TRANSLATION_PROVIDER={translation_provider}")
             on_log(f"[loc] TRANSLATION_SEGMENTS_SOURCE={len(origin_segments)}")
             if no_subtitles:
@@ -455,6 +463,7 @@ class LocalizationEngine:
                             origin_segments,
                             target_lang=target_lang,
                             logger=on_log,
+                            raw_save_path=translation_raw_path,
                         )
                         translated_segments = gemini_result.translated_segments
                         translation_missing_indexes = gemini_result.missing_indexes
@@ -462,6 +471,8 @@ class LocalizationEngine:
                         translation_concise_retry_used = bool(getattr(gemini_result, "concise_retry_used", False))
                         translation_length_ratio_avg = float(getattr(gemini_result, "length_ratio_avg", 0.0) or 0.0)
                         translation_length_ratio_max = float(getattr(gemini_result, "length_ratio_max", 0.0) or 0.0)
+                        translation_json_repair_used = bool(getattr(gemini_result, "json_repair_used", False))
+                        translation_raw_response_saved = bool(getattr(gemini_result, "raw_response_saved", False))
                     else:
                         target_srt_mm = translate_srt(source_srt, target_lang=target_lang)
                         translated_segments = []
@@ -492,10 +503,16 @@ class LocalizationEngine:
                                 "start": float(seg["start"]),
                                 "end": float(seg["end"]),
                                 "origin": str(seg["text"]),
+                                "origin_raw": str(seg.get("text_raw") or seg["text"]),
                                 "translated": f"[UNTRANSLATED] {str(seg['text']).strip()}",
                             }
                         )
                     target_srt = _translated_segments_to_srt(translated_segments)
+            for row in translated_segments:
+                idx = int(row.get("index") or 0)
+                raw_src = raw_text_by_index.get(idx, str(row.get("origin") or ""))
+                row["origin_raw"] = str(row.get("origin_raw") or raw_src)
+                row["origin"] = normalize_zh_text(str(row.get("origin") or raw_src))
             target_srt_path = workspace / "target.srt"
             target_srt_path.write_text(target_srt, encoding="utf-8")
             translated_segments_path.write_text(
@@ -533,6 +550,8 @@ class LocalizationEngine:
                 "concise_retry_used": translation_concise_retry_used,
                 "length_ratio_avg": translation_length_ratio_avg,
                 "length_ratio_max": translation_length_ratio_max,
+                "json_repair_used": translation_json_repair_used,
+                "raw_response_saved": translation_raw_response_saved,
                 "fallback_used": translation_fallback_used,
                 "translated_segments_path": str(translated_segments_path),
                 "source_probe": source_probe,
@@ -571,9 +590,13 @@ class LocalizationEngine:
                     if not text:
                         text = str(row.get("origin") or "").strip() or "[UNTRANSLATED]"
                     dub_text_len += len(text)
-                    original_text = str(row.get("origin") or "")
+                    original_text_norm = str(row.get("origin") or "")
+                    original_text_raw = str(row.get("origin_raw") or original_text_norm)
                     translated_text = str(row.get("translated") or "")
                     final_tts_text = text
+                    ultra_short_mode = target_sec <= 0.8
+                    if ultra_short_mode:
+                        on_log(f"[loc] TRANSLATION_ULTRA_SHORT_MODE index={idx}")
 
                     # Preserve timing gaps before each segment.
                     gap_sec = max(0.0, seg_start - cursor_sec)
@@ -612,7 +635,27 @@ class LocalizationEngine:
                             tts_sec = _probe_duration(seg_path) or 0.0
                             ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
                         on_log(f"[loc] TTS_CONCISE_RETRY_USED index={idx}")
+                        if ultra_short_mode:
+                            on_log(f"[loc] TTS_ULTRA_SHORT_REWRITE_USED index={idx}")
                         alignment_strategy = "segment_tts+concise_retry"
+
+                    if ultra_short_mode and ratio > 1.35:
+                        try:
+                            ultra_shorter = concise_rewrite_with_gemini(final_tts_text, target_lang=target_lang)
+                        except Exception:
+                            ultra_shorter = final_tts_text
+                        if ultra_shorter and ultra_shorter != final_tts_text:
+                            on_log(f"[loc] TTS_ULTRA_SHORT_REWRITE_USED index={idx}")
+                            synthesize_mp3(
+                                ultra_shorter,
+                                voice_id=voice_id,
+                                provider="azure-speech",
+                                output_path=seg_path,
+                            )
+                            final_tts_text = ultra_shorter
+                            tts_sec = _probe_duration(seg_path) or 0.0
+                            ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
+                            seg_retry_used = True
 
                     if ratio > 1.5:
                         on_log(f"[loc] TTS_SEGMENT_TOO_FAST index={idx} factor={ratio:.3f}")
@@ -644,9 +687,32 @@ class LocalizationEngine:
                             ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
                             on_log(f"[loc] TTS_ATEMPO_APPLIED index={idx} factor={seg_atempo:.3f}")
                             alignment_strategy = "segment_tts+atempo"
+                            if seg_atempo > 2.5:
+                                on_log(f"[loc][warn] TTS_SEGMENT_ATEMPO_HARD_WARNING index={idx} factor={seg_atempo:.3f}")
                         except Exception as ex_align:
                             on_log(f"[loc][warn] TTS_ATEMPO_SKIP index={idx} reason={type(ex_align).__name__}")
 
+                    expand_retry_used = False
+                    if target_sec >= 1.5 and ratio < 0.75:
+                        on_log(f"[loc] TTS_SEGMENT_TOO_SHORT index={idx} ratio={ratio:.3f}")
+                        try:
+                            expanded = expand_rewrite_with_gemini(final_tts_text, target_lang=target_lang)
+                        except Exception:
+                            expanded = final_tts_text
+                        if expanded and expanded != final_tts_text:
+                            on_log(f"[loc] TTS_TEXT_EXPAND_FOR_DURATION index={idx}")
+                            synthesize_mp3(
+                                expanded,
+                                voice_id=voice_id,
+                                provider="azure-speech",
+                                output_path=seg_path,
+                            )
+                            final_tts_text = expanded
+                            tts_sec = _probe_duration(seg_path) or tts_sec
+                            ratio = (tts_sec / target_sec) if target_sec > 0 else ratio
+                            expand_retry_used = True
+
+                    silence_pad_sec = 0.0
                     if ratio < 0.55:
                         # Light pad only (do not aggressively stretch).
                         pad_sec = min(max(0.0, target_sec - tts_sec), target_sec * 0.3)
@@ -656,6 +722,7 @@ class LocalizationEngine:
                             segment_assets.append(seg_path)
                             segment_assets.append(pad_path)
                             cursor_sec = seg_start + tts_sec + pad_sec
+                            silence_pad_sec = pad_sec
                         else:
                             segment_assets.append(seg_path)
                             cursor_sec = seg_start + tts_sec
@@ -666,14 +733,19 @@ class LocalizationEngine:
                     tts_alignment_rows.append(
                         {
                             "index": idx,
+                            "src_text_raw": original_text_raw,
+                            "src_text_norm": original_text_norm,
+                            "translated_text": translated_text,
+                            "final_tts_text": final_tts_text,
+                            "src_dur": target_sec,
                             "target_sec": target_sec,
                             "tts_sec": tts_sec,
                             "ratio": ratio,
+                            "silence_pad_sec": silence_pad_sec,
                             "concise_retry": seg_retry_used,
+                            "expand_retry": expand_retry_used,
                             "atempo_factor": seg_atempo,
-                            "original_text": original_text,
-                            "translated_text": translated_text,
-                            "final_tts_text": final_tts_text,
+                            "ultra_short_mode": ultra_short_mode,
                         }
                     )
                     on_log(

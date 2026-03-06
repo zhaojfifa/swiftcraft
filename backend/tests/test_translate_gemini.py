@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.utils.translate_gemini import (
     GeminiTranslator,
     build_translation_qa,
@@ -13,7 +15,11 @@ def test_translate_gemini_parse_success(monkeypatch):
     monkeypatch.setattr(
         translator,
         "_request_items",
-        lambda segments, target_lang, **_kwargs: {int(s["index"]): f"T-{s['text']}" for s in segments},
+        lambda segments, target_lang, **_kwargs: (
+            {int(s["index"]): f"T-{s['text']}" for s in segments},
+            False,
+            '{"segments":[]}',
+        ),
     )
     segments = [
         {"index": 1, "start": 0.0, "end": 1.0, "text": "你好"},
@@ -32,8 +38,8 @@ def test_translate_gemini_missing_index_retry(monkeypatch):
     def _fake_request(segments, target_lang, **_kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
-            return {1: "A"}
-        return {int(s["index"]): f"B-{s['text']}" for s in segments}
+            return {1: "A"}, False, '{"segments":[{"index":1,"text":"A"}]}'
+        return {int(s["index"]): f"B-{s['text']}" for s in segments}, False, '{"segments":[]}'
 
     monkeypatch.setattr(translator, "_request_items", _fake_request)
     segments = [
@@ -64,8 +70,32 @@ def test_translate_gemini_fallback_marked():
     assert qa["missing_indexes"] == [1]
 
 
+def test_translation_json_parse_raw_saved(monkeypatch, tmp_path: Path):
+    translator = GeminiTranslator(api_key="k", base_url="https://example.test", model="m")
+    calls = {"n": 0}
+
+    def _fake_request_items(*_args, **kwargs):
+        calls["n"] += 1
+        if kwargs.get("strict_json_only"):
+            return {1: "短句"}, True, '{"segments":[{"index":1,"text":"短句"}]}'
+        raise ValueError("json decode failed")
+
+    monkeypatch.setattr(translator, "_request_items", _fake_request_items)
+    monkeypatch.setattr(translator, "_request_raw_text", lambda *_args, **_kwargs: "bad markdown```not-json```")
+
+    out = translator.translate_segments(
+        [{"index": 1, "start": 0.0, "end": 0.6, "text": "你好"}],
+        target_lang="my",
+        raw_save_path=tmp_path / "translation_raw.txt",
+    )
+    assert out.raw_response_saved is True
+    assert out.json_repair_used is True
+    assert (tmp_path / "translation_raw.txt").exists()
+    assert calls["n"] >= 2
+
+
 def test_no_patch_dictionary_as_primary_strategy():
-    raw = "飛機 20 吋   "
+    raw = "飛機 20 吋  "
     norm = normalize_source_text_minimal(raw)
-    assert "飞" in norm
+    assert "飞机" in norm
     assert "20寸" in norm
