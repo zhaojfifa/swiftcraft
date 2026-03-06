@@ -21,6 +21,13 @@ class _Seg:
     text: str
 
 
+@dataclass
+class _GeminiResult:
+    translated_segments: list[dict]
+    missing_indexes: list[int]
+    retry_used: bool
+
+
 class _FakeResp:
     def __init__(self, content: bytes) -> None:
         self.content = content
@@ -174,6 +181,30 @@ def test_localization_multi_segment_translation(monkeypatch, tmp_path: Path):
             "2\n00:00:01,300 --> 00:00:02,600\nworld\n"
         ),
     )
+    monkeypatch.setattr(
+        module,
+        "retry_missing_segments_with_gemini",
+        lambda segments, **_kwargs: _GeminiResult(
+            translated_segments=[
+                {
+                    "index": 1,
+                    "start": segments[0]["start"],
+                    "end": segments[0]["end"],
+                    "origin": segments[0]["text"],
+                    "translated": "缅语-你好",
+                },
+                {
+                    "index": 2,
+                    "start": segments[1]["start"],
+                    "end": segments[1]["end"],
+                    "origin": segments[1]["text"],
+                    "translated": "缅语-世界",
+                },
+            ],
+            missing_indexes=[],
+            retry_used=False,
+        ),
+    )
     monkeypatch.setattr(module, "srt_to_text", lambda s: s.replace("\n", " "))
     monkeypatch.setattr(module, "synthesize_mp3", _fake_synthesize_mp3)
     monkeypatch.setattr(module, "mix_ducking", lambda *_args, **_kwargs: _args[2].write_bytes(b"mixed"))
@@ -205,10 +236,11 @@ def test_localization_multi_segment_translation(monkeypatch, tmp_path: Path):
 
     subtitle_text = fake_r2.objects["outputs/task-multi-1/target.srt"].decode("utf-8")
     assert subtitle_text.count("-->") >= 2
-    assert "[MY] hello" in subtitle_text
-    assert "[MY] world" in subtitle_text
+    assert "缅语-你好" in subtitle_text
+    assert "缅语-世界" in subtitle_text
     assert result.metadata["translation"]["qa"]["translated_lines"] >= 2
     assert result.metadata["translation"]["translated_segments"] >= 2
+    assert result.metadata["translation"]["provider"] == "gemini"
 
 def test_localization_asr_fallback_phrase_fails_on_non_silent_audio(monkeypatch, tmp_path: Path):
     from app.engines import localization_engine as module
@@ -257,12 +289,13 @@ def test_localization_asr_fallback_phrase_fails_on_non_silent_audio(monkeypatch,
         input_video_url="https://example/video.mp4",
     )
 
-    with pytest.raises(EngineRunError, match="ASR_EMPTY_OR_FALLBACK"):
-        _run_engine(engine, record)
-    assert transcribe_calls["n"] >= 2
+    result, logs, _stages = _run_engine(engine, record)
+    assert result.output_url is not None
+    assert transcribe_calls["n"] >= 1
+    assert any("ASR_FALLBACK_USED" in log for log in logs)
 
 
-def test_localization_tts_gate_fails_on_empty_text(monkeypatch, tmp_path: Path):
+def test_localization_tts_gate_degrades_on_empty_translation(monkeypatch, tmp_path: Path):
     from app.engines import localization_engine as module
 
     _patch_engine_runtime(monkeypatch, module, tmp_path)
@@ -282,7 +315,23 @@ def test_localization_tts_gate_fails_on_empty_text(monkeypatch, tmp_path: Path):
             "2\n00:00:01,100 --> 00:00:02,000\nworld\n"
         ),
     )
-    monkeypatch.setattr(module, "translate_srt", lambda *_args, **_kwargs: "1\n00:00:00,000 --> 00:00:01,000\n[MY] hello\n")
+    monkeypatch.setattr(
+        module,
+        "retry_missing_segments_with_gemini",
+        lambda segments, **_kwargs: _GeminiResult(
+            translated_segments=[
+                {
+                    "index": 1,
+                    "start": segments[0]["start"],
+                    "end": segments[0]["end"],
+                    "origin": segments[0]["text"],
+                    "translated": "",
+                }
+            ],
+            missing_indexes=[1],
+            retry_used=False,
+        ),
+    )
     monkeypatch.setattr(module, "srt_to_text", lambda *_args, **_kwargs: "   ")
     monkeypatch.setattr(module, "mix_ducking", lambda *_args, **_kwargs: _args[2].write_bytes(b"mixed"))
     monkeypatch.setattr(module, "render_with_original_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"orig-audio"))
@@ -307,17 +356,17 @@ def test_localization_tts_gate_fails_on_empty_text(monkeypatch, tmp_path: Path):
     record = TaskRecord(task_id="task-tts-empty-1", service="localization", mode="baseline", input_video_url="https://example/video.mp4")
     stages: list[tuple[str, int]] = []
 
-    with pytest.raises(EngineRunError, match="TTS_TEXT_EMPTY"):
-        asyncio.run(
-            engine.run(
-                task_id=record.task_id,
-                record=record,
-                inputs={"inputs": {"target_lang": "my", "voice_id": "mm_female_1"}},
-                on_log=lambda _msg: None,
-                on_stage=lambda stage, progress: stages.append((stage, progress)),
-            )
+    result = asyncio.run(
+        engine.run(
+            task_id=record.task_id,
+            record=record,
+            inputs={"inputs": {"target_lang": "my", "voice_id": "mm_female_1"}},
+            on_log=lambda _msg: None,
+            on_stage=lambda stage, progress: stages.append((stage, progress)),
         )
-    assert ("FAILED", 100) in stages
+    )
+    assert result.output_url is not None
+    assert ("DONE", 100) in stages
 
 
 def test_localization_speech_gate_rejects_low_speech_ratio(monkeypatch, tmp_path: Path):
@@ -362,19 +411,38 @@ def test_localization_speech_gate_allows_tone_audio(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(module, "normalize_audio_for_asr", _normalize)
     monkeypatch.setattr(module, "audio_rms_db", lambda *_args, **_kwargs: -18.0)
 
+    called = {"n": 0}
     def _transcribe_called(*_args, **_kwargs):
+        called["n"] += 1
         raise EngineRunError("ASR_CALLED")
 
     monkeypatch.setattr(module, "transcribe", _transcribe_called)
+    monkeypatch.setattr(module, "retry_missing_segments_with_gemini", lambda *_args, **_kwargs: _GeminiResult(translated_segments=[], missing_indexes=[1], retry_used=True))
+    monkeypatch.setattr(module, "synthesize_mp3", _fake_synthesize_mp3)
+    monkeypatch.setattr(module, "mix_ducking", lambda *_args, **_kwargs: _args[2].write_bytes(b"mixed"))
+    monkeypatch.setattr(module, "render_with_original_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"orig-audio"))
+    monkeypatch.setattr(module, "mux", lambda *_args, **_kwargs: _args[2].write_bytes(b"localized-mp4"))
+    monkeypatch.setattr(
+        module,
+        "probe_duration_sec",
+        lambda p: 5.0 if Path(p).name in {"source.mp4", "source.wav", "source_norm.wav", "mixed.wav", "localized.mp4"} else 2.0,
+    )
+    monkeypatch.setattr(
+        module,
+        "probe_av_streams",
+        lambda *_args, **_kwargs: {"has_audio": True, "has_subtitle_stream": False, "subtitle_codecs": [], "audio_codecs": ["aac"]},
+    )
 
     engine = LocalizationEngine()
     record = TaskRecord(task_id="task-speech-gate-2", service="localization", mode="baseline", input_video_url="https://example/video.mp4")
 
-    with pytest.raises(EngineRunError, match="ASR_CALLED"):
-        _run_engine(engine, record)
+    result, logs, _stages = _run_engine(engine, record)
+    assert result.output_url is not None
+    assert called["n"] >= 1
+    assert any("ASR_FALLBACK_USED" in log for log in logs)
 
 
-def test_localization_asr_lang_fallback_zh_then_en(monkeypatch, tmp_path: Path):
+def test_localization_zh_fixed_path(monkeypatch, tmp_path: Path):
     from app.engines import localization_engine as module
 
     _patch_engine_runtime(monkeypatch, module, tmp_path)
@@ -386,9 +454,7 @@ def test_localization_asr_lang_fallback_zh_then_en(monkeypatch, tmp_path: Path):
     def _transcribe(*_args, **kwargs):
         lang = kwargs.get("language")
         calls.append(lang)
-        if lang == "zh":
-            return [_Seg(start=0.0, end=2.0, text="Localized narration.")]
-        return [_Seg(start=0.0, end=2.0, text="hello from english")]
+        return [_Seg(start=0.0, end=2.0, text="你好世界")]
 
     monkeypatch.setattr(module, "transcribe", _transcribe)
     monkeypatch.setattr(
@@ -396,7 +462,23 @@ def test_localization_asr_lang_fallback_zh_then_en(monkeypatch, tmp_path: Path):
         "segments_to_srt",
         lambda *_args, **_kwargs: "1\n00:00:00,000 --> 00:00:02,000\nhello from english\n",
     )
-    monkeypatch.setattr(module, "translate_srt", lambda srt, **_kwargs: srt)
+    monkeypatch.setattr(
+        module,
+        "retry_missing_segments_with_gemini",
+        lambda segments, **_kwargs: _GeminiResult(
+            translated_segments=[
+                {
+                    "index": 1,
+                    "start": segments[0]["start"],
+                    "end": segments[0]["end"],
+                    "origin": segments[0]["text"],
+                    "translated": "မင်္ဂလာပါ",
+                }
+            ],
+            missing_indexes=[],
+            retry_used=False,
+        ),
+    )
     monkeypatch.setattr(module, "srt_to_text", lambda s: s.replace("\n", " "))
     monkeypatch.setattr(module, "synthesize_mp3", _fake_synthesize_mp3)
     monkeypatch.setattr(module, "mix_ducking", lambda *_args, **_kwargs: _args[2].write_bytes(b"mixed"))
@@ -423,7 +505,7 @@ def test_localization_asr_lang_fallback_zh_then_en(monkeypatch, tmp_path: Path):
     result, _logs, _stages = _run_engine(engine, record)
 
     assert result.output_url is not None
-    assert calls[:2] == ["zh", "en"]
+    assert calls == ["zh"]
 
 
 def test_localization_asr_lang_zh_success_no_en_retry(monkeypatch, tmp_path: Path):
@@ -445,7 +527,23 @@ def test_localization_asr_lang_zh_success_no_en_retry(monkeypatch, tmp_path: Pat
         "segments_to_srt",
         lambda *_args, **_kwargs: "1\n00:00:00,000 --> 00:00:01,500\n你好 世界\n",
     )
-    monkeypatch.setattr(module, "translate_srt", lambda srt, **_kwargs: srt)
+    monkeypatch.setattr(
+        module,
+        "retry_missing_segments_with_gemini",
+        lambda segments, **_kwargs: _GeminiResult(
+            translated_segments=[
+                {
+                    "index": 1,
+                    "start": segments[0]["start"],
+                    "end": segments[0]["end"],
+                    "origin": segments[0]["text"],
+                    "translated": "မင်္ဂလာပါ",
+                }
+            ],
+            missing_indexes=[],
+            retry_used=False,
+        ),
+    )
     monkeypatch.setattr(module, "srt_to_text", lambda s: s.replace("\n", " "))
     monkeypatch.setattr(module, "synthesize_mp3", _fake_synthesize_mp3)
     monkeypatch.setattr(module, "mix_ducking", lambda *_args, **_kwargs: _args[2].write_bytes(b"mixed"))
@@ -473,3 +571,55 @@ def test_localization_asr_lang_zh_success_no_en_retry(monkeypatch, tmp_path: Pat
 
     assert result.output_url is not None
     assert calls == ["zh"]
+
+
+def test_localization_manifest_contains_translation_qa(monkeypatch, tmp_path: Path):
+    from app.engines import localization_engine as module
+
+    _patch_engine_runtime(monkeypatch, module, tmp_path)
+    monkeypatch.setattr(module, "extract_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"wav"))
+    monkeypatch.setattr(module, "normalize_audio_for_asr", lambda *_args, **_kwargs: _args[1].write_bytes(b"norm"))
+    monkeypatch.setattr(module, "audio_rms_db", lambda *_args, **_kwargs: -18.0)
+    monkeypatch.setattr(module, "transcribe", lambda *_args, **_kwargs: [_Seg(start=0.0, end=1.0, text="你好")])
+    monkeypatch.setattr(module, "segments_to_srt", lambda *_args, **_kwargs: "1\n00:00:00,000 --> 00:00:01,000\n你好\n")
+    monkeypatch.setattr(
+        module,
+        "retry_missing_segments_with_gemini",
+        lambda segments, **_kwargs: _GeminiResult(
+            translated_segments=[
+                {
+                    "index": 1,
+                    "start": segments[0]["start"],
+                    "end": segments[0]["end"],
+                    "origin": segments[0]["text"],
+                    "translated": "မင်္ဂလာပါ",
+                }
+            ],
+            missing_indexes=[],
+            retry_used=False,
+        ),
+    )
+    monkeypatch.setattr(module, "synthesize_mp3", _fake_synthesize_mp3)
+    monkeypatch.setattr(module, "mix_ducking", lambda *_args, **_kwargs: _args[2].write_bytes(b"mixed"))
+    monkeypatch.setattr(module, "render_with_original_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"orig-audio"))
+    monkeypatch.setattr(module, "mux", lambda *_args, **_kwargs: _args[2].write_bytes(b"localized-mp4"))
+    monkeypatch.setattr(
+        module,
+        "probe_duration_sec",
+        lambda p: 5.0 if Path(p).name in {"source.mp4", "source.wav", "source_norm.wav", "mixed.wav", "localized.mp4"} else 1.0,
+    )
+    monkeypatch.setattr(
+        module,
+        "probe_av_streams",
+        lambda *_args, **_kwargs: {"has_audio": True, "has_subtitle_stream": False, "subtitle_codecs": [], "audio_codecs": ["aac"]},
+    )
+
+    engine = LocalizationEngine()
+    fake_r2 = engine.r2
+    record = TaskRecord(task_id="task-manifest-qa-1", service="localization", mode="baseline", input_video_url="https://example/video.mp4")
+    result, _logs, _stages = _run_engine(engine, record)
+
+    manifest = fake_r2.json_objects["outputs/task-manifest-qa-1/manifest.json"]
+    assert manifest["translation"]["qa"]["translated_lines"] >= 1
+    assert "translated_segments_path" in manifest["translation"]
+    assert result.metadata["translation"]["provider"] == "gemini"

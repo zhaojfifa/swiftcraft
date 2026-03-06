@@ -513,7 +513,7 @@ def _build_worker_payload(
     compute_type: str,
     cpu_threads: int,
     num_workers: int,
-    audio_duration_sec: float | None,
+    audio_duration_sec: float | None = None,
 ) -> dict[str, Any]:
     short_audio = bool(audio_duration_sec is not None and audio_duration_sec <= 10.0)
     best_of_default = 1 if short_audio else 5

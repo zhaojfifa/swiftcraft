@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from pathlib import Path
@@ -31,7 +32,12 @@ from app.utils.ffmpeg_localization import (
     stretch_audio_to_duration,
     trim_audio_for_asr,
 )
-from app.utils.translate_mm import translate_srt, write_translation_artifacts
+from app.utils.translate_gemini import (
+    build_translation_qa,
+    retry_missing_segments_with_gemini,
+    write_translation_qa,
+)
+from app.utils.translate_mm import translate_srt
 from app.utils.zh_normalize import normalize_zh_text
 
 
@@ -130,6 +136,39 @@ class LocalizationEngine:
                     lines.append(line)
             merged = "，".join(lines).strip("， ")
             return merged
+
+        def _origin_segments_payload(current_segments: list[Any]) -> list[dict[str, Any]]:
+            payload: list[dict[str, Any]] = []
+            for i, seg in enumerate(current_segments, start=1):
+                payload.append(
+                    {
+                        "index": i,
+                        "start": float(getattr(seg, "start", 0.0) or 0.0),
+                        "end": float(getattr(seg, "end", 0.0) or 0.0),
+                        "text": str(getattr(seg, "text", "") or ""),
+                    }
+                )
+            return payload
+
+        def _translated_segments_to_srt(rows: list[dict[str, Any]]) -> str:
+            out: list[str] = []
+            for row in rows:
+                idx = int(row.get("index") or 0)
+                if idx <= 0:
+                    continue
+                start = float(row.get("start") or 0.0)
+                end = float(row.get("end") or max(start + 0.2, 0.2))
+                text = str(row.get("translated") or "").strip() or "[UNTRANSLATED]"
+                out.append(str(idx))
+                out.append(f"{_srt_ts(start)} --> {_srt_ts(max(end, start + 0.1))}")
+                out.append(text)
+                out.append("")
+            return "\n".join(out).strip() + "\n"
+
+        def _merged_tts_text_from_translated_segments(rows: list[dict[str, Any]]) -> str:
+            parts = [normalize_zh_text(str(r.get("translated") or "")) for r in rows]
+            parts = [p for p in parts if p]
+            return "，".join(parts).strip("， ")
 
         def _rss_mb() -> int:
             try:
@@ -329,6 +368,9 @@ class LocalizationEngine:
             source_srt = segments_to_srt(segments)
             source_srt_path = workspace / "source.srt"
             source_srt_path.write_text(source_srt, encoding="utf-8")
+            origin_segments = _origin_segments_payload(segments)
+            origin_segments_path = workspace / "origin_segments.json"
+            origin_segments_path.write_text(json.dumps(origin_segments, ensure_ascii=False, indent=2), encoding="utf-8")
             num_segments = len(segments)
             first_ts = f"{segments[0].start:.3f}" if segments else "n/a"
             last_ts = f"{segments[-1].end:.3f}" if segments else "n/a"
@@ -340,13 +382,17 @@ class LocalizationEngine:
             if fallback_detected:
                 on_log("[loc][warn] asr_fallback_phrase_detected -> check faster-whisper runtime / audio content")
             transcription_meta = {
-                "source_lang_guess": asr_lang_final if asr_lang_final != "none" else "unknown",
+                "requested_source_lang": "zh",
+                "detected_language": asr_lang_final if asr_lang_final != "none" else "unknown",
+                "detected_language_probability": asr_status.get("detected_language_probability") if "asr_status" in locals() else "",
                 "text_len": len(source_text),
                 "segments": num_segments,
                 "fallback_detected": _contains_fallback_marker(source_text),
                 "model_used": (os.getenv("ASR_MODEL") or os.getenv("FASTWHISPER_MODEL") or "tiny").strip() or "tiny",
                 "asr_text_raw": asr_text_raw,
                 "asr_text_norm": asr_text_norm,
+                "origin_segments_path": str(origin_segments_path),
+                "asr_fallback_used": bool(asr_fallback_reason),
             }
             no_subtitles = not segments or (rms_db is not None and rms_db <= -40.0)
             end_step("transcribing", step)
@@ -362,7 +408,7 @@ class LocalizationEngine:
                 "lipsync_enabled": False,
                 "providers": {
                     "transcribe": "fastwhisper",
-                    "translate": "translate_mm",
+                    "translate": "gemini",
                     "tts": "azure-speech",
                     "render": "ffmpeg",
                     "storage": "r2",
@@ -371,6 +417,14 @@ class LocalizationEngine:
 
             step = mark_step("translating", "TRANSLATING", 45)
             fallback_reason = None
+            translation_provider = "gemini" if target_lang == "my" else "translate_mm"
+            translated_segments: list[dict[str, Any]] = []
+            translation_missing_indexes: list[int] = []
+            translation_retry_used = False
+            translation_fallback_used = False
+            translated_segments_path = workspace / "translated_segments.json"
+            on_log(f"[loc] TRANSLATION_PROVIDER={translation_provider}")
+            on_log(f"[loc] TRANSLATION_SEGMENTS_SOURCE={len(origin_segments)}")
             if no_subtitles:
                 fallback_reason = "SILENT_AUDIO_OR_EMPTY_ASR"
                 source_video_duration_sec_for_marker = _probe_duration(source_video) or 5.0
@@ -379,46 +433,93 @@ class LocalizationEngine:
                     f"00:00:00,000 --> {_srt_ts(source_video_duration_sec_for_marker)}\n"
                     "[NO_SUBTITLES] No speech detected.\n"
                 )
+                translated_segments = [
+                    {
+                        "index": 1,
+                        "start": 0.0,
+                        "end": source_video_duration_sec_for_marker,
+                        "origin": "",
+                        "translated": "[NO_SUBTITLES] No speech detected.",
+                    }
+                ]
             else:
-                target_srt = translate_srt(source_srt, target_lang=target_lang)
-                translated_plain = (target_srt or "").strip()
-                if not translated_plain or _contains_fallback_marker(translated_plain):
-                    if fallback_detected or bool(asr_fallback_reason):
-                        source_video_duration_sec_for_marker = _probe_duration(source_video) or 5.0
-                        split_sec = max(0.5, source_video_duration_sec_for_marker / 2.0)
-                        tag = target_lang.upper()
-                        if target_lang.lower() == "en":
-                            line1 = "Localized narration."
-                            line2 = "(audio unavailable)"
-                        else:
-                            line1 = f"[{tag}] Localized narration."
-                            line2 = f"[{tag}] (audio unavailable)"
-                        target_srt = (
-                            "1\n"
-                            f"00:00:00,000 --> {_srt_ts(split_sec)}\n"
-                            f"{line1}\n\n"
-                            "2\n"
-                            f"{_srt_ts(split_sec)} --> {_srt_ts(source_video_duration_sec_for_marker)}\n"
-                            f"{line2}\n"
+                try:
+                    if translation_provider == "gemini":
+                        gemini_result = retry_missing_segments_with_gemini(
+                            origin_segments,
+                            target_lang=target_lang,
+                            logger=on_log,
                         )
-                        on_log("[loc][degrade] translation_fallback_used reason=asr_fallback")
+                        translated_segments = gemini_result.translated_segments
+                        translation_missing_indexes = gemini_result.missing_indexes
+                        translation_retry_used = gemini_result.retry_used
                     else:
-                        raise EngineRunError("TRANSLATION_EMPTY_OR_FALLBACK: translated subtitle content is empty/fallback")
+                        target_srt_mm = translate_srt(source_srt, target_lang=target_lang)
+                        translated_segments = []
+                        lines = [ln.strip() for ln in target_srt_mm.splitlines() if ln.strip()]
+                        text_lines = [ln for ln in lines if not ln.isdigit() and "-->" not in ln]
+                        for idx, seg in enumerate(origin_segments, start=1):
+                            translated_segments.append(
+                                {
+                                    "index": idx,
+                                    "start": seg["start"],
+                                    "end": seg["end"],
+                                    "origin": seg["text"],
+                                    "translated": text_lines[idx - 1] if idx - 1 < len(text_lines) else seg["text"],
+                                }
+                            )
+                    if translation_missing_indexes or any(not str(x.get("translated") or "").strip() for x in translated_segments):
+                        raise EngineRunError("TRANSLATION_MISSING_SEGMENTS")
+                    target_srt = _translated_segments_to_srt(translated_segments)
+                except Exception as tr_exc:
+                    translation_fallback_used = True
+                    fallback_reason = f"translation_exception:{type(tr_exc).__name__}"
+                    on_log(f"[loc][degrade] translation_fallback_used reason={fallback_reason}")
+                    translated_segments = []
+                    for seg in origin_segments:
+                        translated_segments.append(
+                            {
+                                "index": int(seg["index"]),
+                                "start": float(seg["start"]),
+                                "end": float(seg["end"]),
+                                "origin": str(seg["text"]),
+                                "translated": f"[UNTRANSLATED] {str(seg['text']).strip()}",
+                            }
+                        )
+                    target_srt = _translated_segments_to_srt(translated_segments)
             target_srt_path = workspace / "target.srt"
             target_srt_path.write_text(target_srt, encoding="utf-8")
-            qa_path, qa = write_translation_artifacts(workspace, source_srt, target_srt, target_lang=target_lang)
-            source_segments = _segment_count(source_srt)
-            translated_segments = _segment_count(target_srt)
-            on_log(
-                f"[loc] translation_segments source={source_segments} translated={translated_segments} "
-                f"target_lang={target_lang}"
+            translated_segments_path.write_text(
+                json.dumps(translated_segments, ensure_ascii=False, indent=2),
+                encoding="utf-8",
             )
+            source_segments = _segment_count(source_srt)
+            translated_segment_count = _segment_count(target_srt)
+            on_log(f"[loc] TRANSLATION_SEGMENTS_DONE={translated_segment_count}")
+            on_log(f"[loc] TRANSLATION_MISSING_INDEXES={translation_missing_indexes}")
+            on_log(f"[loc] TRANSLATION_RETRY_USED={str(translation_retry_used).lower()}")
+            qa = build_translation_qa(
+                origin_segments,
+                json.loads(translated_segments_path.read_text(encoding='utf-8')),
+                target_lang=target_lang,
+                provider=translation_provider,
+                missing_indexes=translation_missing_indexes,
+                retry_used=translation_retry_used,
+                fallback_used=translation_fallback_used,
+            )
+            qa_path = write_translation_qa(workspace, qa)
+            on_log(f"[loc] TRANSLATION_QA chars_src={qa.get('source_chars')} chars_tgt={qa.get('target_chars')}")
             translation_meta = {
+                "provider": translation_provider,
                 "target_lang": target_lang,
                 "qa": qa,
                 "qa_local_path": str(qa_path),
                 "source_segments": source_segments,
-                "translated_segments": translated_segments,
+                "translated_segments": translated_segment_count,
+                "missing_indexes": translation_missing_indexes,
+                "retry_used": translation_retry_used,
+                "fallback_used": translation_fallback_used,
+                "translated_segments_path": str(translated_segments_path),
                 "source_probe": source_probe,
                 "policy_enforced": ["cannot_remove_burned_in_subtitles_baseline"],
             }
@@ -432,15 +533,23 @@ class LocalizationEngine:
             step = mark_step("synthesizing", "SYNTHESIZING", 60)
             dub_mp3_path: Path | None = None
             dub_duration_sec = None
+            tts_input_source = "translated_segments"
+            tts_text_strategy = "segment_tts"
             if not no_subtitles:
                 if (audio_wav_duration_sec or 0.0) <= 8.0:
-                    dub_text = _merged_tts_text_from_srt(target_srt)
+                    dub_text = _merged_tts_text_from_translated_segments(translated_segments)
+                    if not dub_text.strip():
+                        dub_text = _merged_tts_text_from_srt(target_srt)
                     if not dub_text.strip():
                         dub_text = srt_to_text(target_srt)
-                    on_log("[loc] tts_text_strategy=merged_short_audio")
+                    tts_text_strategy = "merged_short_audio"
                 else:
-                    dub_text = srt_to_text(target_srt)
-                on_log(f"[loc] LOC_TEXT_SOURCE=asr text_len={len(dub_text.strip())} num_segments={translated_segments}")
+                    dub_text = _merged_tts_text_from_translated_segments(translated_segments)
+                    if not dub_text.strip():
+                        dub_text = srt_to_text(target_srt)
+                on_log(f"[loc] TTS_INPUT_SOURCE={tts_input_source}")
+                on_log(f"[loc] TTS_TEXT_STRATEGY={tts_text_strategy}")
+                on_log(f"[loc] LOC_TEXT_SOURCE=translated_segments text_len={len(dub_text.strip())} num_segments={translated_segment_count}")
                 if not dub_text.strip():
                     raise EngineRunError("TTS_TEXT_EMPTY: empty text passed to synthesizer")
                 dub_mp3_path = synthesize_mp3(
@@ -463,28 +572,42 @@ class LocalizationEngine:
                 ):
                     aligned_mp3 = workspace / "dub_aligned.mp3"
                     target_dub_sec = source_video_duration_sec_for_tts * 0.9
-                    stretch_audio_to_duration(
-                        dub_mp3_path,
-                        aligned_mp3,
-                        target_dub_sec,
-                        on_log=on_log,
-                    )
-                    aligned_sec = _probe_duration(aligned_mp3)
-                    on_log(
-                        "[loc] dub_duration_align "
-                        f"original_sec={dub_duration_sec:.3f} target_sec={target_dub_sec:.3f} "
-                        f"aligned_sec={aligned_sec if aligned_sec is not None else 'n/a'}"
-                    )
-                    dub_mp3_path = aligned_mp3
-                    dub_duration_sec = aligned_sec or target_dub_sec
+                    try:
+                        stretch_audio_to_duration(
+                            dub_mp3_path,
+                            aligned_mp3,
+                            target_dub_sec,
+                            on_log=on_log,
+                        )
+                        aligned_sec = _probe_duration(aligned_mp3)
+                        on_log(
+                            "[loc] dub_duration_align "
+                            f"original_sec={dub_duration_sec:.3f} target_sec={target_dub_sec:.3f} "
+                            f"aligned_sec={aligned_sec if aligned_sec is not None else 'n/a'}"
+                        )
+                        dub_mp3_path = aligned_mp3
+                        dub_duration_sec = aligned_sec or target_dub_sec
+                        tts_text_strategy = "merged_aligned_audio"
+                        on_log(f"[loc] TTS_TEXT_STRATEGY={tts_text_strategy}")
+                    except Exception as align_exc:
+                        on_log(f"[loc][warn] dub_duration_align_skip reason={type(align_exc).__name__}")
                 tts_meta = {
                     "voice_id": voice_id,
+                    "input_source": tts_input_source,
+                    "text_strategy": tts_text_strategy,
                     "text_len": len(dub_text.strip()),
                     "audio_duration_sec": dub_duration_sec,
                 }
+                on_log(f"[loc] TTS_AUDIO_SEC={dub_duration_sec if dub_duration_sec is not None else 'n/a'}")
             else:
                 on_log("[loc] skip_tts fallback_reason=SILENT_AUDIO_OR_EMPTY_ASR")
-                tts_meta = {"voice_id": voice_id, "text_len": 0, "audio_duration_sec": None}
+                tts_meta = {
+                    "voice_id": voice_id,
+                    "input_source": "none",
+                    "text_strategy": "none",
+                    "text_len": 0,
+                    "audio_duration_sec": None,
+                }
             end_step("synthesizing", step)
 
             step = mark_step("rendering", "RENDERING", 78)
@@ -572,9 +695,27 @@ class LocalizationEngine:
             output_key = f"outputs/{task_id}/localized.mp4"
             subtitle_key = f"outputs/{task_id}/target.srt"
             manifest_key = f"outputs/{task_id}/manifest.json"
+            origin_segments_key = f"outputs/{task_id}/origin_segments.json"
+            translated_segments_key = f"outputs/{task_id}/translated_segments.json"
+            translation_qa_key = f"outputs/{task_id}/translation_qa.json"
 
             output_url = self.r2.upload_bytes(output_key, localized_mp4_path.read_bytes(), content_type="video/mp4")
             subtitle_url = self.r2.upload_bytes(subtitle_key, target_srt_path.read_bytes(), content_type="text/plain")
+            origin_segments_url = self.r2.upload_bytes(
+                origin_segments_key,
+                origin_segments_path.read_bytes(),
+                content_type="application/json",
+            )
+            translated_segments_url = self.r2.upload_bytes(
+                translated_segments_key,
+                translated_segments_path.read_bytes(),
+                content_type="application/json",
+            )
+            translation_qa_url = self.r2.upload_bytes(
+                translation_qa_key,
+                qa_path.read_bytes(),
+                content_type="application/json",
+            )
             audio_key = None
             audio_url = None
             if dub_mp3_path is not None:
@@ -592,6 +733,12 @@ class LocalizationEngine:
                 "subtitle_url": subtitle_url,
                 "manifest_key": manifest_key,
                 "manifest_url": manifest_url,
+                "origin_segments_key": origin_segments_key,
+                "origin_segments_url": origin_segments_url,
+                "translated_segments_key": translated_segments_key,
+                "translated_segments_url": translated_segments_url,
+                "translation_qa_key": translation_qa_key,
+                "translation_qa_url": translation_qa_url,
             }
             if audio_key and audio_url:
                 outputs["audio_key"] = audio_key
@@ -611,8 +758,8 @@ class LocalizationEngine:
                 },
                 "run_config_snapshot": run_config_snapshot,
                 "translation": translation_meta,
-                "transcription": {"qa": transcription_meta},
-                "tts": {"qa": tts_meta},
+                "transcription": transcription_meta,
+                "tts": tts_meta,
                 "metadata": {
                     "source_probe": source_probe,
                     "policy": {
@@ -621,6 +768,7 @@ class LocalizationEngine:
                 },
             }
             self.r2.put_json(manifest_key, manifest)
+            on_log("[loc] MANIFEST_WRITE ok")
             end_step("uploading", step)
 
             on_stage("DONE", 100)
@@ -641,8 +789,8 @@ class LocalizationEngine:
                     "run_config_snapshot": run_config_snapshot,
                     "manifest_preview": manifest,
                     "translation": translation_meta,
-                    "transcription": {"qa": transcription_meta},
-                    "tts": {"qa": tts_meta},
+                    "transcription": transcription_meta,
+                    "tts": tts_meta,
                     "policy": {"enforced": policy_flags},
                     "source_probe": source_probe,
                 },
