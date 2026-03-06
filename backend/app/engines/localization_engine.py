@@ -137,7 +137,7 @@ class LocalizationEngine:
                 line = normalize_zh_text(line)
                 if line:
                     lines.append(line)
-            merged = "，".join(lines).strip("， ")
+            merged = ", ".join(lines).strip(", ")
             return merged
 
         def _origin_segments_payload(current_segments: list[Any]) -> list[dict[str, Any]]:
@@ -171,7 +171,7 @@ class LocalizationEngine:
         def _merged_tts_text_from_translated_segments(rows: list[dict[str, Any]]) -> str:
             parts = [normalize_zh_text(str(r.get("translated") or "")) for r in rows]
             parts = [p for p in parts if p]
-            return "，".join(parts).strip("， ")
+            return ", ".join(parts).strip(", ")
 
         def _rss_mb() -> int:
             try:
@@ -571,6 +571,9 @@ class LocalizationEngine:
                     if not text:
                         text = str(row.get("origin") or "").strip() or "[UNTRANSLATED]"
                     dub_text_len += len(text)
+                    original_text = str(row.get("origin") or "")
+                    translated_text = str(row.get("translated") or "")
+                    final_tts_text = text
 
                     # Preserve timing gaps before each segment.
                     gap_sec = max(0.0, seg_start - cursor_sec)
@@ -605,16 +608,37 @@ class LocalizationEngine:
                                 provider="azure-speech",
                                 output_path=seg_path,
                             )
+                            final_tts_text = shorter
                             tts_sec = _probe_duration(seg_path) or 0.0
                             ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
                         on_log(f"[loc] TTS_CONCISE_RETRY_USED index={idx}")
                         alignment_strategy = "segment_tts+concise_retry"
+
+                    if ratio > 1.5:
+                        on_log(f"[loc] TTS_SEGMENT_TOO_FAST index={idx} factor={ratio:.3f}")
+                        try:
+                            shorter_again = concise_rewrite_with_gemini(final_tts_text, target_lang=target_lang)
+                        except Exception:
+                            shorter_again = final_tts_text
+                        if shorter_again and shorter_again != final_tts_text:
+                            on_log(f"[loc] TTS_TEXT_REWRITE_FOR_DURATION index={idx}")
+                            synthesize_mp3(
+                                shorter_again,
+                                voice_id=voice_id,
+                                provider="azure-speech",
+                                output_path=seg_path,
+                            )
+                            final_tts_text = shorter_again
+                            tts_sec = _probe_duration(seg_path) or 0.0
+                            ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
 
                     if ratio > 1.25 and tts_sec > 0 and target_sec > 0:
                         aligned_seg = workspace / f"segment_{idx:03d}_aligned.mp3"
                         try:
                             stretch_audio_to_duration(seg_path, aligned_seg, target_sec, on_log=on_log)
                             seg_atempo = tts_sec / target_sec
+                            if seg_atempo > 2.0:
+                                on_log(f"[loc][warn] TTS_SEGMENT_TOO_FAST index={idx} factor={seg_atempo:.3f}")
                             seg_path = aligned_seg
                             tts_sec = _probe_duration(seg_path) or target_sec
                             ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
@@ -646,7 +670,10 @@ class LocalizationEngine:
                             "tts_sec": tts_sec,
                             "ratio": ratio,
                             "concise_retry": seg_retry_used,
-                            "atempo": seg_atempo,
+                            "atempo_factor": seg_atempo,
+                            "original_text": original_text,
+                            "translated_text": translated_text,
+                            "final_tts_text": final_tts_text,
                         }
                     )
                     on_log(

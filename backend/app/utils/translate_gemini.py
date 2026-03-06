@@ -45,9 +45,9 @@ class GeminiTranslator:
     def _build_prompt(self, segments: list[dict[str, Any]], target_lang: str, *, concise: bool = False) -> str:
         payload = [{"index": int(s["index"]), "text": str(s.get("text") or "")} for s in segments]
         style_line = (
-            "Keep each translation concise for dubbing, close to source info density, no expansion."
+            "short spoken Burmese for dubbing only; no explanation; no added detail; keep it brief and natural."
             if concise
-            else "Natural spoken dubbing style, concise, no explanation, no expansion."
+            else "short spoken Burmese for dubbing only; no explanation; no added detail; keep it brief and natural."
         )
         return (
             "Translate Chinese (zh) subtitles to target language.\n"
@@ -174,6 +174,7 @@ class GeminiTranslator:
         missing = [int(s["index"]) for s in segments if int(s["index"]) not in items]
         retry_used = False
         concise_retry_used = False
+        strong_retry_used = False
         if missing:
             retry_used = True
             if logger:
@@ -188,7 +189,7 @@ class GeminiTranslator:
             idx = int(seg["index"])
             translated = str(items.get(idx) or "").strip()
             ratio = self._text_ratio(str(seg.get("text") or ""), translated)
-            if ratio > 1.6:
+            if ratio > 1.8:
                 too_long_indexes.append(idx)
 
         if too_long_indexes:
@@ -201,6 +202,21 @@ class GeminiTranslator:
             for idx, value in concise_items.items():
                 if value.strip():
                     items[idx] = value.strip()
+            # Strong constraint retry when still too long after concise retry.
+            strong_subset: list[dict[str, Any]] = []
+            for seg in subset:
+                idx = int(seg["index"])
+                ratio = self._text_ratio(str(seg.get("text") or ""), str(items.get(idx) or ""))
+                if ratio > 2.2:
+                    strong_subset.append(seg)
+            if strong_subset:
+                strong_retry_used = True
+                strong_items = self._request_items(strong_subset, target_lang=target_lang, concise=True)
+                for idx, value in strong_items.items():
+                    if value.strip():
+                        items[idx] = value.strip()
+            if logger:
+                logger(f"[loc] TRANSLATION_CONCISE_RETRY_STRONG_USED={'true' if strong_retry_used else 'false'}")
         translated_segments = []
         ratios: list[float] = []
         for seg in segments:
@@ -220,6 +236,7 @@ class GeminiTranslator:
         ratio_avg = (sum(ratios) / len(ratios)) if ratios else 0.0
         ratio_max = max(ratios) if ratios else 0.0
         if logger:
+            logger(f"[loc] TRANSLATION_CONCISE_RETRY_STRONG_USED={'true' if strong_retry_used else 'false'}")
             logger(f"[loc] TRANSLATION_CONCISE_RETRY_USED={'true' if concise_retry_used else 'false'}")
             logger(f"[loc] TRANSLATION_LENGTH_RATIO avg={ratio_avg:.3f} max={ratio_max:.3f}")
         return GeminiTranslationResult(
