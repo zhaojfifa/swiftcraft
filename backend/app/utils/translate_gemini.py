@@ -443,6 +443,9 @@ class GeminiTranslator:
                     "duration_bucket": self._duration_bucket(seg),
                     "translation_initial": str(initial_items.get(idx) or ""),
                     "translation_final": translated,
+                    "translation_dubbing_initial": str(initial_items.get(idx) or ""),
+                    "translation_dubbing_final": translated,
+                    "translation_subtitle_final": translated,
                     "translated": translated,
                 }
             )
@@ -503,13 +506,22 @@ def build_translation_qa(
     length_ratio_max: float = 0.0,
 ) -> dict[str, Any]:
     src_text = " ".join(str(s.get("text") or "") for s in origin_segments).strip()
-    tgt_text = " ".join(str(s.get("translated") or "") for s in translated_segments).strip()
-    translated_lines = len([s for s in translated_segments if str(s.get("translated") or "").strip()])
+    dubbing_text = " ".join(
+        str(s.get("translation_dubbing_final") or s.get("translated") or "") for s in translated_segments
+    ).strip()
+    subtitle_text = " ".join(
+        str(s.get("translation_subtitle_final") or s.get("translated") or "") for s in translated_segments
+    ).strip()
+    translated_lines = len(
+        [s for s in translated_segments if str(s.get("translation_subtitle_final") or s.get("translated") or "").strip()]
+    )
     return {
         "provider": provider,
         "target_lang": target_lang,
         "source_chars": len(src_text),
-        "target_chars": len(tgt_text),
+        "target_chars": len(dubbing_text),
+        "subtitle_chars": len(subtitle_text),
+        "subtitle_line_count": translated_lines,
         "translated_lines": translated_lines,
         "source_segments": len(origin_segments),
         "translated_segments": len(translated_segments),
@@ -518,6 +530,7 @@ def build_translation_qa(
         "concise_retry_used": concise_retry_used,
         "length_ratio_avg": length_ratio_avg,
         "length_ratio_max": length_ratio_max,
+        "dubbing_length_ratio_avg": length_ratio_avg,
         "fallback_used": fallback_used,
     }
 

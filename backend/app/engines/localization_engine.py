@@ -473,6 +473,7 @@ class LocalizationEngine:
                     on_log(f"[loc][degrade] translation_fallback_used reason={fallback_reason}")
                     translated_segments = []
                     for seg in origin_segments:
+                        fallback_text = f"[UNTRANSLATED] {str(seg['text']).strip()}"
                         translated_segments.append(
                             {
                                 "index": int(seg["index"]),
@@ -480,7 +481,10 @@ class LocalizationEngine:
                                 "end": float(seg["end"]),
                                 "origin": str(seg["text"]),
                                 "origin_raw": str(seg.get("text_raw") or seg["text"]),
-                                "translated": f"[UNTRANSLATED] {str(seg['text']).strip()}",
+                                "translated": fallback_text,
+                                "translation_dubbing_initial": fallback_text,
+                                "translation_dubbing_final": fallback_text,
+                                "translation_subtitle_final": fallback_text,
                             }
                         )
                     target_srt = build_srt_from_segments(translated_segments)
@@ -489,6 +493,27 @@ class LocalizationEngine:
                 raw_src = raw_text_by_index.get(idx, str(row.get("origin") or ""))
                 row["origin_raw"] = str(row.get("origin_raw") or raw_src)
                 row["origin"] = normalize_zh_text(str(row.get("origin") or raw_src))
+                translated_final = str(
+                    row.get("translation_dubbing_final")
+                    or row.get("translation_final")
+                    or row.get("translated")
+                    or ""
+                ).strip()
+                subtitle_final = str(
+                    row.get("translation_subtitle_final")
+                    or row.get("translation_final")
+                    or row.get("translated")
+                    or translated_final
+                ).strip()
+                row["translation_dubbing_initial"] = str(
+                    row.get("translation_dubbing_initial")
+                    or row.get("translation_initial")
+                    or row.get("translated")
+                    or translated_final
+                )
+                row["translation_dubbing_final"] = translated_final
+                row["translation_subtitle_final"] = subtitle_final
+                row["translated"] = translated_final
             target_srt_path = workspace / "target.srt"
             target_srt_path.write_text(target_srt, encoding="utf-8")
             target_ass_path = workspace / "target.ass"
@@ -564,13 +589,13 @@ class LocalizationEngine:
                     seg_start = float(row.get("start") or 0.0)
                     seg_end = float(row.get("end") or seg_start + 0.2)
                     target_sec = max(0.2, seg_end - seg_start)
-                    text = str(row.get("translated") or "").strip()
+                    text = str(row.get("translation_dubbing_final") or row.get("translated") or "").strip()
                     if not text:
                         text = str(row.get("origin") or "").strip() or "[UNTRANSLATED]"
                     dub_text_len += len(text)
                     original_text_norm = str(row.get("origin") or "")
                     original_text_raw = str(row.get("origin_raw") or original_text_norm)
-                    translated_text = str(row.get("translated") or "")
+                    translated_text = str(row.get("translation_subtitle_final") or row.get("translated") or "")
                     translation_initial = str(row.get("translation_initial") or translated_text)
                     translation_final = str(row.get("translation_final") or translated_text)
                     final_tts_text = text
