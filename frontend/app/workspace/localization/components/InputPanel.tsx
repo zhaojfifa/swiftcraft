@@ -249,41 +249,50 @@ export default function InputPanel({
                 </select>
               </div>
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-500">Dub Volume</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-slate-500">Dub Volume</label>
+                  <span className="text-xs text-slate-500">{dubGain.toFixed(2)}</span>
+                </div>
                 <input
-                  type="number"
-                  min={0.1}
-                  max={2}
+                  type="range"
+                  min={0.6}
+                  max={1.6}
                   step={0.05}
                   value={dubGain}
-                  onChange={(event) => setDubGain(Number(event.target.value) || 1)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                  onChange={(event) => setDubGain(Number(event.target.value) || 1.0)}
+                  className="w-full accent-blue-600"
                 />
               </div>
               {audioStrategy !== "mute_original" ? (
                 <div className="space-y-2">
-                  <label className="text-xs font-semibold text-slate-500">BGM Volume</label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-slate-500">BGM Volume</label>
+                    <span className="text-xs text-slate-500">{bgmGain.toFixed(2)}</span>
+                  </div>
                   <input
-                    type="number"
+                    type="range"
                     min={0}
-                    max={1}
+                    max={0.6}
                     step={0.05}
                     value={bgmGain}
                     onChange={(event) => setBgmGain(Number(event.target.value) || 0.25)}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                    className="w-full accent-blue-600"
                   />
                 </div>
               ) : null}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-500">Playback / Voice Speed</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-slate-500">Playback / Voice Speed</label>
+                  <span className="text-xs text-slate-500">{voiceSpeed.toFixed(2)}x</span>
+                </div>
                 <input
-                  type="number"
-                  min={0.7}
-                  max={1.3}
+                  type="range"
+                  min={0.85}
+                  max={1.2}
                   step={0.05}
                   value={voiceSpeed}
-                  onChange={(event) => setVoiceSpeed(Number(event.target.value) || 1)}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                  onChange={(event) => setVoiceSpeed(Number(event.target.value) || 1.0)}
+                  className="w-full accent-blue-600"
                 />
               </div>
             </div>

@@ -95,7 +95,7 @@ export default function LocalizationClient() {
   const [subtitleMode, setSubtitleMode] = useState<"sidecar" | "burned">("burned");
   const [audioStrategy, setAudioStrategy] = useState<AudioStrategy>("mute_original");
   const [dubGain, setDubGain] = useState(1.0);
-  const [bgmGain, setBgmGain] = useState(0.28);
+  const [bgmGain, setBgmGain] = useState(0.25);
   const [voiceSpeed, setVoiceSpeed] = useState(1.0);
   const [lipsyncEnabled, setLipsyncEnabled] = useState(false);
   const [lipsyncScope, setLipsyncScope] = useState<"face" | "full">("face");
@@ -241,6 +241,7 @@ export default function LocalizationClient() {
 
     try {
       const inputKey = await uploadFileToR2(videoFile);
+      const effectiveBgmGain = audioStrategy === "mute_original" ? 0.0 : bgmGain;
       const res = await createTask({
         service_type: "localization",
         mode,
@@ -253,7 +254,7 @@ export default function LocalizationClient() {
           preserve_bgm: audioStrategy !== "mute_original",
           ducking: audioStrategy === "duck_original",
           dub_gain: dubGain,
-          bgm_gain: bgmGain,
+          bgm_gain: effectiveBgmGain,
           voice_speed: voiceSpeed,
           lipsync_enabled: effectiveLipsyncEnabled,
           lipsync_scope: effectiveLipsyncEnabled ? lipsyncScope : undefined,
@@ -283,7 +284,7 @@ export default function LocalizationClient() {
       preserve_bgm: audioStrategy !== "mute_original",
       ducking: audioStrategy === "duck_original",
       dub_gain: dubGain,
-      bgm_gain: bgmGain,
+      bgm_gain: audioStrategy === "mute_original" ? 0.0 : bgmGain,
       voice_speed: voiceSpeed,
       lipsync_enabled: mode === "intelligent" ? lipsyncEnabled : false,
       lipsync_scope: mode === "intelligent" && lipsyncEnabled ? lipsyncScope : null,

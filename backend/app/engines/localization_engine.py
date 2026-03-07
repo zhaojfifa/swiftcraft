@@ -172,15 +172,6 @@ class LocalizationEngine:
             raw_audio_strategy = str((loc_inputs or {}).get("audio_strategy") or "").strip().lower()
             if raw_audio_strategy in {"mute_original", "duck_original", "keep_bgm"}:
                 audio_strategy = raw_audio_strategy
-            elif ("preserve_bgm" in (loc_inputs or {})) or ("ducking" in (loc_inputs or {})):
-                preserve_bgm_legacy = bool((loc_inputs or {}).get("preserve_bgm", True))
-                ducking_legacy = bool((loc_inputs or {}).get("ducking", True))
-                if preserve_bgm_legacy and ducking_legacy:
-                    audio_strategy = "duck_original"
-                elif preserve_bgm_legacy:
-                    audio_strategy = "keep_bgm"
-                else:
-                    audio_strategy = "mute_original"
             else:
                 audio_strategy = "mute_original"
 
@@ -188,7 +179,7 @@ class LocalizationEngine:
             preserve_bgm = audio_strategy in {"duck_original", "keep_bgm"}
             ducking = audio_strategy == "duck_original"
             dub_gain = float((loc_inputs or {}).get("dub_gain") or 1.0)
-            bgm_gain = float((loc_inputs or {}).get("bgm_gain") or 0.28)
+            bgm_gain = float((loc_inputs or {}).get("bgm_gain") or 0.0)
             voice_speed = float((loc_inputs or {}).get("voice_speed") or 1.0)
             on_log(
                 f"[loc] audio_strategy={audio_strategy} original_audio_muted={str(original_audio_muted).lower()} "
