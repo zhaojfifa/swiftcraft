@@ -8,7 +8,11 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class ServiceType(str, Enum):
+    swap = "swap"
+    # legacy alias
     face_swap = "face_swap"
+    action_replica = "action_replica"
+    # legacy alias kept for backward compatibility
     avatar_transfer = "avatar_transfer"
     localization = "localization"
 
@@ -79,25 +83,54 @@ class LegacySwapRequest(BaseModel):
 
 
 class SwapInputs(BaseModel):
-    source_video: str
-    target_image: str
+    source_video: Optional[str] = None
+    source_video_url: Optional[str] = None
+    target_image: Optional[str] = None
+    target_image_url: Optional[str] = None
+
+    @model_validator(mode="after")
+    def normalize_aliases(self) -> "SwapInputs":
+        if not self.source_video and self.source_video_url:
+            self.source_video = self.source_video_url
+        if not self.target_image and self.target_image_url:
+            self.target_image = self.target_image_url
+        if not self.source_video:
+            raise ValueError("inputs.source_video (or source_video_url) is required for swap.")
+        if not self.target_image:
+            raise ValueError("inputs.target_image (or target_image_url) is required for swap.")
+        return self
 
 
 class SwapRequest(BaseModel):
-    service_type: Literal["face_swap"] = "face_swap"
+    service_type: Literal["swap", "face_swap"] = "swap"
+    subtype: Literal["scene", "face"] = "scene"
     mode: str
     inputs: SwapInputs
 
 
 class AvatarInputs(BaseModel):
-    character_image: str
-    motion_video: str
+    character_image: Optional[str] = None
+    character_image_url: Optional[str] = None
+    motion_video: Optional[str] = None
+    source_video_url: Optional[str] = None
     character_orientation: str
     prompt: Optional[str] = None
 
+    @model_validator(mode="after")
+    def normalize_aliases(self) -> "AvatarInputs":
+        if not self.character_image and self.character_image_url:
+            self.character_image = self.character_image_url
+        if not self.motion_video and self.source_video_url:
+            self.motion_video = self.source_video_url
+        if not self.character_image:
+            raise ValueError("inputs.character_image_url (or character_image) is required for action_replica.")
+        if not self.motion_video:
+            raise ValueError("inputs.source_video_url (or motion_video) is required for action_replica.")
+        return self
+
 
 class AvatarRequest(BaseModel):
-    service_type: Literal["avatar_transfer"] = "avatar_transfer"
+    service_type: Literal["action_replica", "avatar_transfer"] = "action_replica"
     input_key: Optional[str] = None
     model_id: str = Field(default="kling-v2.6-std-motion")
     mode: str
@@ -106,9 +139,9 @@ class AvatarRequest(BaseModel):
     @model_validator(mode="after")
     def normalize_input_key(self) -> "AvatarRequest":
         if not self.input_key:
-            motion_video = self.inputs.motion_video
+            motion_video = self.inputs.motion_video or self.inputs.source_video_url
             if not motion_video:
-                raise ValueError("inputs.motion_video is required for avatar_transfer.")
+                raise ValueError("inputs.source_video_url (or motion_video) is required for action_replica.")
             self.input_key = _strip_cdn_prefix(motion_video)
         return self
 

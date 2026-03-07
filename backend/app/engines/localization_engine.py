@@ -20,6 +20,7 @@ from app.utils.fastwhisper_asr import (
     transcribe,
 )
 from app.utils.ffmpeg_localization import (
+    apply_audio_gain_wav,
     audio_rms_db,
     audio_peak_db,
     burn_subtitles,
@@ -68,6 +69,12 @@ class LocalizationEngine:
         translation_meta: Dict[str, Any] = {}
         transcription_meta: Dict[str, Any] = {}
         tts_meta: Dict[str, Any] = {}
+        dub_aligned_rms_db: float | None = None
+        dub_aligned_peak_db: float | None = None
+        mixed_rms_db: float | None = None
+        mixed_peak_db: float | None = None
+        localized_rms_db: float | None = None
+        localized_peak_db: float | None = None
         workspace = Path(__file__).resolve().parents[3] / "video_workspace" / "tasks" / task_id / "localization"
         workspace.mkdir(parents=True, exist_ok=True)
 
@@ -189,6 +196,15 @@ class LocalizationEngine:
         def _contains_fallback_marker(text: str) -> bool:
             lowered = (text or "").lower()
             return "localized narration." in lowered or "[no_subtitles]" in lowered
+
+        def _shrink_ultra_short_text(text: str) -> str:
+            cleaned = " ".join((text or "").strip().split())
+            if not cleaned:
+                return cleaned
+            parts = [p for p in cleaned.split(" ") if p]
+            if len(parts) >= 3:
+                return " ".join(parts[:3])
+            return cleaned[:12]
 
         def _merged_tts_text_from_srt(srt_text: str) -> str:
             lines: list[str] = []
@@ -692,10 +708,24 @@ class LocalizationEngine:
                     original_text_norm = str(row.get("origin") or "")
                     original_text_raw = str(row.get("origin_raw") or original_text_norm)
                     translated_text = str(row.get("translation_subtitle_final") or row.get("translated") or "")
-                    translation_initial = str(row.get("translation_initial") or translated_text)
-                    translation_final = str(row.get("translation_final") or translated_text)
+                    translation_dubbing_initial = str(
+                        row.get("translation_dubbing_initial")
+                        or row.get("translation_initial")
+                        or text
+                    )
+                    translation_dubbing_final = str(
+                        row.get("translation_dubbing_final")
+                        or row.get("translation_final")
+                        or text
+                    )
+                    translation_subtitle_final = str(
+                        row.get("translation_subtitle_final")
+                        or translated_text
+                        or translation_dubbing_final
+                    )
                     final_tts_text = text
-                    ultra_short_mode = target_sec <= 0.8
+                    ultra_short_mode = target_sec < 0.7
+                    ultra_short_max_atempo = _env_float("TTS_ULTRA_SHORT_MAX_ATEMPO", 2.0)
                     if ultra_short_mode:
                         on_log(f"[loc] TRANSLATION_ULTRA_SHORT_MODE index={idx}")
 
@@ -715,7 +745,7 @@ class LocalizationEngine:
                     warning_flags: list[str] = []
                     tts_sec, ratio = _synthesize_segment_audio(seg_path, text, idx)
 
-                    if ratio > 1.25:
+                    if (not ultra_short_mode) and ratio > 1.25:
                         seg_retry_used = True
                         try:
                             shorter = concise_rewrite_with_gemini(text, target_lang=target_lang)
@@ -731,7 +761,7 @@ class LocalizationEngine:
                             tts_retry_type = "ultra_short"
                         alignment_strategy = "segment_tts+concise_retry"
 
-                    if ultra_short_mode and ratio > 1.35:
+                    if ultra_short_mode and ratio > 1.15:
                         try:
                             ultra_shorter = concise_rewrite_with_gemini(final_tts_text, target_lang=target_lang)
                         except Exception:
@@ -742,8 +772,16 @@ class LocalizationEngine:
                             final_tts_text = ultra_shorter
                             seg_retry_used = True
                             tts_retry_type = "ultra_short"
+                        if ratio > ultra_short_max_atempo:
+                            shrunken = _shrink_ultra_short_text(final_tts_text)
+                            if shrunken and shrunken != final_tts_text:
+                                on_log(f"[loc] TTS_TEXT_REWRITE_FOR_DURATION index={idx}")
+                                tts_sec, ratio = _synthesize_segment_audio(seg_path, shrunken, idx)
+                                final_tts_text = shrunken
+                                seg_retry_used = True
+                                tts_retry_type = "ultra_short"
 
-                    if ratio > 1.5:
+                    if (not ultra_short_mode) and ratio > 1.5:
                         on_log(f"[loc] TTS_SEGMENT_TOO_FAST index={idx} factor={ratio:.3f}")
                         try:
                             shorter_again = concise_rewrite_with_gemini(final_tts_text, target_lang=target_lang)
@@ -771,14 +809,22 @@ class LocalizationEngine:
                             expand_retry_used = True
                             tts_retry_type = "expand"
 
-                    atempo_threshold = 2.0 if ultra_short_mode else 1.25
+                    atempo_threshold = ultra_short_max_atempo if ultra_short_mode else 1.25
                     if ratio > atempo_threshold and tts_sec > 0 and target_sec > 0:
                         if ultra_short_mode:
                             on_log(f"[loc] TTS_ULTRA_SHORT_ATEMPO_ESCALATED index={idx}")
                         aligned_seg = workspace / f"segment_{idx:03d}_aligned.wav"
                         try:
-                            stretch_audio_to_duration(seg_path, aligned_seg, target_sec, on_log=on_log)
-                            seg_atempo = tts_sec / target_sec
+                            stretch_target_sec = target_sec
+                            raw_atempo = tts_sec / target_sec
+                            if ultra_short_mode and raw_atempo > ultra_short_max_atempo:
+                                stretch_target_sec = max(target_sec, tts_sec / ultra_short_max_atempo)
+                                on_log(
+                                    f"[loc] TTS_ULTRA_SHORT_ATEMPO_CAPPED index={idx} "
+                                    f"raw_factor={raw_atempo:.3f} capped={ultra_short_max_atempo:.3f}"
+                                )
+                            stretch_audio_to_duration(seg_path, aligned_seg, stretch_target_sec, on_log=on_log)
+                            seg_atempo = tts_sec / stretch_target_sec
                             if seg_atempo > 2.0:
                                 on_log(f"[loc][warn] TTS_SEGMENT_TOO_FAST index={idx} factor={seg_atempo:.3f}")
                                 warning_flags.append("tts_atempo_gt_2_0")
@@ -824,17 +870,17 @@ class LocalizationEngine:
                             "src_text_norm": original_text_norm,
                             "source_text_raw": original_text_raw,
                             "source_text_norm": original_text_norm,
-                            "translation_initial": translation_initial,
-                            "translation_final": translation_final,
-                            "translation_dubbing_initial": translation_initial,
-                            "translation_dubbing_final": translation_final,
-                            "translation_subtitle_final": translation_final,
-                            "tts_text_initial": translated_text,
+                            "translation_initial": translation_dubbing_initial,
+                            "translation_final": translation_dubbing_final,
+                            "translation_dubbing_initial": translation_dubbing_initial,
+                            "translation_dubbing_final": translation_dubbing_final,
+                            "translation_subtitle_final": translation_subtitle_final,
+                            "tts_text_initial": translation_dubbing_final,
                             "tts_text_final": final_tts_text,
-                            "subtitle_text_final": translation_final,
-                            "subtitle_chars": len(translation_final),
-                            "subtitle_line_count": max(1, str(translation_final).count("\\N") + 1) if translation_final else 0,
-                            "translated_text": translated_text,
+                            "subtitle_text_final": translation_subtitle_final,
+                            "subtitle_chars": len(translation_subtitle_final),
+                            "subtitle_line_count": max(1, str(translation_subtitle_final).count("\\N") + 1) if translation_subtitle_final else 0,
+                            "translated_text": translation_subtitle_final,
                             "final_tts_text": final_tts_text,
                             "src_dur": target_sec,
                             "target_sec": target_sec,
@@ -878,8 +924,10 @@ class LocalizationEngine:
                 on_log(f"[loc] DUB_TOTAL_SEC_AFTER_ALIGN={dub_duration_sec if dub_duration_sec is not None else 'n/a'}")
                 on_log(f"[loc] DUB_ALIGNMENT_STRATEGY={alignment_strategy}")
                 tts_text_strategy = alignment_strategy
-                dub_aligned_rms = audio_rms_db(dub_mp3_path, on_log=on_log)
-                on_log(f"[loc] DUB_ALIGNED_RMS_DB={dub_aligned_rms if dub_aligned_rms is not None else 'n/a'}")
+                dub_aligned_rms_db = audio_rms_db(dub_mp3_path, on_log=on_log)
+                dub_aligned_peak_db = audio_peak_db(dub_mp3_path, on_log=on_log)
+                on_log(f"[loc] DUB_ALIGNED_RMS_DB={dub_aligned_rms_db if dub_aligned_rms_db is not None else 'n/a'}")
+                on_log(f"[loc] DUB_ALIGNED_PEAK_DB={dub_aligned_peak_db if dub_aligned_peak_db is not None else 'n/a'}")
                 if _is_audio_silent(dub_mp3_path):
                     raise EngineRunError(
                         f"TTS_SILENT_AUDIO: silent dub track before rendering_audio path={dub_mp3_path}"
@@ -986,8 +1034,33 @@ class LocalizationEngine:
                     f"mixed_audio_sec={mixed_audio_duration_sec if mixed_audio_duration_sec is not None else 'n/a'}"
                 )
                 _log_audio_diagnostics("mixed_wav", mixed_wav)
-                mixed_wav_rms = audio_rms_db(mixed_wav, on_log=on_log)
-                on_log(f"[loc] MIXED_WAV_RMS_DB={mixed_wav_rms if mixed_wav_rms is not None else 'n/a'}")
+                mixed_rms_db = audio_rms_db(mixed_wav, on_log=on_log)
+                mixed_peak_db = audio_peak_db(mixed_wav, on_log=on_log)
+                on_log(f"[loc] MIXED_WAV_RMS_DB={mixed_rms_db if mixed_rms_db is not None else 'n/a'}")
+                on_log(f"[loc] MIXED_WAV_PEAK_DB={mixed_peak_db if mixed_peak_db is not None else 'n/a'}")
+                min_output_rms_db = _env_float("LOC_MIN_OUTPUT_RMS_DB", -22.0)
+                max_gain_guard_db = _env_float("LOC_MAX_GAIN_GUARD_DB", 8.0)
+                if (
+                    not no_subtitles
+                    and mixed_rms_db is not None
+                    and mixed_rms_db < min_output_rms_db
+                    and (mixed_peak_db is None or mixed_peak_db < -0.3)
+                ):
+                    gain_db = min(max_gain_guard_db, max(0.0, min_output_rms_db - mixed_rms_db))
+                    if gain_db > 0.05:
+                        guarded = workspace / "mixed_guarded.wav"
+                        on_log(
+                            f"[loc][audio_guard] low_rms_detected=true mixed_rms_db={mixed_rms_db:.3f} "
+                            f"target_rms_db={min_output_rms_db:.3f} gain_db={gain_db:.3f}"
+                        )
+                        apply_audio_gain_wav(mixed_wav, guarded, gain_db=gain_db, on_log=on_log)
+                        mixed_wav = guarded
+                        mixed_rms_db = audio_rms_db(mixed_wav, on_log=on_log)
+                        mixed_peak_db = audio_peak_db(mixed_wav, on_log=on_log)
+                        on_log(
+                            f"[loc][audio_guard] applied mixed_rms_db={mixed_rms_db if mixed_rms_db is not None else 'n/a'} "
+                            f"mixed_peak_db={mixed_peak_db if mixed_peak_db is not None else 'n/a'}"
+                        )
                 on_log(
                     "[loc][duration] pre_mux "
                     f"source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'} "
@@ -1025,8 +1098,10 @@ class LocalizationEngine:
                     on_log=on_log,
                 )
                 _log_audio_diagnostics("localized_audio_only_mp4", localized_audio_only_path)
-                muxed_rms = audio_rms_db(localized_audio_only_path, on_log=on_log)
-                on_log(f"[loc] MUXED_AUDIO_RMS_DB={muxed_rms if muxed_rms is not None else 'n/a'}")
+                localized_rms_db = audio_rms_db(localized_audio_only_path, on_log=on_log)
+                localized_peak_db = audio_peak_db(localized_audio_only_path, on_log=on_log)
+                on_log(f"[loc] MUXED_AUDIO_RMS_DB={localized_rms_db if localized_rms_db is not None else 'n/a'}")
+                on_log(f"[loc] MUXED_AUDIO_PEAK_DB={localized_peak_db if localized_peak_db is not None else 'n/a'}")
                 on_log(f"[loc] MUXED_AUDIO_SIZE_BYTES={_file_size(localized_audio_only_path)}")
                 on_log(
                     "[loc][burn_subtitle] burn_ass_start "
@@ -1188,6 +1263,20 @@ class LocalizationEngine:
                 "dub_gain": dub_gain,
                 "bgm_gain": bgm_gain,
                 "voice_speed": voice_speed,
+                "dub_rms_db": dub_aligned_rms_db,
+                "dub_peak_db": dub_aligned_peak_db,
+                "mixed_rms_db": mixed_rms_db,
+                "mixed_peak_db": mixed_peak_db,
+                "localized_rms_db": localized_rms_db,
+                "localized_peak_db": localized_peak_db,
+                "audio_qa": {
+                    "dub_rms_db": dub_aligned_rms_db,
+                    "dub_peak_db": dub_aligned_peak_db,
+                    "mixed_rms_db": mixed_rms_db,
+                    "mixed_peak_db": mixed_peak_db,
+                    "localized_rms_db": localized_rms_db,
+                    "localized_peak_db": localized_peak_db,
+                },
                 "localized_audio_only_url": localized_audio_only_url,
                 "localized_final_url": output_url,
                 "outputs": outputs,

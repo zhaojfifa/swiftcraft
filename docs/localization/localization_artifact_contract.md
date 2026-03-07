@@ -8,10 +8,12 @@
 ### Required outputs
 - `video_url` / `video_key` -> `localized.mp4`
 - `subtitle_url` / `subtitle_key` -> `target.srt`
+- `subtitle_ass_url` / `subtitle_ass_key` -> `target.ass`
 - `manifest_url` / `manifest_key` -> `manifest.json`
 
 ### Recommended outputs
 - `audio_url` / `audio_key` -> `dub.mp3`
+- `localized_audio_only_url` / `localized_audio_only_key` -> `localized_audio_only.mp4`
 - `origin_segments.json`
 - `translated_segments.json`
 - `translation_qa.json`
@@ -39,7 +41,9 @@
 当前/近期可见：
 - `outputs/{task_id}/localized.mp4`
 - `outputs/{task_id}/target.srt`
+- `outputs/{task_id}/target.ass`
 - `outputs/{task_id}/dub.mp3`
+- `outputs/{task_id}/localized_audio_only.mp4`
 - `outputs/{task_id}/manifest.json`
 - `outputs/{task_id}/origin_segments.json`
 - `outputs/{task_id}/translated_segments.json`
@@ -56,6 +60,8 @@
 `manifest.json` 至少包含：
 - 任务身份：`task_id/service/mode`
 - `run_config_snapshot`
+- `subtitle_burned/subtitle_format/subtitle_mode`
+- `audio_strategy/original_audio_muted/dub_gain/bgm_gain/voice_speed`
 - `metrics.elapsed_ms_by_step` + `metrics.total_latency_ms`
 - `outputs` key/url 索引
 - transcription/translation/tts QA 摘要

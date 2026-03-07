@@ -26,15 +26,16 @@ function shouldStopPolling(current: TaskRecord | null) {
 }
 
 type Props = {
-  service?: "swap" | "avatar";
+  service?: "swap" | "action_replica" | "avatar";
 };
 
 export default function SwapClient({ service = "swap" }: Props) {
   const serviceType = service;
   const isSwap = serviceType === "swap";
-  const isAvatar = serviceType === "avatar";
+  const isAvatar = serviceType === "action_replica" || serviceType === "avatar";
 
   const [mode, setMode] = useState<SwapMode>("intelligent");
+  const [swapSubtype, setSwapSubtype] = useState<"scene" | "face">("scene");
   const [inputSource, setInputSource] = useState<"preset" | "upload">("preset");
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -43,6 +44,12 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [faceEnhancer, setFaceEnhancer] = useState(true);
   const [orientation, setOrientation] = useState<"front" | "side" | "back">("front");
   const [prompt, setPrompt] = useState<string>("");
+  const [preserveCamera, setPreserveCamera] = useState(true);
+  const [preserveMotion, setPreserveMotion] = useState(true);
+  const [preserveTiming, setPreserveTiming] = useState(true);
+  const [actionReplicaProvider, setActionReplicaProvider] = useState<"wan26_r2v" | "fal_kling_action_replica">(
+    "wan26_r2v",
+  );
   const [showPromptTips, setShowPromptTips] = useState(false);
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -323,27 +330,38 @@ export default function SwapClient({ service = "swap" }: Props) {
     const characterKey = overrides?.characterKey || (await uploadFileToR2(imageFile as File));
     const motionKey = overrides?.motionKey || (await uploadFileToR2(videoFile as File));
     return createTask({
-      service_type: "avatar_transfer",
+      service_type: "action_replica",
       model_id: "kling-v2.6-std-motion",
       mode: overrides?.modeOverride || modeApi,
       input_key: motionKey,
       inputs: {
+        provider: actionReplicaProvider,
+        character_image_url: characterKey,
+        source_video_url: motionKey,
+        // legacy aliases kept for backward compatibility
         character_image: characterKey,
         motion_video: motionKey,
         character_orientation: orientation,
-        prompt: prompt.trim() ? prompt.trim() : undefined
+          preserve_camera: preserveCamera,
+          preserve_motion: preserveMotion,
+          preserve_timing: preserveTiming,
+          prompt: prompt.trim() ? prompt.trim() : undefined
       }
     });
   };
 
   const handleRun = async () => {
     cancelPolling();
+    if (isSwap && swapSubtype === "face") {
+      setError("Swap Face is reserved / coming soon. Please switch to Scene.");
+      return;
+    }
     if (inputSource === "upload" && !videoFile) {
       setError("Please upload a source video for upload mode.");
       return;
     }
     if (isAvatar && (!imageFile || !videoFile)) {
-      setError("Please upload a character image and motion video for avatar mode.");
+      setError("Please upload a character image and source video for action replica mode.");
       return;
     }
     setError(null);
@@ -400,22 +418,29 @@ export default function SwapClient({ service = "swap" }: Props) {
   const canUseSafeDemo = Boolean(safeDemoMotionKey && safeDemoCharacterKey) && !isRunning;
   const canRun = isAvatar
     ? Boolean(videoFile && imageFile) && !isRunning
-    : (inputSource === "preset" || Boolean(videoFile)) && !isRunning;
+    : swapSubtype === "scene" && (inputSource === "preset" || Boolean(videoFile)) && !isRunning;
   const payloadPreview = isAvatar
     ? {
-        service_type: "avatar_transfer",
+        service_type: "action_replica",
         model_id: "kling-v2.6-std-motion",
         mode: modeApi,
         input_key: "(motion key)",
         inputs: {
+          provider: actionReplicaProvider,
+          character_image_url: "(character key)",
+          source_video_url: "(motion key)",
           character_image: "(character key)",
           motion_video: "(motion key)",
           character_orientation: orientation,
+          preserve_camera: preserveCamera,
+          preserve_motion: preserveMotion,
+          preserve_timing: preserveTiming,
           prompt: prompt ? "(optional)" : ""
         }
       }
     : {
-        service: serviceApi,
+        service_type: "swap",
+        subtype: swapSubtype,
         mode: modeApi,
         input_key: inputSource === "preset" ? presetKey : "(uploaded key)",
         source: inputSource
@@ -429,12 +454,12 @@ export default function SwapClient({ service = "swap" }: Props) {
     ? [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"avatar_transfer\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${modeApi}\",\"input_key\":\"<motion_key>\",\"inputs\":{\"character_image\":\"<character_key>\",\"motion_video\":\"<motion_key>\",\"character_orientation\":\"${orientation}\"}}'`
+        `  -d '{\"service_type\":\"action_replica\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${modeApi}\",\"input_key\":\"<source_key>\",\"inputs\":{\"provider\":\"${actionReplicaProvider}\",\"character_image_url\":\"<character_key>\",\"source_video_url\":\"<source_key>\",\"preserve_camera\":${preserveCamera},\"preserve_motion\":${preserveMotion},\"preserve_timing\":${preserveTiming},\"character_orientation\":\"${orientation}\"}}'`
       ].join(" \\\n")
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service\":\"${serviceApi}\",\"mode\":\"${modeApi}\",\"input_key\":\"${presetKey}\"}'`
+        `  -d '{\"service_type\":\"swap\",\"subtype\":\"${swapSubtype}\",\"mode\":\"${modeApi}\",\"input_key\":\"${presetKey}\"}'`
       ].join(" \\\n");
 
   const handleRetrySafeSlicing = async () => {
@@ -584,6 +609,38 @@ export default function SwapClient({ service = "swap" }: Props) {
                 {isSwap ? (
                   <div className="space-y-3">
                     <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      Swap Type
+                    </label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSwapSubtype("scene")}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                          swapSubtype === "scene"
+                            ? "border-blue-600 text-blue-600 bg-blue-50"
+                            : "border-slate-200 text-slate-500 bg-white"
+                        }`}
+                      >
+                        Scene
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSwapSubtype("face")}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                          swapSubtype === "face"
+                            ? "border-amber-500 text-amber-700 bg-amber-50"
+                            : "border-slate-200 text-slate-500 bg-white"
+                        }`}
+                      >
+                        Face (Reserved)
+                      </button>
+                    </div>
+                    {swapSubtype === "face" ? (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        Swap Face contract is reserved / coming soon. Scene flow remains available.
+                      </div>
+                    ) : null}
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                       Input Source
                     </label>
                     <div className="flex gap-2">
@@ -673,7 +730,7 @@ export default function SwapClient({ service = "swap" }: Props) {
 
                         <div className="space-y-3">
                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex justify-between">
-                            Motion Reference (Video)
+                            Source Video
                             <span className="text-[10px] font-normal text-slate-400">MP4, 4-8s</span>
                           </label>
                           <div className="flex items-center justify-between text-[11px] text-slate-400">
@@ -829,7 +886,57 @@ export default function SwapClient({ service = "swap" }: Props) {
                       <>
                         <div className="space-y-3">
                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                            Orientation
+                            Provider
+                          </label>
+                          <select
+                            value={actionReplicaProvider}
+                            onChange={(event) =>
+                              setActionReplicaProvider(
+                                event.target.value as "wan26_r2v" | "fal_kling_action_replica",
+                              )
+                            }
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <option value="wan26_r2v">WAN 2.6 (Baseline)</option>
+                            <option value="fal_kling_action_replica">Kling (Candidate)</option>
+                          </select>
+                        </div>
+
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Preserve Strategy
+                          </label>
+                          <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <label className="flex items-center justify-between text-xs text-slate-600">
+                              <span>Preserve Camera</span>
+                              <input
+                                type="checkbox"
+                                checked={preserveCamera}
+                                onChange={(event) => setPreserveCamera(event.target.checked)}
+                              />
+                            </label>
+                            <label className="flex items-center justify-between text-xs text-slate-600">
+                              <span>Preserve Motion</span>
+                              <input
+                                type="checkbox"
+                                checked={preserveMotion}
+                                onChange={(event) => setPreserveMotion(event.target.checked)}
+                              />
+                            </label>
+                            <label className="flex items-center justify-between text-xs text-slate-600">
+                              <span>Preserve Timing</span>
+                              <input
+                                type="checkbox"
+                                checked={preserveTiming}
+                                onChange={(event) => setPreserveTiming(event.target.checked)}
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Orientation (Optional)
                           </label>
                           <select
                             value={orientation}

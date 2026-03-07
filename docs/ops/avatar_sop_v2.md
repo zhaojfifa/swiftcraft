@@ -17,6 +17,13 @@ Action Replica 是 SwiftCraft 场景 API 之一：以角色替换与动作复刻
 当前最小可依赖交付：
 - `output_url`
 
+Provider baseline（当前）：
+- `wan26_r2v`（默认）
+- `fal_kling_action_replica`（candidate，可切换）
+
+请求建议：
+- `inputs.provider` 显式传入 provider（未传则走服务端默认）
+
 建议收敛（逐步）：
 - `outputs.video_url/video_key`
 - `metadata.run_config_snapshot`

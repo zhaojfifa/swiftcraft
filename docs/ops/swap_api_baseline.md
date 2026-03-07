@@ -3,6 +3,11 @@
 ## 1. 定位
 Swap 是 SwiftCraft 场景 API 之一：针对输入视频执行人脸替换，输出可直接播放结果。
 
+正式契约：
+- `service_type=swap`
+- `subtype=scene|face`
+- `face_swap` 仅作为历史兼容 alias
+
 ## 2. 模式分层
 - Basic：快速交付
 - Intelligent：增强稳定性与观感，不阻塞 Basic
@@ -11,6 +16,7 @@ Swap 是 SwiftCraft 场景 API 之一：针对输入视频执行人脸替换，�
 统一 contract 以 `TaskResponseOut` 为准，核心字段：
 - `task_id`
 - `service_type`
+- `subtype`（请求侧）
 - `mode`
 - `status`
 - `stage`
@@ -24,6 +30,10 @@ Swap 是 SwiftCraft 场景 API 之一：针对输入视频执行人脸替换，�
 
 最小交付：
 - `output_url`（通常对应 `outputs/{task_id}/result.mp4`）
+
+provider baseline（scene）：
+- `fal_pixverse_swap`（默认）
+- `subtype=face` 路径当前仅保留契约，不伪装成 scene。
 
 ## 4. Task / Telemetry 期望
 - 统一入口与查询：`POST/GET /api/v1/tasks`

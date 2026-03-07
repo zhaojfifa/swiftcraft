@@ -275,7 +275,7 @@ export default function InputPanel({
                     max={0.6}
                     step={0.05}
                     value={bgmGain}
-                    onChange={(event) => setBgmGain(Number(event.target.value) || 0.25)}
+                    onChange={(event) => setBgmGain(Number(event.target.value) || 0.0)}
                     className="w-full accent-blue-600"
                   />
                 </div>

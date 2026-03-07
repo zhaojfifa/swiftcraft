@@ -27,6 +27,7 @@ Localization 是 SwiftCraft 场景 API 之一，目标是输出可交付本地�
 ### 3.3 Artifacts（当前已落地）
 - `localized.mp4`
 - `target.srt`
+- `target.ass`
 - `dub.mp3`（或 omission reason）
 - `manifest.json`
 
@@ -58,12 +59,14 @@ Localization 是 SwiftCraft 场景 API 之一，目标是输出可交付本地�
 - `TRANSCRIBING`
 - `TRANSLATING`
 - `SYNTHESIZING`
-- `RENDERING`
+- `RENDERING_AUDIO`
+- `BUILDING_SUBTITLE`
+- `BURNING_SUBTITLE`
 - `UPLOADING`
 - `DONE/FAILED`
 
 说明：
-- 目标职责中的 `rendering_audio/subtitle_building/subtitle_burning/exporting` 当前主要折叠在 `SYNTHESIZING + RENDERING + UPLOADING`。
+- `localized_audio_only.mp4` 为中间交付物，`localized.mp4` 为默认最终交付物（burned）。
 
 ## 4. Localization Intelligence（增强层，目标态）
 
@@ -91,8 +94,11 @@ Localization 是 SwiftCraft 场景 API 之一，目标是输出可交付本地�
 -> `uploading`
 
 当前实现说明：
-- `mode=intelligent` 目前仍为 mock 路径。
-- 上述 Intelligence 产物与流程为收敛目标。
+- `mode=intelligent` 当前为 contract 占位路径（provider=`localization_intelligent`，运行时 mock 回退）。
+- 已预埋 lipsync provider contract：
+  - `fal_sync_lipsync_v2_pro`
+  - `fal_dubbing`（experimental）
+- 上述 Intelligence 产物与流程为收敛目标，不阻塞 Basic 交付。
 
 ## 5. 运行与运维约束
 1. Basic 必须可独立成功。
