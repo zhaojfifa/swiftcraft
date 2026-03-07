@@ -21,6 +21,7 @@ from app.utils.fastwhisper_asr import (
 )
 from app.utils.ffmpeg_localization import (
     audio_rms_db,
+    burn_subtitles,
     extract_audio,
     mix_ducking,
     mux,
@@ -880,15 +881,27 @@ class LocalizationEngine:
 
             step = mark_step("burning_subtitle", "BURNING_SUBTITLE", 87)
             try:
+                localized_audio_only_path = workspace / "localized_audio_only.mp4"
                 on_log(
-                    "[loc][burn_subtitle] mux_start "
-                    f"output={localized_mp4_path} source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'}"
+                    "[loc][burn_subtitle] mux_audio_only_start "
+                    f"output={localized_audio_only_path} source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'}"
                 )
                 mux_started = time.perf_counter()
-                mux(source_video, mixed_wav, localized_mp4_path, source_video_duration_sec=source_video_duration_sec, on_log=on_log)
+                mux(
+                    source_video,
+                    mixed_wav,
+                    localized_audio_only_path,
+                    source_video_duration_sec=source_video_duration_sec,
+                    on_log=on_log,
+                )
+                on_log(
+                    "[loc][burn_subtitle] burn_ass_start "
+                    f"video_in={localized_audio_only_path} subtitle_ass={target_ass_path} output={localized_mp4_path}"
+                )
+                burn_subtitles(localized_audio_only_path, target_ass_path, localized_mp4_path, on_log=on_log)
                 output_video_duration_sec = _probe_duration(localized_mp4_path)
                 on_log(
-                    "[loc][burn_subtitle] mux_end "
+                    "[loc][burn_subtitle] burn_ass_end "
                     f"elapsed_ms={int((time.perf_counter() - mux_started) * 1000)} "
                     f"output_exists={localized_mp4_path.exists()} size={_file_size(localized_mp4_path)} "
                     f"output_video_sec={output_video_duration_sec if output_video_duration_sec is not None else 'n/a'}"

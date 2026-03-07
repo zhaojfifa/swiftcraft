@@ -608,3 +608,37 @@ def mux(
         str(mp4_out),
     ]
     run_ffmpeg(cmd, timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MUX", "180")), tag="ffmpeg_mux", on_log=on_log)
+
+
+def burn_subtitles(
+    video_in: Path,
+    subtitle_ass: Path,
+    output_mp4: Path,
+    on_log: Optional[Callable[[str], None]] = None,
+) -> None:
+    output_mp4.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-i",
+        str(video_in),
+        "-vf",
+        f"ass={subtitle_ass}",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "18",
+        "-c:a",
+        "copy",
+        str(output_mp4),
+    ]
+    run_ffmpeg(
+        cmd,
+        timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_BURN_SUBTITLE", "240")),
+        tag="ffmpeg_burn_subtitle",
+        on_log=on_log,
+    )
