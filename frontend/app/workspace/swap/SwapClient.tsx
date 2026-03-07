@@ -35,6 +35,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const isAvatar = serviceType === "action_replica" || serviceType === "avatar";
 
   const [mode, setMode] = useState<SwapMode>("intelligent");
+  const [swapSubtype, setSwapSubtype] = useState<"scene" | "face">("scene");
   const [inputSource, setInputSource] = useState<"preset" | "upload">("preset");
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -351,6 +352,10 @@ export default function SwapClient({ service = "swap" }: Props) {
 
   const handleRun = async () => {
     cancelPolling();
+    if (isSwap && swapSubtype === "face") {
+      setError("Swap Face is reserved / coming soon. Please switch to Scene.");
+      return;
+    }
     if (inputSource === "upload" && !videoFile) {
       setError("Please upload a source video for upload mode.");
       return;
@@ -413,7 +418,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const canUseSafeDemo = Boolean(safeDemoMotionKey && safeDemoCharacterKey) && !isRunning;
   const canRun = isAvatar
     ? Boolean(videoFile && imageFile) && !isRunning
-    : (inputSource === "preset" || Boolean(videoFile)) && !isRunning;
+    : swapSubtype === "scene" && (inputSource === "preset" || Boolean(videoFile)) && !isRunning;
   const payloadPreview = isAvatar
     ? {
         service_type: "action_replica",
@@ -434,7 +439,8 @@ export default function SwapClient({ service = "swap" }: Props) {
         }
       }
     : {
-        service: serviceApi,
+        service_type: "swap",
+        subtype: swapSubtype,
         mode: modeApi,
         input_key: inputSource === "preset" ? presetKey : "(uploaded key)",
         source: inputSource
@@ -453,7 +459,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service\":\"${serviceApi}\",\"mode\":\"${modeApi}\",\"input_key\":\"${presetKey}\"}'`
+        `  -d '{\"service_type\":\"swap\",\"subtype\":\"${swapSubtype}\",\"mode\":\"${modeApi}\",\"input_key\":\"${presetKey}\"}'`
       ].join(" \\\n");
 
   const handleRetrySafeSlicing = async () => {
@@ -602,6 +608,38 @@ export default function SwapClient({ service = "swap" }: Props) {
               <div className="space-y-8">
                 {isSwap ? (
                   <div className="space-y-3">
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      Swap Type
+                    </label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSwapSubtype("scene")}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                          swapSubtype === "scene"
+                            ? "border-blue-600 text-blue-600 bg-blue-50"
+                            : "border-slate-200 text-slate-500 bg-white"
+                        }`}
+                      >
+                        Scene
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSwapSubtype("face")}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                          swapSubtype === "face"
+                            ? "border-amber-500 text-amber-700 bg-amber-50"
+                            : "border-slate-200 text-slate-500 bg-white"
+                        }`}
+                      >
+                        Face (Reserved)
+                      </button>
+                    </div>
+                    {swapSubtype === "face" ? (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        Swap Face contract is reserved / coming soon. Scene flow remains available.
+                      </div>
+                    ) : null}
                     <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                       Input Source
                     </label>
