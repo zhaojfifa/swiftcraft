@@ -236,6 +236,37 @@ def audio_rms_db(input_wav: Path, on_log: Optional[Callable[[str], None]] = None
         return None
 
 
+def audio_peak_db(input_wav: Path, on_log: Optional[Callable[[str], None]] = None) -> Optional[float]:
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-v",
+        "info",
+        "-i",
+        str(input_wav),
+        "-af",
+        "astats=metadata=1:reset=0",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        result = _run_cmd(cmd, label="audio_peak_db", timeout_sec=int(os.getenv("FFPROBE_TIMEOUT_SEC", "30")), on_log=on_log)
+        stderr = (result.stderr or "").strip()
+    except Exception:
+        return None
+
+    matches = re.findall(r"Peak level dB(?:fs)?\s*:\s*(-?\d+(?:\.\d+)?)", stderr, flags=re.IGNORECASE)
+    if not matches:
+        return None
+    try:
+        values = [float(item) for item in matches]
+        return max(values)
+    except Exception:
+        return None
+
+
 def speech_ratio_from_silencedetect(
     input_wav: Path,
     on_log: Optional[Callable[[str], None]] = None,
@@ -477,7 +508,12 @@ def render_with_original_audio(video_in: Path, output_wav: Path, on_log: Optiona
     )
 
 
-def render_audio_track(audio_in: Path, output_wav: Path, on_log: Optional[Callable[[str], None]] = None) -> None:
+def render_audio_track(
+    audio_in: Path,
+    output_wav: Path,
+    dub_gain: float = 1.0,
+    on_log: Optional[Callable[[str], None]] = None,
+) -> None:
     output_wav.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         "ffmpeg",
@@ -486,6 +522,8 @@ def render_audio_track(audio_in: Path, output_wav: Path, on_log: Optional[Callab
         "-y",
         "-i",
         str(audio_in),
+        "-filter:a",
+        f"volume={dub_gain:.3f}",
         "-ac",
         "1",
         "-ar",
@@ -623,35 +661,6 @@ def mux(
     on_log: Optional[Callable[[str], None]] = None,
 ) -> None:
     mp4_out.parent.mkdir(parents=True, exist_ok=True)
-    duration = source_video_duration_sec if source_video_duration_sec and source_video_duration_sec > 0 else None
-    if duration is not None:
-        duration_text = f"{duration:.3f}"
-        filter_complex = f"[1:a]apad,atrim=0:{duration_text}[dub];[dub]asetpts=N/SR/TB[aout]"
-        cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-nostdin",
-            "-y",
-            "-i",
-            str(video_in),
-            "-i",
-            str(mixed_wav),
-            "-filter_complex",
-            filter_complex,
-            "-map",
-            "0:v:0",
-            "-map",
-            "[aout]",
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-shortest",
-            str(mp4_out),
-        ]
-        run_ffmpeg(cmd, timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MUX", "180")), tag="ffmpeg_mux", on_log=on_log)
-        return
-
     cmd = [
         "ffmpeg",
         "-hide_banner",
@@ -669,6 +678,10 @@ def mux(
         "copy",
         "-c:a",
         "aac",
+        "-ar",
+        "48000",
+        "-ac",
+        "1",
         "-shortest",
         str(mp4_out),
     ]

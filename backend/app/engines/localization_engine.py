@@ -21,6 +21,7 @@ from app.utils.fastwhisper_asr import (
 )
 from app.utils.ffmpeg_localization import (
     audio_rms_db,
+    audio_peak_db,
     burn_subtitles,
     extract_audio,
     mix_ducking,
@@ -93,6 +94,17 @@ class LocalizationEngine:
                 return probe_duration_sec(path, on_log=on_log)
             except TypeError:
                 return probe_duration_sec(path)
+
+        def _log_audio_diagnostics(tag: str, path: Path) -> None:
+            duration = _probe_duration(path)
+            rms = audio_rms_db(path, on_log=on_log) if path.exists() else None
+            peak = audio_peak_db(path, on_log=on_log) if path.exists() else None
+            on_log(
+                f"[loc][audio_diag] {tag} size_bytes={_file_size(path)} "
+                f"duration_sec={duration if duration is not None else 'n/a'} "
+                f"rms_db={rms if rms is not None else 'n/a'} "
+                f"peak_db={peak if peak is not None else 'n/a'}"
+            )
 
         def _env_bool(name: str, default: bool) -> bool:
             value = os.getenv(name)
@@ -922,7 +934,7 @@ class LocalizationEngine:
                 elif audio_strategy == "mute_original":
                     on_log("[loc][render_audio] audio_strategy=mute_original original_audio_muted=true")
                     try:
-                        render_audio_track(dub_mp3_path, mixed_wav, on_log=on_log)
+                        render_audio_track(dub_mp3_path, mixed_wav, dub_gain=dub_gain, on_log=on_log)
                     except Exception as dub_render_exc:
                         on_log(
                             f"[loc][render_audio][warn] dub_decode_failed_fallback_to_original "
@@ -951,6 +963,7 @@ class LocalizationEngine:
                     f"mixed_wav={mixed_wav} exists={mixed_wav.exists()} size={_file_size(mixed_wav)} "
                     f"mixed_audio_sec={mixed_audio_duration_sec if mixed_audio_duration_sec is not None else 'n/a'}"
                 )
+                _log_audio_diagnostics("mixed_wav", mixed_wav)
                 on_log(
                     "[loc][duration] pre_mux "
                     f"source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'} "
@@ -987,6 +1000,7 @@ class LocalizationEngine:
                     source_video_duration_sec=source_video_duration_sec,
                     on_log=on_log,
                 )
+                _log_audio_diagnostics("localized_audio_only_mp4", localized_audio_only_path)
                 on_log(
                     "[loc][burn_subtitle] burn_ass_start "
                     f"video_in={localized_audio_only_path} subtitle_ass={target_ass_path} output={localized_mp4_path}"
@@ -999,6 +1013,7 @@ class LocalizationEngine:
                     on_log=on_log,
                 )
                 output_video_duration_sec = _probe_duration(localized_mp4_path)
+                _log_audio_diagnostics("localized_mp4", localized_mp4_path)
                 on_log(
                     "[loc][burn_subtitle] burn_ass_end "
                     f"elapsed_ms={int((time.perf_counter() - mux_started) * 1000)} "
