@@ -134,9 +134,41 @@ def _normalize_localization_inputs(payload: Dict[str, Any], mode: str) -> tuple[
     if mode == "baseline":
         normalized["lipsync_enabled"] = False
         enforced.append("baseline_force_lipsync_off")
-    elif "lipsync_enabled" not in normalized:
+    else:
         normalized["lipsync_enabled"] = bool(normalized.get("lipsync_enabled", False))
+        normalized["lipsync_scope"] = str(normalized.get("lipsync_scope") or "face").strip().lower() or "face"
+        if normalized["lipsync_scope"] not in {"face", "full"}:
+            normalized["lipsync_scope"] = "face"
     return normalized, {"enforced": enforced}
+
+
+def _extract_localization_intelligence_contract(inputs: Dict[str, Any], mode: str) -> Dict[str, Any]:
+    lipsync_enabled = bool(inputs.get("lipsync_enabled")) if mode == "intelligent" else False
+    lipsync_scope = str(inputs.get("lipsync_scope") or "face").strip().lower() or "face"
+    if lipsync_scope not in {"face", "full"}:
+        lipsync_scope = "face"
+    return {
+        "service_type": "localization",
+        "mode": mode,
+        "pipeline": "basic_with_intelligence_overlay" if mode == "intelligent" else "basic",
+        "lipsync_enabled": lipsync_enabled,
+        "lipsync_scope": lipsync_scope,
+        "providers": {
+            "translation": "gemini",
+            "tts": "azure-speech",
+            # Placeholder contracts only. Runtime remains non-breaking until provider is fully integrated.
+            "lipsync_primary": "fal_sync_lipsync_v2_pro",
+            "lipsync_secondary": "fal_dubbing",
+        },
+        "outputs_contract": {
+            "basic_video": "localized.mp4",
+            "intelligent_video": "localized_intelligence.mp4",
+            "face_track": "face_track.json",
+            "lipsync_manifest": "lipsync_manifest.json",
+            "qa": "qa.json",
+        },
+        "status": "contract_only",
+    }
 
 
 def _service_type_from_legacy(service: str) -> ServiceType:
@@ -247,7 +279,7 @@ class TaskService:
                 return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_INTELLIGENT", "wan26_r2v").strip() or "wan26_r2v")
             return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_BASELINE", "wan26_r2v").strip() or "wan26_r2v")
         if service == "localization":
-            return "localization_basic" if mode == "baseline" else "mock"
+            return "localization_basic" if mode == "baseline" else "localization_intelligent"
         return str(payload.get("provider") or self._default_provider()).strip().lower()
 
     def _public_url_from_key(self, key: str) -> str:
@@ -321,8 +353,10 @@ class TaskService:
         )
         localization_inputs: Dict[str, Any] = {}
         localization_policy: Dict[str, Any] = {}
+        localization_contract: Dict[str, Any] = {}
         if resolved_service == "localization":
             localization_inputs, localization_policy = _normalize_localization_inputs(payload, resolved_mode)
+            localization_contract = _extract_localization_intelligence_contract(localization_inputs, resolved_mode)
             payload["inputs"] = localization_inputs
 
         if video_file or image_file:
@@ -372,6 +406,9 @@ class TaskService:
                 metadata_dict["run_config_snapshot"] = action_replica_cfg
             if resolved_service == "localization":
                 metadata_dict["policy"] = localization_policy
+                metadata_dict["run_config_snapshot"] = localization_contract
+                if resolved_mode == "intelligent":
+                    metadata_dict["intelligence_contract"] = localization_contract
             if face_enhancer is not None:
                 metadata_dict["face_enhancer"] = face_enhancer
             resolved_input_key = resolve_input_key(resolved_service, resolved_mode)
@@ -454,6 +491,12 @@ class TaskService:
                     else {}
                 ),
                 **({"policy": localization_policy} if resolved_service == "localization" else {}),
+                **({"run_config_snapshot": localization_contract} if resolved_service == "localization" else {}),
+                **(
+                    {"intelligence_contract": localization_contract}
+                    if resolved_service == "localization" and resolved_mode == "intelligent"
+                    else {}
+                ),
             },
             None,
             input_video_url,

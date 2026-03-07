@@ -18,6 +18,9 @@ def get_engine(provider: str):
         return FalWan26FlashEngine()
     if normalized in ("localization_basic", "localization-baseline"):
         return LocalizationEngine()
+    if normalized in ("localization_intelligent", "localization-intelligent"):
+        # Contract placeholder: runtime falls back to mock until lipsync provider is wired.
+        return MockEngine()
     if normalized == "real":
         return RealEngine()
     if normalized == "akool":
