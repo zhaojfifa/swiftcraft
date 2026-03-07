@@ -720,16 +720,16 @@ class LocalizationEngine:
                             seg_atempo = tts_sec / target_sec
                             if seg_atempo > 2.0:
                                 on_log(f"[loc][warn] TTS_SEGMENT_TOO_FAST index={idx} factor={seg_atempo:.3f}")
-                                warning_flags.append("segment_too_fast_gt_2_0")
+                                warning_flags.append("tts_atempo_gt_2_0")
                             seg_path = aligned_seg
                             tts_sec = _probe_duration(seg_path) or target_sec
                             ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
                             on_log(f"[loc] TTS_ATEMPO_APPLIED index={idx} factor={seg_atempo:.3f}")
                             alignment_strategy = "segment_tts+atempo"
                             tts_retry_type = "duration_rewrite" if tts_retry_type == "none" else tts_retry_type
-                            if seg_atempo > 2.5:
+                            if seg_atempo > 2.4:
                                 on_log(f"[loc][warn] TTS_SEGMENT_ATEMPO_HARD_WARNING index={idx} factor={seg_atempo:.3f}")
-                                warning_flags.append("segment_atempo_gt_2_5")
+                                warning_flags.append("tts_atempo_gt_2_4_hard")
                         except Exception as ex_align:
                             on_log(f"[loc][warn] TTS_ATEMPO_SKIP index={idx} reason={type(ex_align).__name__}")
 
