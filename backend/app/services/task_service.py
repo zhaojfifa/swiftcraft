@@ -72,9 +72,32 @@ def _normalize_localization_inputs(payload: Dict[str, Any], mode: str) -> tuple[
     normalized = dict(raw_inputs) if isinstance(raw_inputs, dict) else {}
     normalized.setdefault("target_lang", "my")
     normalized.setdefault("voice_id", "mm_female_1")
-    normalized.setdefault("subtitle_mode", "sidecar")
-    normalized.setdefault("preserve_bgm", True)
-    normalized.setdefault("ducking", True)
+    normalized.setdefault("subtitle_mode", "burned")
+    audio_strategy_raw = str(normalized.get("audio_strategy") or "").strip().lower()
+    legacy_preserve_bgm = bool(normalized.get("preserve_bgm")) if "preserve_bgm" in normalized else None
+    legacy_ducking = bool(normalized.get("ducking")) if "ducking" in normalized else None
+    if audio_strategy_raw not in {"mute_original", "keep_bgm", "duck_original"}:
+        # Backward compatibility: map legacy preserve/ducking flags to new strategy.
+        if legacy_ducking is True:
+            audio_strategy_raw = "duck_original"
+        elif legacy_preserve_bgm is True:
+            audio_strategy_raw = "keep_bgm"
+        else:
+            audio_strategy_raw = "mute_original"
+    def _to_float(value: Any, default: float) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return default
+
+    normalized["audio_strategy"] = audio_strategy_raw
+    normalized["original_audio_muted"] = audio_strategy_raw == "mute_original"
+    normalized["dub_gain"] = _to_float(normalized.get("dub_gain"), 1.0)
+    normalized["bgm_gain"] = _to_float(normalized.get("bgm_gain"), 0.0) if audio_strategy_raw != "mute_original" else 0.0
+    normalized["voice_speed"] = _to_float(normalized.get("voice_speed"), 1.0)
+    # Keep legacy fields in snapshot for non-breaking compatibility.
+    normalized["preserve_bgm"] = audio_strategy_raw != "mute_original"
+    normalized["ducking"] = audio_strategy_raw == "duck_original"
     enforced: list[str] = []
     if mode == "baseline":
         normalized["lipsync_enabled"] = False

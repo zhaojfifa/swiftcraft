@@ -233,7 +233,7 @@ class LocalizationEngine:
             loc_inputs = inputs.get("inputs") if isinstance(inputs.get("inputs"), dict) else {}
             target_lang = str((loc_inputs or {}).get("target_lang") or "my").strip().lower() or "my"
             voice_id = str((loc_inputs or {}).get("voice_id") or "mm_female_1")
-            subtitle_mode = str((loc_inputs or {}).get("subtitle_mode") or "sidecar")
+            subtitle_mode = str((loc_inputs or {}).get("subtitle_mode") or "burned")
             raw_audio_strategy = str((loc_inputs or {}).get("audio_strategy") or "").strip().lower()
             if raw_audio_strategy in {"mute_original", "duck_original", "keep_bgm"}:
                 audio_strategy = raw_audio_strategy
