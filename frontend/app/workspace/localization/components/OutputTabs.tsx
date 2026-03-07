@@ -68,6 +68,8 @@ export default function OutputTabs({
     }
   })();
   const subtitleBurned = String(manifestObj?.subtitle_burned ?? "n/a");
+  const audioStrategy = String(manifestObj?.audio_strategy ?? "n/a");
+  const originalAudioMuted = String(manifestObj?.original_audio_muted ?? "n/a");
   const outputDuration = String(
     (manifestObj?.metrics as Record<string, unknown> | undefined)?.total_latency_ms ?? "n/a",
   );
@@ -161,6 +163,8 @@ export default function OutputTabs({
             )}
             <div className="grid grid-cols-2 gap-2 rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
               <div>subtitle burned: {subtitleBurned}</div>
+              <div>audio strategy: {audioStrategy}</div>
+              <div>original audio muted: {originalAudioMuted}</div>
               <div>output duration(ms): {outputDuration}</div>
               <div>translation ratio: {translationRatio}</div>
               <div>warnings: {warningCount}</div>
