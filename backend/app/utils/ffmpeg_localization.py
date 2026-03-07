@@ -543,6 +543,38 @@ def render_audio_track(
     )
 
 
+def apply_audio_gain_wav(
+    audio_in: Path,
+    output_wav: Path,
+    gain_db: float,
+    on_log: Optional[Callable[[str], None]] = None,
+) -> None:
+    output_wav.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-i",
+        str(audio_in),
+        "-filter:a",
+        f"volume={gain_db:.3f}dB",
+        "-ac",
+        "1",
+        "-ar",
+        "48000",
+        "-c:a",
+        "pcm_s16le",
+        str(output_wav),
+    ]
+    run_ffmpeg(
+        cmd,
+        timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_RENDER_AUDIO", "120")),
+        tag="ffmpeg_gain_guard",
+        on_log=on_log,
+    )
+
+
 def export_audio_mp3(
     audio_in: Path,
     output_mp3: Path,

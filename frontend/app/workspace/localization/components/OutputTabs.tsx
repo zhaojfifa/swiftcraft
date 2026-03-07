@@ -86,6 +86,11 @@ export default function OutputTabs({
         return acc + (Array.isArray(flags) ? flags.length : 0);
       }, 0)
     : 0;
+  const audioQa = (manifestObj?.audio_qa as Record<string, unknown> | undefined) || manifestObj || {};
+  const dubRms = String((audioQa as Record<string, unknown>)?.dub_rms_db ?? "n/a");
+  const mixedRms = String((audioQa as Record<string, unknown>)?.mixed_rms_db ?? "n/a");
+  const localizedRms = String((audioQa as Record<string, unknown>)?.localized_rms_db ?? "n/a");
+  const localizedPeak = String((audioQa as Record<string, unknown>)?.localized_peak_db ?? "n/a");
 
   return (
     <div className="w-full rounded-xl border border-slate-200 bg-white overflow-hidden">
@@ -168,6 +173,10 @@ export default function OutputTabs({
               <div>output duration(ms): {outputDuration}</div>
               <div>translation ratio: {translationRatio}</div>
               <div>warnings: {warningCount}</div>
+              <div>dub rms(db): {dubRms}</div>
+              <div>mixed rms(db): {mixedRms}</div>
+              <div>localized rms(db): {localizedRms}</div>
+              <div>localized peak(db): {localizedPeak}</div>
             </div>
             <pre className="text-xs bg-slate-50 border border-slate-200 rounded p-3 max-h-72 overflow-auto whitespace-pre-wrap break-all">
               {manifestText}
