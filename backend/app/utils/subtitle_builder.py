@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
+import os
+from pathlib import Path
+from typing import Any, Optional
 
 
 def _srt_ts(seconds: float) -> str:
@@ -39,6 +41,33 @@ def _split_max_two_lines(text: str, max_chars_per_line: int = 24) -> str:
     return f"{line1}\\N{line2}".strip()
 
 
+def _ass_escape_text(text: str) -> str:
+    # ASS text needs escaping for backslash/braces to avoid control sequence injection.
+    return (text or "").replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}").strip()
+
+
+def resolve_ass_font() -> tuple[str, Optional[Path], bool]:
+    env_font = (os.getenv("ASS_FONT_NAME", "") or "").strip()
+    env_fonts_dir = (os.getenv("ASS_FONTS_DIR", "") or "").strip()
+    if env_font:
+        custom_dir = Path(env_fonts_dir) if env_fonts_dir else None
+        if custom_dir and custom_dir.exists():
+            return env_font, custom_dir, False
+        return env_font, None, False
+
+    candidates = [
+        ("Noto Sans Myanmar", Path("/usr/share/fonts/truetype/noto")),
+        ("Noto Sans Myanmar", Path("/usr/share/fonts/noto")),
+        ("Myanmar Text", Path("/usr/share/fonts/truetype/msttcorefonts")),
+        ("DejaVu Sans", Path("/usr/share/fonts/truetype/dejavu")),
+        ("Arial", None),
+    ]
+    for font_name, font_dir in candidates:
+        if font_dir is None or font_dir.exists():
+            return font_name, font_dir, font_name != "Noto Sans Myanmar"
+    return "Arial", None, True
+
+
 def build_srt_from_segments(rows: list[dict[str, Any]]) -> str:
     out: list[str] = []
     for row in rows:
@@ -55,7 +84,13 @@ def build_srt_from_segments(rows: list[dict[str, Any]]) -> str:
     return "\n".join(out).strip() + "\n"
 
 
-def build_ass_from_segments(rows: list[dict[str, Any]], *, title: str = "SwiftCraft Localization") -> str:
+def build_ass_from_segments(
+    rows: list[dict[str, Any]],
+    *,
+    title: str = "SwiftCraft Localization",
+    font_name: Optional[str] = None,
+) -> str:
+    chosen_font = (font_name or "").strip() or resolve_ass_font()[0]
     header = (
         "[Script Info]\n"
         f"Title: {title}\n"
@@ -67,12 +102,12 @@ def build_ass_from_segments(rows: list[dict[str, Any]], *, title: str = "SwiftCr
         "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,"
         "Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,"
         "Alignment,MarginL,MarginR,MarginV,Encoding\n"
-        "Style: Default,Arial,42,&H00FFFFFF,&H000000FF,&H00101010,&H64000000,"
+        f"Style: Default,{chosen_font},42,&H00FFFFFF,&H000000FF,&H00101010,&H64000000,"
         "0,0,0,0,100,100,0,0,1,2,1,2,40,40,48,1\n\n"
         "[Events]\n"
         "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n"
     )
-    lines: list[str] = [header]
+    lines: list[str] = [header.rstrip("\n")]
     for row in rows:
         idx = int(row.get("index") or 0)
         if idx <= 0:
@@ -80,9 +115,9 @@ def build_ass_from_segments(rows: list[dict[str, Any]], *, title: str = "SwiftCr
         start = float(row.get("start") or 0.0)
         end = float(row.get("end") or max(start + 0.2, 0.2))
         text = str(row.get("translation_subtitle_final") or row.get("translated") or "").strip() or "[UNTRANSLATED]"
-        text = _split_max_two_lines(text)
+        text = _ass_escape_text(_split_max_two_lines(text))
         lines.append(
             f"Dialogue: 0,{_ass_ts(start)},{_ass_ts(max(end, start + 0.1))},Default,,0,0,0,,{text}"
         )
-    return "".join(lines)
+    return "\n".join(lines).strip() + "\n"
 

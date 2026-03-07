@@ -35,7 +35,7 @@ from app.utils.ffmpeg_localization import (
     write_silence_audio,
     concat_audio_files,
 )
-from app.utils.subtitle_builder import build_ass_from_segments, build_srt_from_segments
+from app.utils.subtitle_builder import build_ass_from_segments, build_srt_from_segments, resolve_ass_font
 from app.utils.translate_gemini import (
     build_translation_qa,
     concise_rewrite_with_gemini,
@@ -517,7 +517,17 @@ class LocalizationEngine:
             target_srt_path = workspace / "target.srt"
             target_srt_path.write_text(target_srt, encoding="utf-8")
             target_ass_path = workspace / "target.ass"
-            target_ass_path.write_text(build_ass_from_segments(translated_segments), encoding="utf-8")
+            ass_font_name, ass_fonts_dir, ass_font_fallback_used = resolve_ass_font()
+            ass_text = build_ass_from_segments(translated_segments, font_name=ass_font_name)
+            target_ass_path.write_text(ass_text, encoding="utf-8")
+            ass_lines = [ln for ln in ass_text.splitlines() if ln.startswith("Dialogue:")]
+            on_log(f"[loc][ass] ASS_BUILD_SEGMENTS={len(translated_segments)}")
+            on_log(f"[loc][ass] ASS_BUILD_LINES={len(ass_lines)}")
+            if ass_lines:
+                on_log(f"[loc][ass] ASS_FIRST_DIALOGUE={ass_lines[0]}")
+            on_log(f"[loc][ass] ASS_STYLE_FONT={ass_font_name}")
+            on_log(f"[loc][ass] ASS_FONT_RESOLVED={ass_font_name}")
+            on_log(f"[loc][ass] ASS_FONT_FALLBACK_USED={str(ass_font_fallback_used).lower()}")
             translated_segments_path.write_text(
                 json.dumps(translated_segments, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -931,7 +941,13 @@ class LocalizationEngine:
                     "[loc][burn_subtitle] burn_ass_start "
                     f"video_in={localized_audio_only_path} subtitle_ass={target_ass_path} output={localized_mp4_path}"
                 )
-                burn_subtitles(localized_audio_only_path, target_ass_path, localized_mp4_path, on_log=on_log)
+                burn_subtitles(
+                    localized_audio_only_path,
+                    target_ass_path,
+                    localized_mp4_path,
+                    fonts_dir=ass_fonts_dir,
+                    on_log=on_log,
+                )
                 output_video_duration_sec = _probe_duration(localized_mp4_path)
                 on_log(
                     "[loc][burn_subtitle] burn_ass_end "

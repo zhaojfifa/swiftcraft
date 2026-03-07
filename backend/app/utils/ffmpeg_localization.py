@@ -505,6 +505,11 @@ def mix_ducking(
     on_log: Optional[Callable[[str], None]] = None,
 ) -> None:
     mixed_wav_out.parent.mkdir(parents=True, exist_ok=True)
+    source_sec = probe_duration_sec(original_wav, on_log=on_log)
+    dub_sec = probe_duration_sec(dub_mp3, on_log=on_log)
+    if on_log:
+        on_log(f"[loc][mix] MIX_INPUT_SOURCE_SEC={source_sec if source_sec is not None else 'n/a'}")
+        on_log(f"[loc][mix] MIX_INPUT_DUB_SEC={dub_sec if dub_sec is not None else 'n/a'}")
     if not preserve_bgm:
         cmd = [
             "ffmpeg",
@@ -523,12 +528,31 @@ def mix_ducking(
             tag="ffmpeg_mix_passthrough",
             on_log=on_log,
         )
+        output_sec = probe_duration_sec(mixed_wav_out, on_log=on_log)
+        if on_log:
+            on_log("[loc][mix] MIX_STRATEGY=passthrough_dub_only")
+            on_log("[loc][mix] MIX_WEIGHTS=dub_only")
+            on_log(f"[loc][mix] MIX_OUTPUT_SEC={output_sec if output_sec is not None else 'n/a'}")
         return
 
     if ducking:
-        filter_complex = "[0:a]aresample=16000[a0];[1:a]aresample=16000[a1];[a0][a1]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=400[m];[m]anull[a]"
+        # Duck original audio by dub sidechain, then mix ducked original + dub.
+        filter_complex = (
+            "[0:a]aresample=16000,asetpts=N/SR/TB[bgm];"
+            "[1:a]aresample=16000,asetpts=N/SR/TB[dub];"
+            "[bgm][dub]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=400[ducked];"
+            "[ducked][dub]amix=inputs=2:duration=longest:weights=0.55 1.00,aresample=48000[a]"
+        )
+        mix_strategy = "duck_then_amix"
+        mix_weights = "bgm=0.55,dub=1.00"
     else:
-        filter_complex = "[0:a]aresample=16000[a0];[1:a]aresample=16000[a1];[a0][a1]amix=inputs=2:duration=longest:weights=1 1[m];[m]anull[a]"
+        filter_complex = (
+            "[0:a]aresample=16000[a0];"
+            "[1:a]aresample=16000[a1];"
+            "[a0][a1]amix=inputs=2:duration=longest:weights=0.80 1.00,aresample=48000[a]"
+        )
+        mix_strategy = "amix_no_duck"
+        mix_weights = "bgm=0.80,dub=1.00"
     cmd = [
         "ffmpeg",
         "-hide_banner",
@@ -547,7 +571,13 @@ def mix_ducking(
         "-shortest",
         str(mixed_wav_out),
     ]
+    if on_log:
+        on_log(f"[loc][mix] MIX_STRATEGY={mix_strategy}")
+        on_log(f"[loc][mix] MIX_WEIGHTS={mix_weights}")
     run_ffmpeg(cmd, timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MIX", "180")), tag="ffmpeg_mix", on_log=on_log)
+    output_sec = probe_duration_sec(mixed_wav_out, on_log=on_log)
+    if on_log:
+        on_log(f"[loc][mix] MIX_OUTPUT_SEC={output_sec if output_sec is not None else 'n/a'}")
 
 
 def mux(
@@ -614,9 +644,27 @@ def burn_subtitles(
     video_in: Path,
     subtitle_ass: Path,
     output_mp4: Path,
+    fonts_dir: Optional[Path] = None,
     on_log: Optional[Callable[[str], None]] = None,
 ) -> None:
     output_mp4.parent.mkdir(parents=True, exist_ok=True)
+    def _escape_filter_path(p: Path) -> str:
+        # libass filter parser expects escaped ":" and forward slashes.
+        resolved = p.resolve()
+        s = str(resolved)
+        if os.name == "nt" and len(s) > 1 and s[1] == ":":
+            try:
+                s = os.path.relpath(s, Path.cwd())
+            except Exception:
+                s = str(resolved)
+        s = s.replace("\\", "/")
+        return s.replace(":", r"\:")
+
+    subtitle_filter = f"ass={_escape_filter_path(subtitle_ass)}"
+    if fonts_dir is not None:
+        subtitle_filter = f"ass={_escape_filter_path(subtitle_ass)}:fontsdir={_escape_filter_path(fonts_dir)}"
+    if on_log:
+        on_log(f"[loc][ass] ASS_BURN_SUBTITLE_PATH={subtitle_ass}")
     cmd = [
         "ffmpeg",
         "-hide_banner",
@@ -625,7 +673,7 @@ def burn_subtitles(
         "-i",
         str(video_in),
         "-vf",
-        f"ass={subtitle_ass}",
+        subtitle_filter,
         "-c:v",
         "libx264",
         "-preset",
