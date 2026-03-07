@@ -842,23 +842,25 @@ class LocalizationEngine:
                 }
             end_step("synthesizing", step)
 
-            step = mark_step("rendering", "RENDERING", 78)
+            mixed_wav = workspace / "mixed.wav"
+            localized_mp4_path = workspace / "localized.mp4"
+            source_video_duration_sec = _probe_duration(source_video)
+            mixed_audio_duration_sec = None
+
+            step = mark_step("rendering_audio", "RENDERING_AUDIO", 78)
             try:
-                mixed_wav = workspace / "mixed.wav"
-                localized_mp4_path = workspace / "localized.mp4"
-                source_video_duration_sec = _probe_duration(source_video)
-                on_log(f"[loc][render] source_video_size={source_video.stat().st_size if source_video.exists() else 'missing'}")
-                on_log(f"[loc][render] audio_wav_size={audio_wav.stat().st_size if audio_wav.exists() else 'missing'}")
+                on_log(f"[loc][render_audio] source_video_size={source_video.stat().st_size if source_video.exists() else 'missing'}")
+                on_log(f"[loc][render_audio] audio_wav_size={audio_wav.stat().st_size if audio_wav.exists() else 'missing'}")
                 on_log(
-                    f"[loc][render] dub_mp3_size={dub_mp3_path.stat().st_size if (dub_mp3_path and dub_mp3_path.exists()) else 'n/a'}"
+                    f"[loc][render_audio] dub_mp3_size={dub_mp3_path.stat().st_size if (dub_mp3_path and dub_mp3_path.exists()) else 'n/a'}"
                 )
                 on_log(
-                    f"[loc][render] ffmpeg_timeouts="
+                    f"[loc][render_audio] ffmpeg_timeouts="
                     f"mix={os.getenv('FFMPEG_TIMEOUT_SEC_MIX','180')} "
                     f"mux={os.getenv('FFMPEG_TIMEOUT_SEC_MUX','180')}"
                 )
                 on_log(
-                    "[loc][render] mix_start "
+                    "[loc][render_audio] mix_start "
                     f"source_video={source_video} exists={source_video.exists()} size={_file_size(source_video)} "
                     f"audio_wav={audio_wav} exists={audio_wav.exists()} size={_file_size(audio_wav)} "
                     f"dub_mp3={dub_mp3_path} exists={bool(dub_mp3_path and dub_mp3_path.exists())} "
@@ -873,7 +875,7 @@ class LocalizationEngine:
                     mix_ducking(audio_wav, dub_mp3_path, mixed_wav, preserve_bgm=preserve_bgm, ducking=ducking, on_log=on_log)
                 mixed_audio_duration_sec = _probe_duration(mixed_wav)
                 on_log(
-                    "[loc][render] mix_end "
+                    "[loc][render_audio] mix_end "
                     f"elapsed_ms={int((time.perf_counter() - mix_started) * 1000)} "
                     f"mixed_wav={mixed_wav} exists={mixed_wav.exists()} size={_file_size(mixed_wav)} "
                     f"mixed_audio_sec={mixed_audio_duration_sec if mixed_audio_duration_sec is not None else 'n/a'}"
@@ -884,15 +886,31 @@ class LocalizationEngine:
                     f"dub_audio_sec={dub_duration_sec if dub_duration_sec is not None else 'n/a'} "
                     f"mixed_audio_sec={mixed_audio_duration_sec if mixed_audio_duration_sec is not None else 'n/a'}"
                 )
+            except Exception as render_exc:
                 on_log(
-                    "[loc][render] mux_start "
+                    f"[loc][render_audio] rendering_audio_exception type={type(render_exc).__name__} msg={render_exc}"
+                )
+                raise
+            end_step("rendering_audio", step)
+
+            step = mark_step("building_subtitle", "BUILDING_SUBTITLE", 83)
+            subtitle_segment_count = _segment_count(target_srt_path.read_text(encoding="utf-8")) if target_srt_path.exists() else 0
+            on_log(
+                f"[loc] step=building_subtitle details target_srt={target_srt_path.exists()} segments={subtitle_segment_count}"
+            )
+            end_step("building_subtitle", step)
+
+            step = mark_step("burning_subtitle", "BURNING_SUBTITLE", 87)
+            try:
+                on_log(
+                    "[loc][burn_subtitle] mux_start "
                     f"output={localized_mp4_path} source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'}"
                 )
                 mux_started = time.perf_counter()
                 mux(source_video, mixed_wav, localized_mp4_path, source_video_duration_sec=source_video_duration_sec, on_log=on_log)
                 output_video_duration_sec = _probe_duration(localized_mp4_path)
                 on_log(
-                    "[loc][render] mux_end "
+                    "[loc][burn_subtitle] mux_end "
                     f"elapsed_ms={int((time.perf_counter() - mux_started) * 1000)} "
                     f"output_exists={localized_mp4_path.exists()} size={_file_size(localized_mp4_path)} "
                     f"output_video_sec={output_video_duration_sec if output_video_duration_sec is not None else 'n/a'}"
@@ -913,15 +931,15 @@ class LocalizationEngine:
                     )
             except Exception as render_exc:
                 on_log(
-                    f"[loc][render] rendering_exception type={type(render_exc).__name__} msg={render_exc}"
+                    f"[loc][burn_subtitle] burning_subtitle_exception type={type(render_exc).__name__} msg={render_exc}"
                 )
                 on_log(
-                    f"[loc][render] rendering_exception_types "
+                    f"[loc][burn_subtitle] rendering_exception_types "
                     f"source_video={type(source_video).__name__} audio_wav={type(audio_wav).__name__} "
                     f"dub_mp3={type(dub_mp3_path).__name__} mixed_wav={type(mixed_wav).__name__}"
                 )
                 raise
-            end_step("rendering", step)
+            end_step("burning_subtitle", step)
 
             step = mark_step("uploading", "UPLOADING", 90)
             output_key = f"outputs/{task_id}/localized.mp4"
