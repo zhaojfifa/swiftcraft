@@ -50,7 +50,11 @@ def _extract_avatar_image_key(payload: Dict[str, Any]) -> Optional[str]:
     inputs = payload.get("inputs")
     if not isinstance(inputs, dict):
         return None
-    raw = inputs.get("character_image") or inputs.get("character_image_key")
+    raw = (
+        inputs.get("character_image")
+        or inputs.get("character_image_url")
+        or inputs.get("character_image_key")
+    )
     if not raw:
         return None
     return str(raw).strip() or None
@@ -108,8 +112,8 @@ def _normalize_localization_inputs(payload: Dict[str, Any], mode: str) -> tuple[
 
 
 def _service_type_from_legacy(service: str) -> ServiceType:
-    if service == "avatar":
-        return ServiceType.avatar_transfer
+    if service in {"avatar", "action_replica"}:
+        return ServiceType.action_replica
     if service == "localization":
         return ServiceType.localization
     return ServiceType.face_swap
@@ -208,7 +212,7 @@ class TaskService:
         return os.getenv("SWIFT_AVATAR_ENABLED", "0").strip().lower() in ("1", "true", "yes")
 
     def _resolve_provider(self, service: str, payload: Dict[str, Any], mode: str) -> str:
-        if service == "avatar":
+        if service in {"avatar", "action_replica"}:
             if not self._avatar_enabled():
                 return "mock"
             return "wan26_r2v" if mode == "intelligent" else "wan26_flash"
@@ -243,21 +247,26 @@ class TaskService:
                 has_avatar_image = (
                     isinstance(avatar_inputs, dict)
                     and bool(
-                        str(avatar_inputs.get("character_image") or avatar_inputs.get("character_image_key") or "").strip()
+                        str(
+                            avatar_inputs.get("character_image")
+                            or avatar_inputs.get("character_image_url")
+                            or avatar_inputs.get("character_image_key")
+                            or ""
+                        ).strip()
                     )
                 )
                 has_input_image_url = bool(str(payload.get("input_image_url") or "").strip())
-                if service_type_raw == "avatar_transfer" and not has_avatar_image and not has_input_image_url:
+                if service_type_raw in {"avatar_transfer", "action_replica"} and not has_avatar_image and not has_input_image_url:
                     raise HTTPException(
                         status_code=400,
-                        detail="avatar requires inputs.character_image (or input_image_url)",
+                        detail="action_replica requires inputs.character_image_url (or input_image_url)",
                     ) from exc
                 raise HTTPException(status_code=400, detail=f"Invalid task payload: {exc.errors()}") from exc
             service_type = parsed.service_type
             mode = parsed.mode
             if service_type == ServiceType.face_swap:
                 service = "swap"
-            elif service_type == ServiceType.avatar_transfer:
+            elif service_type in {ServiceType.action_replica, ServiceType.avatar_transfer}:
                 service = "avatar"
             else:
                 service = "localization"
@@ -272,6 +281,9 @@ class TaskService:
         resolved_service = (service or "swap").lower()
         resolved_mode = (mode or "baseline").lower()
         resolved_service_type = _service_type_from_legacy(resolved_service)
+        # Runtime service key stays `avatar` for engine/store compatibility.
+        if resolved_service == "action_replica":
+            resolved_service = "avatar"
         avatar_image_key = _extract_avatar_image_key(payload) if resolved_service == "avatar" else None
         avatar_prompt = _extract_avatar_prompt(payload) if resolved_service == "avatar" else None
         localization_inputs: Dict[str, Any] = {}
@@ -312,7 +324,7 @@ class TaskService:
                 else:
                     raise HTTPException(
                         status_code=400,
-                        detail="avatar requires inputs.character_image (or input_image_url)",
+                        detail="action_replica requires inputs.character_image_url (or input_image_url)",
                     )
             if resolved_service == "avatar" and not input_video_url and input_key:
                 input_video_url = self._public_url_from_key(input_key)
@@ -337,7 +349,7 @@ class TaskService:
             )
             if resolved_service == "avatar":
                 logger.info(
-                    "[inputs] avatar input_image_key=%s input_image_url=%s",
+                    "[inputs] action_replica input_image_key=%s input_image_url=%s (legacy_service=avatar)",
                     record.input_image_key,
                     record.input_image_url,
                 )
@@ -372,7 +384,7 @@ class TaskService:
             else:
                 raise HTTPException(
                     status_code=400,
-                    detail="avatar requires inputs.character_image (or input_image_url)",
+                    detail="action_replica requires inputs.character_image_url (or input_image_url)",
                 )
         if resolved_service == "avatar" and not input_video_url and input_key:
             input_video_url = self._public_url_from_key(input_key)
@@ -394,7 +406,7 @@ class TaskService:
         )
         if resolved_service == "avatar":
             logger.info(
-                "[inputs] avatar input_image_key=%s input_image_url=%s",
+                "[inputs] action_replica input_image_key=%s input_image_url=%s (legacy_service=avatar)",
                 record.input_image_key,
                 record.input_image_url,
             )
@@ -415,7 +427,7 @@ class TaskService:
         provider = str((record.metadata or {}).get("provider") or "").strip().lower()
         if provider:
             return provider
-        if record.service == "avatar":
+        if record.service in {"avatar", "action_replica"}:
             if not self._avatar_enabled():
                 return "mock"
             return "wan26_r2v" if record.mode == "intelligent" else "wan26_flash"

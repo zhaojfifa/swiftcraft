@@ -14,7 +14,7 @@ export default function WorkspaceClient() {
     return <LocalizationClient />;
   }
 
-  if (service === "avatar") {
+  if (service === "action_replica" || service === "avatar") {
     return <AvatarClient />;
   }
 

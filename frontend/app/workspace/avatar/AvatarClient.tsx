@@ -3,5 +3,5 @@
 import SwapClient from "../swap/SwapClient";
 
 export default function AvatarClient() {
-  return <SwapClient service="avatar" />;
+  return <SwapClient service="action_replica" />;
 }

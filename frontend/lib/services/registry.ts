@@ -1,4 +1,4 @@
-export type ServiceId = "swap" | "avatar" | "localization";
+export type ServiceId = "swap" | "action_replica" | "localization";
 export type InputFieldType = "video" | "image" | "select" | "text";
 
 export type ServiceInput = {
@@ -51,11 +51,11 @@ export const SERVICE_REGISTRY: ServiceConfig[] = [
     }
   },
   {
-    id: "avatar",
-    title: "Avatar",
-    description: "Generate a stylized avatar track with adaptive lighting.",
+    id: "action_replica",
+    title: "Action Replica",
+    description: "Replace character identity while preserving motion and camera rhythm.",
     badge: "Active",
-    route: "/workspace?service=avatar",
+    route: "/workspace?service=action_replica",
     enabled: true,
     inputs: [
       { id: "character_image", type: "image", label: "Character Image" },

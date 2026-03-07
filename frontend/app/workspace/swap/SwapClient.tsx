@@ -26,13 +26,13 @@ function shouldStopPolling(current: TaskRecord | null) {
 }
 
 type Props = {
-  service?: "swap" | "avatar";
+  service?: "swap" | "action_replica" | "avatar";
 };
 
 export default function SwapClient({ service = "swap" }: Props) {
   const serviceType = service;
   const isSwap = serviceType === "swap";
-  const isAvatar = serviceType === "avatar";
+  const isAvatar = serviceType === "action_replica" || serviceType === "avatar";
 
   const [mode, setMode] = useState<SwapMode>("intelligent");
   const [inputSource, setInputSource] = useState<"preset" | "upload">("preset");
@@ -323,11 +323,14 @@ export default function SwapClient({ service = "swap" }: Props) {
     const characterKey = overrides?.characterKey || (await uploadFileToR2(imageFile as File));
     const motionKey = overrides?.motionKey || (await uploadFileToR2(videoFile as File));
     return createTask({
-      service_type: "avatar_transfer",
+      service_type: "action_replica",
       model_id: "kling-v2.6-std-motion",
       mode: overrides?.modeOverride || modeApi,
       input_key: motionKey,
       inputs: {
+        character_image_url: characterKey,
+        source_video_url: motionKey,
+        // legacy aliases kept for backward compatibility
         character_image: characterKey,
         motion_video: motionKey,
         character_orientation: orientation,
@@ -343,7 +346,7 @@ export default function SwapClient({ service = "swap" }: Props) {
       return;
     }
     if (isAvatar && (!imageFile || !videoFile)) {
-      setError("Please upload a character image and motion video for avatar mode.");
+      setError("Please upload a character image and source video for action replica mode.");
       return;
     }
     setError(null);
@@ -403,11 +406,13 @@ export default function SwapClient({ service = "swap" }: Props) {
     : (inputSource === "preset" || Boolean(videoFile)) && !isRunning;
   const payloadPreview = isAvatar
     ? {
-        service_type: "avatar_transfer",
+        service_type: "action_replica",
         model_id: "kling-v2.6-std-motion",
         mode: modeApi,
         input_key: "(motion key)",
         inputs: {
+          character_image_url: "(character key)",
+          source_video_url: "(motion key)",
           character_image: "(character key)",
           motion_video: "(motion key)",
           character_orientation: orientation,
@@ -429,7 +434,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     ? [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"avatar_transfer\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${modeApi}\",\"input_key\":\"<motion_key>\",\"inputs\":{\"character_image\":\"<character_key>\",\"motion_video\":\"<motion_key>\",\"character_orientation\":\"${orientation}\"}}'`
+        `  -d '{\"service_type\":\"action_replica\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${modeApi}\",\"input_key\":\"<source_key>\",\"inputs\":{\"character_image_url\":\"<character_key>\",\"source_video_url\":\"<source_key>\",\"character_orientation\":\"${orientation}\"}}'`
       ].join(" \\\n")
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
