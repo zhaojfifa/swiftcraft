@@ -26,6 +26,9 @@ def get_engine(provider: str):
     if normalized in ("localization_intelligent", "localization-intelligent"):
         # Contract placeholder: runtime falls back to mock until lipsync provider is wired.
         return MockEngine()
+    if normalized in ("fal_pixverse_swap", "pixverse_swap"):
+        # Scene swap baseline contract placeholder.
+        return MockEngine()
     if normalized == "real":
         return RealEngine()
     if normalized == "akool":

@@ -289,6 +289,17 @@ class TaskService:
             return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_BASELINE", "wan26_r2v").strip() or "wan26_r2v")
         if service == "localization":
             return "localization_basic" if mode == "baseline" else "localization_intelligent"
+        if service == "swap":
+            inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+            requested = str((inputs or {}).get("provider") or payload.get("provider") or "").strip().lower()
+            subtype = str(payload.get("subtype") or "scene").strip().lower()
+            if subtype == "scene":
+                if requested in {"fal_pixverse_swap", "pixverse_swap"}:
+                    return "fal_pixverse_swap"
+                return (os.getenv("SWIFT_SWAP_SCENE_PROVIDER", "fal_pixverse_swap").strip() or "fal_pixverse_swap")
+            if requested:
+                return requested
+            return (os.getenv("SWIFT_SWAP_FACE_PROVIDER", "mock").strip() or "mock")
         return str(payload.get("provider") or self._default_provider()).strip().lower()
 
     def _public_url_from_key(self, key: str) -> str:
@@ -575,7 +586,15 @@ class TaskService:
                 return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_INTELLIGENT", "wan26_r2v").strip() or "wan26_r2v")
             return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_BASELINE", "wan26_r2v").strip() or "wan26_r2v")
         if record.service == "localization":
-            return "localization_basic" if record.mode == "baseline" else "mock"
+            return "localization_basic" if record.mode == "baseline" else "localization_intelligent"
+        if record.service == "swap":
+            snapshot = (record.metadata or {}).get("run_config_snapshot")
+            subtype = ""
+            if isinstance(snapshot, dict):
+                subtype = str(snapshot.get("subtype") or "").strip().lower()
+            if subtype == "scene":
+                return (os.getenv("SWIFT_SWAP_SCENE_PROVIDER", "fal_pixverse_swap").strip() or "fal_pixverse_swap")
+            return (os.getenv("SWIFT_SWAP_FACE_PROVIDER", "mock").strip() or "mock")
         return self._default_provider()
 
     def _engine_watchdog_timeout_sec(self, engine: Any | None = None) -> int:

@@ -27,6 +27,19 @@ POST /api/v1/tasks
   "input_key": "presets/swap/baseline.mp4"
 }
 
+Swap Scene (typed)
+POST /api/v1/tasks
+{
+  "service_type": "swap",
+  "subtype": "scene",
+  "mode": "baseline",
+  "inputs": {
+    "provider": "fal_pixverse_swap",
+    "source_video_url": "https://cdn.example/uploads/<source>.mp4",
+    "target_image_url": "https://cdn.example/uploads/<target>.png"
+  }
+}
+
 Action Replica (typed)
 POST /api/v1/tasks
 {
