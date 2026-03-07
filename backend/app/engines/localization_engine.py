@@ -36,6 +36,7 @@ from app.utils.ffmpeg_localization import (
     trim_audio_for_asr,
     write_silence_audio,
     concat_audio_files,
+    export_audio_mp3,
 )
 from app.utils.subtitle_builder import build_ass_from_segments, build_srt_from_segments, resolve_ass_font
 from app.utils.translate_gemini import (
@@ -120,11 +121,12 @@ class LocalizationEngine:
             return rms is None or rms <= -80.0
 
         def _synthesize_segment_audio(seg_path: Path, text: str, seg_index: int) -> tuple[float, float]:
+            raw_tts_mp3 = seg_path.with_suffix(".provider.mp3")
             synthesize_mp3(
                 text,
                 voice_id=voice_id,
                 provider="azure-speech",
-                output_path=seg_path,
+                output_path=raw_tts_mp3,
                 speed=voice_speed,
                 target_lang=target_lang,
                 logger=on_log,
@@ -138,6 +140,14 @@ class LocalizationEngine:
                 f"output_format={tts_status.get('requested_output_format','')} "
                 f"resolved_voice={tts_status.get('resolved_voice','')}"
             )
+            try:
+                render_audio_track(raw_tts_mp3, seg_path, dub_gain=1.0, on_log=on_log)
+            except Exception as transcode_exc:
+                on_log(
+                    f"[loc][tts][warn] segment_transcode_fallback index={seg_index} "
+                    f"type={type(transcode_exc).__name__} msg={transcode_exc}"
+                )
+                seg_path.write_bytes(raw_tts_mp3.read_bytes())
             _log_audio_diagnostics(f"segment_{seg_index:03d}_post_tts", seg_path)
             rms, peak = _probe_audio_stats(seg_path)
             if rms is None or (peak is not None and peak <= -80.0) or (rms is not None and rms <= -80.0):
@@ -692,12 +702,12 @@ class LocalizationEngine:
                     # Preserve timing gaps before each segment.
                     gap_sec = max(0.0, seg_start - cursor_sec)
                     if gap_sec > 0.01:
-                        gap_path = workspace / f"segment_gap_{idx:03d}.mp3"
+                        gap_path = workspace / f"segment_gap_{idx:03d}.wav"
                         write_silence_audio(gap_path, gap_sec, on_log=on_log)
                         segment_assets.append(gap_path)
                         cursor_sec += gap_sec
 
-                    seg_path = workspace / f"segment_{idx:03d}.mp3"
+                    seg_path = workspace / f"segment_{idx:03d}.wav"
                     seg_retry_used = False
                     expand_retry_used = False
                     seg_atempo = 1.0
@@ -765,7 +775,7 @@ class LocalizationEngine:
                     if ratio > atempo_threshold and tts_sec > 0 and target_sec > 0:
                         if ultra_short_mode:
                             on_log(f"[loc] TTS_ULTRA_SHORT_ATEMPO_ESCALATED index={idx}")
-                        aligned_seg = workspace / f"segment_{idx:03d}_aligned.mp3"
+                        aligned_seg = workspace / f"segment_{idx:03d}_aligned.wav"
                         try:
                             stretch_audio_to_duration(seg_path, aligned_seg, target_sec, on_log=on_log)
                             seg_atempo = tts_sec / target_sec
@@ -789,7 +799,7 @@ class LocalizationEngine:
                         # Light pad only (do not aggressively stretch).
                         pad_sec = min(max(0.0, target_sec - tts_sec), target_sec * 0.3)
                         if pad_sec > 0.01:
-                            pad_path = workspace / f"segment_pad_{idx:03d}.mp3"
+                            pad_path = workspace / f"segment_pad_{idx:03d}.wav"
                             write_silence_audio(pad_path, pad_sec, on_log=on_log)
                             segment_assets.append(seg_path)
                             segment_assets.append(pad_path)
@@ -848,7 +858,7 @@ class LocalizationEngine:
                 if not segment_assets:
                     raise EngineRunError("TTS_TEXT_EMPTY: empty text passed to synthesizer")
 
-                dub_mp3_path = workspace / "dub.mp3"
+                dub_mp3_path = workspace / "dub.wav"
                 concat_audio_files(segment_assets, dub_mp3_path, on_log=on_log)
                 _log_audio_diagnostics("dub_mp3", dub_mp3_path)
                 dub_duration_sec = _probe_duration(dub_mp3_path)
@@ -858,7 +868,7 @@ class LocalizationEngine:
                     and source_video_duration_sec_for_tts > 0
                     and dub_duration_sec > source_video_duration_sec_for_tts * 1.03
                 ):
-                    aligned_mp3 = workspace / "dub_aligned.mp3"
+                    aligned_mp3 = workspace / "dub_aligned.wav"
                     target_total = source_video_duration_sec_for_tts * 0.99
                     stretch_audio_to_duration(dub_mp3_path, aligned_mp3, target_total, on_log=on_log)
                     dub_mp3_path = aligned_mp3
@@ -868,6 +878,8 @@ class LocalizationEngine:
                 on_log(f"[loc] DUB_TOTAL_SEC_AFTER_ALIGN={dub_duration_sec if dub_duration_sec is not None else 'n/a'}")
                 on_log(f"[loc] DUB_ALIGNMENT_STRATEGY={alignment_strategy}")
                 tts_text_strategy = alignment_strategy
+                dub_aligned_rms = audio_rms_db(dub_mp3_path, on_log=on_log)
+                on_log(f"[loc] DUB_ALIGNED_RMS_DB={dub_aligned_rms if dub_aligned_rms is not None else 'n/a'}")
                 if _is_audio_silent(dub_mp3_path):
                     raise EngineRunError(
                         f"TTS_SILENT_AUDIO: silent dub track before rendering_audio path={dub_mp3_path}"
@@ -974,6 +986,8 @@ class LocalizationEngine:
                     f"mixed_audio_sec={mixed_audio_duration_sec if mixed_audio_duration_sec is not None else 'n/a'}"
                 )
                 _log_audio_diagnostics("mixed_wav", mixed_wav)
+                mixed_wav_rms = audio_rms_db(mixed_wav, on_log=on_log)
+                on_log(f"[loc] MIXED_WAV_RMS_DB={mixed_wav_rms if mixed_wav_rms is not None else 'n/a'}")
                 on_log(
                     "[loc][duration] pre_mux "
                     f"source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'} "
@@ -1011,6 +1025,9 @@ class LocalizationEngine:
                     on_log=on_log,
                 )
                 _log_audio_diagnostics("localized_audio_only_mp4", localized_audio_only_path)
+                muxed_rms = audio_rms_db(localized_audio_only_path, on_log=on_log)
+                on_log(f"[loc] MUXED_AUDIO_RMS_DB={muxed_rms if muxed_rms is not None else 'n/a'}")
+                on_log(f"[loc] MUXED_AUDIO_SIZE_BYTES={_file_size(localized_audio_only_path)}")
                 on_log(
                     "[loc][burn_subtitle] burn_ass_start "
                     f"video_in={localized_audio_only_path} subtitle_ass={target_ass_path} output={localized_mp4_path}"
@@ -1104,10 +1121,13 @@ class LocalizationEngine:
             audio_key = None
             audio_url = None
             if dub_mp3_path is not None:
-                audio_ext = ".mp3" if dub_mp3_path.suffix.lower() != ".wav" else ".wav"
-                audio_key = f"outputs/{task_id}/dub{audio_ext}"
-                audio_content_type = "audio/wav" if audio_ext == ".wav" else "audio/mpeg"
-                audio_url = self.r2.upload_bytes(audio_key, dub_mp3_path.read_bytes(), content_type=audio_content_type)
+                dub_export_mp3 = workspace / "dub.mp3"
+                if dub_mp3_path.suffix.lower() == ".mp3":
+                    dub_export_mp3.write_bytes(dub_mp3_path.read_bytes())
+                else:
+                    export_audio_mp3(dub_mp3_path, dub_export_mp3, on_log=on_log)
+                audio_key = f"outputs/{task_id}/dub.mp3"
+                audio_url = self.r2.upload_bytes(audio_key, dub_export_mp3.read_bytes(), content_type="audio/mpeg")
             manifest_url = self.r2.public_url(manifest_key)
 
             total_latency_ms = int((time.perf_counter() - started) * 1000)
