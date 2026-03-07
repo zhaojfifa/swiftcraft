@@ -477,6 +477,31 @@ def render_with_original_audio(video_in: Path, output_wav: Path, on_log: Optiona
     )
 
 
+def render_audio_track(audio_in: Path, output_wav: Path, on_log: Optional[Callable[[str], None]] = None) -> None:
+    output_wav.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-i",
+        str(audio_in),
+        "-ac",
+        "1",
+        "-ar",
+        "48000",
+        "-c:a",
+        "pcm_s16le",
+        str(output_wav),
+    ]
+    run_ffmpeg(
+        cmd,
+        timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_RENDER_AUDIO", "120")),
+        tag="ffmpeg_render_dub_only",
+        on_log=on_log,
+    )
+
+
 def extract_audio(video_path: Path, wav_out: Path, on_log: Optional[Callable[[str], None]] = None) -> None:
     wav_out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -502,6 +527,8 @@ def mix_ducking(
     mixed_wav_out: Path,
     preserve_bgm: bool = True,
     ducking: bool = True,
+    bgm_gain: float = 0.28,
+    dub_gain: float = 1.20,
     on_log: Optional[Callable[[str], None]] = None,
 ) -> None:
     mixed_wav_out.parent.mkdir(parents=True, exist_ok=True)
@@ -541,20 +568,25 @@ def mix_ducking(
             "[0:a]aresample=16000,asetpts=N/SR/TB[bgm];"
             "[1:a]aresample=16000,asetpts=N/SR/TB,asplit=2[dub_sc][dub_mix];"
             "[bgm][dub_sc]sidechaincompress=threshold=0.015:ratio=12:attack=10:release=350[ducked];"
-            "[ducked]volume=0.28[ducked_low];"
-            "[dub_mix]volume=1.20[dub_hot];"
+            f"[ducked]volume={bgm_gain:.3f}[ducked_low];"
+            f"[dub_mix]volume={dub_gain:.3f}[dub_hot];"
             "[ducked_low][dub_hot]amix=inputs=2:duration=longest:normalize=0,aresample=48000[a]"
         )
         mix_strategy = "duck_then_amix"
-        mix_weights = "ducked_gain=0.28,dub_gain=1.20,threshold=0.015,ratio=12,attack=10,release=350"
+        mix_weights = (
+            f"ducked_gain={bgm_gain:.3f},dub_gain={dub_gain:.3f},"
+            "threshold=0.015,ratio=12,attack=10,release=350"
+        )
     else:
         filter_complex = (
             "[0:a]aresample=16000[a0];"
             "[1:a]aresample=16000[a1];"
-            "[a0][a1]amix=inputs=2:duration=longest:weights=0.80 1.00,aresample=48000[a]"
+            f"[a0]volume={bgm_gain:.3f}[a0v];"
+            f"[a1]volume={dub_gain:.3f}[a1v];"
+            "[a0v][a1v]amix=inputs=2:duration=longest:normalize=0,aresample=48000[a]"
         )
         mix_strategy = "amix_no_duck"
-        mix_weights = "bgm=0.80,dub=1.00"
+        mix_weights = f"bgm_gain={bgm_gain:.3f},dub_gain={dub_gain:.3f}"
     cmd = [
         "ffmpeg",
         "-hide_banner",

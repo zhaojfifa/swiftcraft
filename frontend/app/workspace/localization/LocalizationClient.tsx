@@ -15,6 +15,7 @@ const TERMINAL_STATUSES = new Set(["succeeded", "failed", "done"]);
 type TopTab = "playground" | "json" | "api";
 type OutputTab = "video" | "subtitles" | "audio" | "manifest";
 type Mode = "baseline" | "intelligent";
+type AudioStrategy = "mute_original" | "keep_bgm" | "duck_original";
 
 type OutputMap = {
   video_url?: string;
@@ -92,8 +93,10 @@ export default function LocalizationClient() {
   const [targetLang, setTargetLang] = useState("my");
   const [voiceId, setVoiceId] = useState("mm_female_1");
   const [subtitleMode, setSubtitleMode] = useState<"sidecar" | "burned">("burned");
-  const [preserveBgm, setPreserveBgm] = useState(true);
-  const [ducking, setDucking] = useState(true);
+  const [audioStrategy, setAudioStrategy] = useState<AudioStrategy>("mute_original");
+  const [dubGain, setDubGain] = useState(1.0);
+  const [bgmGain, setBgmGain] = useState(0.28);
+  const [voiceSpeed, setVoiceSpeed] = useState(1.0);
   const [lipsyncEnabled, setLipsyncEnabled] = useState(false);
   const [lipsyncScope, setLipsyncScope] = useState<"face" | "full">("face");
 
@@ -246,8 +249,12 @@ export default function LocalizationClient() {
           target_lang: targetLang,
           voice_id: voiceId,
           subtitle_mode: subtitleMode,
-          preserve_bgm: preserveBgm,
-          ducking,
+          audio_strategy: audioStrategy,
+          preserve_bgm: audioStrategy !== "mute_original",
+          ducking: audioStrategy === "duck_original",
+          dub_gain: dubGain,
+          bgm_gain: bgmGain,
+          voice_speed: voiceSpeed,
           lipsync_enabled: effectiveLipsyncEnabled,
           lipsync_scope: effectiveLipsyncEnabled ? lipsyncScope : undefined,
         },
@@ -272,8 +279,12 @@ export default function LocalizationClient() {
       target_lang: targetLang,
       voice_id: voiceId,
       subtitle_mode: subtitleMode,
-      preserve_bgm: preserveBgm,
-      ducking,
+      audio_strategy: audioStrategy,
+      preserve_bgm: audioStrategy !== "mute_original",
+      ducking: audioStrategy === "duck_original",
+      dub_gain: dubGain,
+      bgm_gain: bgmGain,
+      voice_speed: voiceSpeed,
       lipsync_enabled: mode === "intelligent" ? lipsyncEnabled : false,
       lipsync_scope: mode === "intelligent" && lipsyncEnabled ? lipsyncScope : null,
     },
@@ -347,10 +358,14 @@ export default function LocalizationClient() {
           setVoiceId={setVoiceId}
           subtitleMode={subtitleMode}
           setSubtitleMode={setSubtitleMode}
-          preserveBgm={preserveBgm}
-          setPreserveBgm={setPreserveBgm}
-          ducking={ducking}
-          setDucking={setDucking}
+          audioStrategy={audioStrategy}
+          setAudioStrategy={setAudioStrategy}
+          dubGain={dubGain}
+          setDubGain={setDubGain}
+          bgmGain={bgmGain}
+          setBgmGain={setBgmGain}
+          voiceSpeed={voiceSpeed}
+          setVoiceSpeed={setVoiceSpeed}
           lipsyncEnabled={lipsyncEnabled}
           setLipsyncEnabled={setLipsyncEnabled}
           lipsyncScope={lipsyncScope}

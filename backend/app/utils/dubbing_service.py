@@ -22,7 +22,13 @@ def _estimate_duration_sec(text: str) -> float:
     return max(1.5, words / 2.5)
 
 
-def _azure_tts_bytes(text: str, voice_id: str, timeout_sec: int, retries: int) -> bytes:
+def _azure_tts_bytes(
+    text: str,
+    voice_id: str,
+    timeout_sec: int,
+    retries: int,
+    speed: float = 1.0,
+) -> bytes:
     key = (os.getenv("AZURE_SPEECH_KEY") or "").strip()
     region = (os.getenv("AZURE_SPEECH_REGION") or "").strip()
     if not key or not region:
@@ -32,9 +38,11 @@ def _azure_tts_bytes(text: str, voice_id: str, timeout_sec: int, retries: int) -
         or "audio-24khz-48kbitrate-mono-mp3"
     )
     endpoint = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
+    rate_percent = max(-50, min(100, int(round((speed - 1.0) * 100))))
+    rate_attr = f"{rate_percent:+d}%"
     ssml = (
         "<speak version='1.0' xml:lang='en-US'>"
-        f"<voice name='{voice_id}'>{text}</voice>"
+        f"<voice name='{voice_id}'><prosody rate='{rate_attr}'>{text}</prosody></voice>"
         "</speak>"
     )
     timeout = httpx.Timeout(timeout_sec)
@@ -85,6 +93,7 @@ def synthesize_mp3(
     timeout_sec: int | None = None,
     retries: int | None = None,
     output_path: Path | None = None,
+    speed: float = 1.0,
 ) -> Path:
     out = output_path or Path.cwd() / "dub.mp3"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -95,7 +104,13 @@ def synthesize_mp3(
 
     if normalized_provider == "azure-speech":
         try:
-            content = _azure_tts_bytes(safe_text, voice_id=voice_id, timeout_sec=tts_timeout, retries=tts_retries)
+            content = _azure_tts_bytes(
+                safe_text,
+                voice_id=voice_id,
+                timeout_sec=tts_timeout,
+                retries=tts_retries,
+                speed=speed,
+            )
             out.write_bytes(content)
             if out.stat().st_size > 128:
                 return out

@@ -28,6 +28,7 @@ from app.utils.ffmpeg_localization import (
     normalize_audio_for_asr,
     probe_av_streams,
     probe_duration_sec,
+    render_audio_track,
     render_with_original_audio,
     speech_ratio_from_silencedetect,
     stretch_audio_to_duration,
@@ -168,8 +169,31 @@ class LocalizationEngine:
             target_lang = str((loc_inputs or {}).get("target_lang") or "my").strip().lower() or "my"
             voice_id = str((loc_inputs or {}).get("voice_id") or "mm_female_1")
             subtitle_mode = str((loc_inputs or {}).get("subtitle_mode") or "sidecar")
-            preserve_bgm = bool((loc_inputs or {}).get("preserve_bgm", True))
-            ducking = bool((loc_inputs or {}).get("ducking", True))
+            raw_audio_strategy = str((loc_inputs or {}).get("audio_strategy") or "").strip().lower()
+            if raw_audio_strategy in {"mute_original", "duck_original", "keep_bgm"}:
+                audio_strategy = raw_audio_strategy
+            elif ("preserve_bgm" in (loc_inputs or {})) or ("ducking" in (loc_inputs or {})):
+                preserve_bgm_legacy = bool((loc_inputs or {}).get("preserve_bgm", True))
+                ducking_legacy = bool((loc_inputs or {}).get("ducking", True))
+                if preserve_bgm_legacy and ducking_legacy:
+                    audio_strategy = "duck_original"
+                elif preserve_bgm_legacy:
+                    audio_strategy = "keep_bgm"
+                else:
+                    audio_strategy = "mute_original"
+            else:
+                audio_strategy = "mute_original"
+
+            original_audio_muted = audio_strategy == "mute_original"
+            preserve_bgm = audio_strategy in {"duck_original", "keep_bgm"}
+            ducking = audio_strategy == "duck_original"
+            dub_gain = float((loc_inputs or {}).get("dub_gain") or 1.0)
+            bgm_gain = float((loc_inputs or {}).get("bgm_gain") or 0.28)
+            voice_speed = float((loc_inputs or {}).get("voice_speed") or 1.0)
+            on_log(
+                f"[loc] audio_strategy={audio_strategy} original_audio_muted={str(original_audio_muted).lower()} "
+                f"dub_gain={dub_gain:.3f} bgm_gain={bgm_gain:.3f} voice_speed={voice_speed:.2f}"
+            )
 
             step = mark_step("analyzing", "ANALYZING", 5)
             source_url = (record.input_video_url or "").strip()
@@ -391,6 +415,11 @@ class LocalizationEngine:
                 "target_lang": target_lang,
                 "voice_id": voice_id,
                 "subtitle_mode": subtitle_mode,
+                "audio_strategy": audio_strategy,
+                "original_audio_muted": original_audio_muted,
+                "dub_gain": dub_gain,
+                "bgm_gain": bgm_gain,
+                "voice_speed": voice_speed,
                 "preserve_bgm": preserve_bgm,
                 "ducking": ducking,
                 "lipsync_enabled": False,
@@ -633,6 +662,7 @@ class LocalizationEngine:
                         voice_id=voice_id,
                         provider="azure-speech",
                         output_path=seg_path,
+                        speed=voice_speed,
                     )
                     tts_sec = _probe_duration(seg_path) or 0.0
                     ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
@@ -649,6 +679,7 @@ class LocalizationEngine:
                                 voice_id=voice_id,
                                 provider="azure-speech",
                                 output_path=seg_path,
+                                speed=voice_speed,
                             )
                             final_tts_text = shorter
                             tts_sec = _probe_duration(seg_path) or 0.0
@@ -672,6 +703,7 @@ class LocalizationEngine:
                                 voice_id=voice_id,
                                 provider="azure-speech",
                                 output_path=seg_path,
+                                speed=voice_speed,
                             )
                             final_tts_text = ultra_shorter
                             tts_sec = _probe_duration(seg_path) or 0.0
@@ -692,6 +724,7 @@ class LocalizationEngine:
                                 voice_id=voice_id,
                                 provider="azure-speech",
                                 output_path=seg_path,
+                                speed=voice_speed,
                             )
                             final_tts_text = shorter_again
                             tts_sec = _probe_duration(seg_path) or 0.0
@@ -712,6 +745,7 @@ class LocalizationEngine:
                                 voice_id=voice_id,
                                 provider="azure-speech",
                                 output_path=seg_path,
+                                speed=voice_speed,
                             )
                             final_tts_text = expanded
                             tts_sec = _probe_duration(seg_path) or tts_sec
@@ -887,14 +921,38 @@ class LocalizationEngine:
                     f"audio_wav={audio_wav} exists={audio_wav.exists()} size={_file_size(audio_wav)} "
                     f"dub_mp3={dub_mp3_path} exists={bool(dub_mp3_path and dub_mp3_path.exists())} "
                     f"dub_size={_file_size(dub_mp3_path) if dub_mp3_path else -1} "
-                    f"preserve_bgm={preserve_bgm} ducking={ducking} "
+                    f"audio_strategy={audio_strategy} original_audio_muted={str(original_audio_muted).lower()} "
+                    f"preserve_bgm={preserve_bgm} ducking={ducking} dub_gain={dub_gain:.3f} bgm_gain={bgm_gain:.3f} "
                     f"source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'}"
                 )
                 mix_started = time.perf_counter()
                 if no_subtitles:
                     render_with_original_audio(source_video, mixed_wav, on_log=on_log)
+                elif audio_strategy == "mute_original":
+                    on_log("[loc][render_audio] audio_strategy=mute_original original_audio_muted=true")
+                    try:
+                        render_audio_track(dub_mp3_path, mixed_wav, on_log=on_log)
+                    except Exception as dub_render_exc:
+                        on_log(
+                            f"[loc][render_audio][warn] dub_decode_failed_fallback_to_original "
+                            f"type={type(dub_render_exc).__name__} msg={dub_render_exc}"
+                        )
+                        render_with_original_audio(source_video, mixed_wav, on_log=on_log)
                 else:
-                    mix_ducking(audio_wav, dub_mp3_path, mixed_wav, preserve_bgm=preserve_bgm, ducking=ducking, on_log=on_log)
+                    on_log(
+                        f"[loc][render_audio] audio_strategy={audio_strategy} "
+                        f"original_audio_muted={str(original_audio_muted).lower()}"
+                    )
+                    mix_ducking(
+                        audio_wav,
+                        dub_mp3_path,
+                        mixed_wav,
+                        preserve_bgm=preserve_bgm,
+                        ducking=ducking,
+                        bgm_gain=bgm_gain,
+                        dub_gain=dub_gain,
+                        on_log=on_log,
+                    )
                 mixed_audio_duration_sec = _probe_duration(mixed_wav)
                 on_log(
                     "[loc][render_audio] mix_end "
@@ -1083,6 +1141,10 @@ class LocalizationEngine:
                 "subtitle_burned": True,
                 "subtitle_format": "ass",
                 "subtitle_mode": subtitle_mode,
+                "audio_strategy": audio_strategy,
+                "original_audio_muted": original_audio_muted,
+                "dub_gain": dub_gain,
+                "bgm_gain": bgm_gain,
                 "localized_audio_only_url": localized_audio_only_url,
                 "localized_final_url": output_url,
                 "outputs": outputs,

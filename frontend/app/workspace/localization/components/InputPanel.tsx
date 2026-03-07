@@ -3,6 +3,7 @@
 import { Copy, UploadCloud } from "lucide-react";
 
 type TopTab = "playground" | "json" | "api";
+type AudioStrategy = "mute_original" | "keep_bgm" | "duck_original";
 
 type Props = {
   mode: "baseline" | "intelligent";
@@ -17,10 +18,14 @@ type Props = {
   setVoiceId: (value: string) => void;
   subtitleMode: "sidecar" | "burned";
   setSubtitleMode: (mode: "sidecar" | "burned") => void;
-  preserveBgm: boolean;
-  setPreserveBgm: (value: boolean) => void;
-  ducking: boolean;
-  setDucking: (value: boolean) => void;
+  audioStrategy: AudioStrategy;
+  setAudioStrategy: (value: AudioStrategy) => void;
+  dubGain: number;
+  setDubGain: (value: number) => void;
+  bgmGain: number;
+  setBgmGain: (value: number) => void;
+  voiceSpeed: number;
+  setVoiceSpeed: (value: number) => void;
   lipsyncEnabled: boolean;
   setLipsyncEnabled: (value: boolean) => void;
   lipsyncScope: "face" | "full";
@@ -44,10 +49,14 @@ export default function InputPanel({
   setVoiceId,
   subtitleMode,
   setSubtitleMode,
-  preserveBgm,
-  setPreserveBgm,
-  ducking,
-  setDucking,
+  audioStrategy,
+  setAudioStrategy,
+  dubGain,
+  setDubGain,
+  bgmGain,
+  setBgmGain,
+  voiceSpeed,
+  setVoiceSpeed,
   lipsyncEnabled,
   setLipsyncEnabled,
   lipsyncScope,
@@ -227,14 +236,56 @@ export default function InputPanel({
 
             <div className="space-y-3">
               <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Audio Controls</label>
-              <label className="flex items-center gap-2 text-sm text-slate-700">
-                <input type="checkbox" checked={preserveBgm} onChange={(event) => setPreserveBgm(event.target.checked)} />
-                Preserve BGM
-              </label>
-              <label className="flex items-center gap-2 text-sm text-slate-700">
-                <input type="checkbox" checked={ducking} onChange={(event) => setDucking(event.target.checked)} />
-                Ducking
-              </label>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-500">Audio Strategy</label>
+                <select
+                  value={audioStrategy}
+                  onChange={(event) => setAudioStrategy(event.target.value as AudioStrategy)}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                >
+                  <option value="mute_original">Mute Original (Default)</option>
+                  <option value="keep_bgm">Keep BGM (Experimental)</option>
+                  <option value="duck_original">Duck Original (Experimental)</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-500">Dub Volume</label>
+                <input
+                  type="number"
+                  min={0.1}
+                  max={2}
+                  step={0.05}
+                  value={dubGain}
+                  onChange={(event) => setDubGain(Number(event.target.value) || 1)}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                />
+              </div>
+              {audioStrategy !== "mute_original" ? (
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-slate-500">BGM Volume</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={bgmGain}
+                    onChange={(event) => setBgmGain(Number(event.target.value) || 0.25)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                  />
+                </div>
+              ) : null}
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-500">Playback / Voice Speed</label>
+                <input
+                  type="number"
+                  min={0.7}
+                  max={1.3}
+                  step={0.05}
+                  value={voiceSpeed}
+                  onChange={(event) => setVoiceSpeed(Number(event.target.value) || 1)}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                />
+              </div>
             </div>
 
             {mode === "intelligent" ? (
