@@ -1169,6 +1169,12 @@ class LocalizationEngine:
             outputs["translation_qa"] = {"key": translation_qa_key, "url": translation_qa_url}
             outputs["tts_alignment_qa"] = {"key": tts_alignment_qa_key, "url": tts_alignment_qa_url}
             policy_flags = ["cannot_remove_burned_in_subtitles_baseline"]
+            tts_segment_alignment = tts_meta.get("segment_alignment", []) if isinstance(tts_meta, dict) else []
+            tts_warning_segments = 0
+            if isinstance(tts_segment_alignment, list):
+                for seg_row in tts_segment_alignment:
+                    if isinstance(seg_row, dict) and seg_row.get("warning_flags"):
+                        tts_warning_segments += 1
             manifest = {
                 "task_id": task_id,
                 "service": "localization",
@@ -1181,12 +1187,18 @@ class LocalizationEngine:
                 "original_audio_muted": original_audio_muted,
                 "dub_gain": dub_gain,
                 "bgm_gain": bgm_gain,
+                "voice_speed": voice_speed,
                 "localized_audio_only_url": localized_audio_only_url,
                 "localized_final_url": output_url,
                 "outputs": outputs,
                 "metrics": {
                     "elapsed_ms_by_step": metrics,
                     "total_latency_ms": total_latency_ms,
+                },
+                "qa_summary": {
+                    "translation_length_ratio_avg": translation_meta.get("length_ratio_avg"),
+                    "translation_length_ratio_max": translation_meta.get("length_ratio_max"),
+                    "tts_warning_segments": tts_warning_segments,
                 },
                 "run_config_snapshot": run_config_snapshot,
                 "translation": translation_meta,
@@ -1199,6 +1211,12 @@ class LocalizationEngine:
                     }
                 },
             }
+            on_log(
+                "[loc] MANIFEST_QA "
+                f"translation_ratio_avg={translation_meta.get('length_ratio_avg')} "
+                f"translation_ratio_max={translation_meta.get('length_ratio_max')} "
+                f"tts_warning_segments={tts_warning_segments}"
+            )
             self.r2.put_json(manifest_key, manifest)
             on_log("[loc] MANIFEST_WRITE ok")
             end_step("uploading", step)
@@ -1220,6 +1238,12 @@ class LocalizationEngine:
                     },
                     "run_config_snapshot": run_config_snapshot,
                     "manifest_preview": manifest,
+                    "audio_strategy": audio_strategy,
+                    "original_audio_muted": original_audio_muted,
+                    "dub_gain": dub_gain,
+                    "bgm_gain": bgm_gain,
+                    "voice_speed": voice_speed,
+                    "subtitle_mode": subtitle_mode,
                     "translation": translation_meta,
                     "transcription": transcription_meta,
                     "tts": tts_meta,
