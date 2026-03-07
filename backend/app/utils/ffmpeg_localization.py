@@ -393,6 +393,8 @@ def stretch_audio_to_duration(
     factors.append(cur)
     atempo = ",".join(f"atempo={max(0.5, min(2.0, f)):.6f}" for f in factors)
 
+    out_ext = output_audio.suffix.lower()
+    codec_args = ["-c:a", "pcm_s16le", "-ar", "48000", "-ac", "1"] if out_ext == ".wav" else ["-c:a", "libmp3lame", "-b:a", "64k"]
     cmd = [
         "ffmpeg",
         "-hide_banner",
@@ -402,10 +404,7 @@ def stretch_audio_to_duration(
         str(input_audio),
         "-filter:a",
         atempo,
-        "-c:a",
-        "libmp3lame",
-        "-b:a",
-        "64k",
+        *codec_args,
         str(output_audio),
     ]
     run_ffmpeg(
@@ -423,6 +422,8 @@ def write_silence_audio(
 ) -> None:
     output_audio.parent.mkdir(parents=True, exist_ok=True)
     dur = max(0.01, float(duration_sec))
+    out_ext = output_audio.suffix.lower()
+    codec_args = ["-c:a", "pcm_s16le", "-ar", "48000", "-ac", "1"] if out_ext == ".wav" else ["-c:a", "libmp3lame", "-b:a", "64k"]
     cmd = [
         "ffmpeg",
         "-hide_banner",
@@ -434,10 +435,7 @@ def write_silence_audio(
         "anullsrc=r=24000:cl=mono",
         "-t",
         f"{dur:.3f}",
-        "-c:a",
-        "libmp3lame",
-        "-b:a",
-        "64k",
+        *codec_args,
         str(output_audio),
     ]
     run_ffmpeg(
@@ -460,6 +458,12 @@ def concat_audio_files(
         escaped = str(p).replace("'", "'\\''")
         lines.append("file '" + escaped + "'")
     list_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    out_ext = output_audio.suffix.lower()
+    codec_args = (
+        ["-c:a", "pcm_s16le", "-ar", "48000", "-ac", "1"]
+        if out_ext == ".wav"
+        else ["-c:a", "libmp3lame", "-b:a", "64k", "-ar", "24000", "-ac", "1"]
+    )
     cmd = [
         "ffmpeg",
         "-hide_banner",
@@ -471,14 +475,7 @@ def concat_audio_files(
         "0",
         "-i",
         str(list_file),
-        "-ac",
-        "1",
-        "-ar",
-        "24000",
-        "-c:a",
-        "libmp3lame",
-        "-b:a",
-        "64k",
+        *codec_args,
         str(output_audio),
     ]
     run_ffmpeg(
@@ -542,6 +539,37 @@ def render_audio_track(
         cmd,
         timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_RENDER_AUDIO", "120")),
         tag="ffmpeg_render_dub_only",
+        on_log=on_log,
+    )
+
+
+def export_audio_mp3(
+    audio_in: Path,
+    output_mp3: Path,
+    on_log: Optional[Callable[[str], None]] = None,
+) -> None:
+    output_mp3.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-i",
+        str(audio_in),
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "64k",
+        "-ar",
+        "24000",
+        "-ac",
+        "1",
+        str(output_mp3),
+    ]
+    run_ffmpeg(
+        cmd,
+        timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_RENDER_AUDIO", "120")),
+        tag="ffmpeg_export_mp3",
         on_log=on_log,
     )
 
