@@ -88,6 +88,7 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
         return default
 
     prompt = str(data.get("prompt") or "").strip() or None
+    provider_hint = str(data.get("provider") or payload.get("provider") or "").strip().lower() or None
     return {
         "service_type": "action_replica",
         "mode": mode,
@@ -95,6 +96,7 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
         "preserve_camera": _to_bool(data.get("preserve_camera"), True),
         "preserve_motion": _to_bool(data.get("preserve_motion"), True),
         "preserve_timing": _to_bool(data.get("preserve_timing"), True),
+        "provider_hint": provider_hint,
         "prompt": prompt,
     }
 
@@ -275,6 +277,12 @@ class TaskService:
         if service in {"avatar", "action_replica"}:
             if not self._avatar_enabled():
                 return "mock"
+            inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+            requested = str((inputs or {}).get("provider") or payload.get("provider") or "").strip().lower()
+            if requested in {"fal_kling_action_replica", "kling_action_replica", "kling"}:
+                return "fal_kling_action_replica"
+            if requested in {"wan26_r2v", "wan26_action_replica", "wan26"}:
+                return "wan26_r2v"
             if mode == "intelligent":
                 return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_INTELLIGENT", "wan26_r2v").strip() or "wan26_r2v")
             return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_BASELINE", "wan26_r2v").strip() or "wan26_r2v")

@@ -34,6 +34,7 @@ POST /api/v1/tasks
   "model_id": "kling-v2.6-std-motion",
   "mode": "intelligent",
   "inputs": {
+    "provider": "wan26_r2v|fal_kling_action_replica",
     "character_image_url": "https://cdn.example/uploads/<character>.png",
     "source_video_url": "https://cdn.example/uploads/<source>.mp4",
     "prompt": "optional text"
@@ -49,9 +50,11 @@ POST /api/v1/tasks
   "inputs": {
     "target_lang": "my",
     "voice_id": "mm_female_1",
-    "subtitle_mode": "sidecar",
-    "preserve_bgm": true,
-    "ducking": true,
+    "subtitle_mode": "burned",
+    "audio_strategy": "mute_original|keep_bgm|duck_original",
+    "dub_gain": 1.0,
+    "bgm_gain": 0.0,
+    "voice_speed": 1.0,
     "lipsync_enabled": false
   }
 }
@@ -63,7 +66,7 @@ Response (TaskResponseOut)
   "model_id": "string|null",
   "mode": "string",
   "status": "queued|running|succeeded|failed",
-  "stage": "SUBMITTED|ANALYZING|EXTRACTING|TRANSCRIBING|TRANSLATING|SYNTHESIZING|DUBBING|RENDERING|UPLOADING|MAPPING|MERGING|FINALIZING|DONE|FAILED",
+  "stage": "SUBMITTED|ANALYZING|EXTRACTING|TRANSCRIBING|TRANSLATING|SYNTHESIZING|RENDERING_AUDIO|BUILDING_SUBTITLE|BURNING_SUBTITLE|UPLOADING|MAPPING|MERGING|FINALIZING|DONE|FAILED",
   "output_url": "string|null",
   "outputs": {
     "video_key": "string|null",

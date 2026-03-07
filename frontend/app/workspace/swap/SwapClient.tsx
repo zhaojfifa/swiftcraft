@@ -46,6 +46,9 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [preserveCamera, setPreserveCamera] = useState(true);
   const [preserveMotion, setPreserveMotion] = useState(true);
   const [preserveTiming, setPreserveTiming] = useState(true);
+  const [actionReplicaProvider, setActionReplicaProvider] = useState<"wan26_r2v" | "fal_kling_action_replica">(
+    "wan26_r2v",
+  );
   const [showPromptTips, setShowPromptTips] = useState(false);
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -331,16 +334,17 @@ export default function SwapClient({ service = "swap" }: Props) {
       mode: overrides?.modeOverride || modeApi,
       input_key: motionKey,
       inputs: {
+        provider: actionReplicaProvider,
         character_image_url: characterKey,
         source_video_url: motionKey,
         // legacy aliases kept for backward compatibility
         character_image: characterKey,
         motion_video: motionKey,
         character_orientation: orientation,
-        preserve_camera: preserveCamera,
-        preserve_motion: preserveMotion,
-        preserve_timing: preserveTiming,
-        prompt: prompt.trim() ? prompt.trim() : undefined
+          preserve_camera: preserveCamera,
+          preserve_motion: preserveMotion,
+          preserve_timing: preserveTiming,
+          prompt: prompt.trim() ? prompt.trim() : undefined
       }
     });
   };
@@ -417,6 +421,7 @@ export default function SwapClient({ service = "swap" }: Props) {
         mode: modeApi,
         input_key: "(motion key)",
         inputs: {
+          provider: actionReplicaProvider,
           character_image_url: "(character key)",
           source_video_url: "(motion key)",
           character_image: "(character key)",
@@ -443,7 +448,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     ? [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"action_replica\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${modeApi}\",\"input_key\":\"<source_key>\",\"inputs\":{\"character_image_url\":\"<character_key>\",\"source_video_url\":\"<source_key>\",\"preserve_camera\":${preserveCamera},\"preserve_motion\":${preserveMotion},\"preserve_timing\":${preserveTiming},\"character_orientation\":\"${orientation}\"}}'`
+        `  -d '{\"service_type\":\"action_replica\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${modeApi}\",\"input_key\":\"<source_key>\",\"inputs\":{\"provider\":\"${actionReplicaProvider}\",\"character_image_url\":\"<character_key>\",\"source_video_url\":\"<source_key>\",\"preserve_camera\":${preserveCamera},\"preserve_motion\":${preserveMotion},\"preserve_timing\":${preserveTiming},\"character_orientation\":\"${orientation}\"}}'`
       ].join(" \\\n")
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
@@ -841,6 +846,24 @@ export default function SwapClient({ service = "swap" }: Props) {
 
                     {isAvatar ? (
                       <>
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Provider
+                          </label>
+                          <select
+                            value={actionReplicaProvider}
+                            onChange={(event) =>
+                              setActionReplicaProvider(
+                                event.target.value as "wan26_r2v" | "fal_kling_action_replica",
+                              )
+                            }
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <option value="wan26_r2v">WAN 2.6 (Baseline)</option>
+                            <option value="fal_kling_action_replica">Kling (Candidate)</option>
+                          </select>
+                        </div>
+
                         <div className="space-y-3">
                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                             Preserve Strategy
