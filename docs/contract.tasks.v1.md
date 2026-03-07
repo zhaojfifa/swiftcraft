@@ -1,4 +1,4 @@
-Tasks API Contract (v1)
+﻿Tasks API Contract (v1)
 
 Endpoints
 
@@ -16,6 +16,9 @@ Output rule
 
 Request examples
 
+Legacy alias note
+- `avatar` / `avatar_transfer` are retained only for backward compatibility in some runtime paths.
+
 Swap (legacy)
 POST /api/v1/tasks
 {
@@ -24,17 +27,15 @@ POST /api/v1/tasks
   "input_key": "presets/swap/baseline.mp4"
 }
 
-Avatar (typed)
+Action Replica (typed)
 POST /api/v1/tasks
 {
-  "service_type": "avatar_transfer",
+  "service_type": "action_replica",
   "model_id": "kling-v2.6-std-motion",
   "mode": "intelligent",
-  "input_key": "uploads/<motion_key>",
   "inputs": {
-    "character_image": "uploads/<character_key>",
-    "motion_video": "uploads/<motion_key>",
-    "character_orientation": "front",
+    "character_image_url": "https://cdn.example/uploads/<character>.png",
+    "source_video_url": "https://cdn.example/uploads/<source>.mp4",
     "prompt": "optional text"
   }
 }
@@ -58,7 +59,7 @@ POST /api/v1/tasks
 Response (TaskResponseOut)
 {
   "task_id": "string",
-  "service_type": "face_swap|avatar_transfer|localization",
+  "service_type": "face_swap|action_replica|localization",
   "model_id": "string|null",
   "mode": "string",
   "status": "queued|running|succeeded|failed",
@@ -92,3 +93,5 @@ Localization output contract
 - `metadata.run_config_snapshot`: effective localization config persisted in SSOT.
 - `metadata.metrics.elapsed_ms_by_step` and `metadata.metrics.total_latency_ms`: timing metrics.
 - `metadata.manifest_preview`: manifest JSON inline preview fallback.
+
+

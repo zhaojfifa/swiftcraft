@@ -1,4 +1,4 @@
-# SwiftCraft Demo Contract
+﻿# SwiftCraft Demo Contract
 
 ## Preview priority rule
 
@@ -14,7 +14,8 @@ Right preview player shows:
 Required fields:
 
 - `task_id`
-- `service` ("swap" | "avatar")
+- `service` ("swap" | "action_replica")
+- legacy alias: `avatar`
 - `mode` ("baseline" | "intelligent")
 - `status` ("queued" | "running" | "done" | "failed")
 - `created_at`
@@ -29,3 +30,5 @@ Required fields:
 All completed tasks must set `output_url` even in sandbox mode. The backend
 returns a preset path based on `service` and `mode`, so the frontend never
 guesses output URLs.
+
+

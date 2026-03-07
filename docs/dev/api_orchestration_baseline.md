@@ -1,4 +1,4 @@
-﻿# SwiftCraft 场景 API 编排基线（Avatar / Swap / Localization）
+﻿# SwiftCraft 场景 API 编排基线（Action Replica / Swap / Localization）
 
 ## 1. 文档目的
 本文档用于基于当前实现与架构评审结论，收口 SwiftCraft 的场景 API 基线。
@@ -6,7 +6,7 @@
 SwiftCraft 当前不是大而全平台，也不是松散功能集合；它是围绕具体视频场景，对底层模型能力进行编排的 API 能力集合。
 
 当前统一纳入 SOP 基线的场景：
-- Avatar
+- Action Replica
 - Swap
 - Localization
 
@@ -21,7 +21,7 @@ SwiftCraft 当前不是大而全平台，也不是松散功能集合；它是围
 SwiftCraft 是**场景导向的视频 API 编排体系**。
 
 系统以场景为边界，而非单模型能力为边界。当前三类核心场景：
-- Avatar API：数字人/人物驱动重绘
+- Action Replica API：角色替换 + 动作复刻 + 运镜/节奏保持
 - Swap API：短视频换脸
 - Localization API：视频本地化（转写、翻译、配音、合成）
 
@@ -61,7 +61,7 @@ SwiftCraft 是**场景导向的视频 API 编排体系**。
 ### 5.1 Task contract（当前实现）
 当前统一响应模型为 `TaskResponseOut`，核心字段：
 - `task_id`
-- `service_type`（face_swap/avatar_transfer/localization）
+- `service_type`（face_swap/action_replica/localization）
 - `mode`
 - `status`（queued/running/succeeded/failed）
 - `stage`（TaskStage 枚举）
@@ -73,6 +73,7 @@ SwiftCraft 是**场景导向的视频 API 编排体系**。
 说明：
 - 当前顶层**没有** `progress` 字段（进度在持久层 `TaskRecord` 中维护）。
 - 允许 legacy `service` 入参与 typed `service_type` 入参并存。
+- `avatar` / `avatar_transfer` 仅作为历史兼容 alias，正式名称为 `action_replica`。
 
 ### 5.2 状态基线
 当前对外状态基线：
@@ -130,7 +131,7 @@ SwiftCraft 是**场景导向的视频 API 编排体系**。
 
 ## 7. 三场景 SOP 概览
 
-### 7.1 Avatar
+### 7.1 Action Replica
 - Basic：快速稳定出片
 - Intelligent：质量增强，不阻塞 Basic
 - 最小交付：`output_url`（建议逐步标准化 `outputs.video_url` + manifest）
@@ -187,3 +188,5 @@ SwiftCraft 是**场景导向的视频 API 编排体系**。
 3. 终态前必须持久化 outputs/metadata 到 SSOT
 4. provider 接入走 engine/adapter，不在 API 层散落控制流
 5. 任何契约变更同 PR 更新 docs 与前端消费
+
+

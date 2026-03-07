@@ -1,7 +1,9 @@
-﻿# Avatar SOP v2
+﻿# Action Replica SOP v2 (Legacy filename)
 
 ## 1. 定位
-Avatar 是 SwiftCraft 场景 API 之一：以角色图像、动作视频与提示约束生成人物驱动视频。
+Action Replica 是 SwiftCraft 场景 API 之一：以角色替换与动作复刻为核心，保持源视频运镜与节奏。
+
+正式名称：`action_replica`。`avatar` 仅作为历史兼容 alias。
 
 ## 2. 模式分层
 - Basic：默认交付路径，优先稳定性与成本可控
@@ -30,5 +32,7 @@ Avatar 是 SwiftCraft 场景 API 之一：以角色图像、动作视频与提�
 
 ## 5. 工程守卫
 1. 新 provider 必须通过 engine/adapter 接入。
-2. 不引入 Avatar 专有平行 task contract。
+2. 不引入 Action Replica 专有平行 task contract。
 3. 变更输出结构需同时更新文档与前端。
+
+

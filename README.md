@@ -1,4 +1,4 @@
-# swiftcraft
+﻿# swiftcraft
 SwiftCraft is an AI demo product focused on short-form video character replacement.
 
 ## Local run
@@ -23,7 +23,8 @@ set USE_MOCK_AI=false
 set AKOOL_DRY_RUN=true
 set AKOOL_BASE_URL=https://api.akool.example
 set AKOOL_SWAP_ENDPOINT=/swap
-set AKOOL_AVATAR_ENDPOINT=/avatar
+set AKOOL_ACTION_REPLICA_ENDPOINT=/action_replica
+set AKOOL_AVATAR_ENDPOINT=/avatar   # legacy alias
 set AKOOL_API_KEY=your_key
 uvicorn app.main:app --host 0.0.0.0 --port 10000 --reload
 ```
@@ -34,7 +35,8 @@ set USE_MOCK_AI=false
 set AKOOL_DRY_RUN=false
 set AKOOL_BASE_URL=https://api.akool.example
 set AKOOL_SWAP_ENDPOINT=/swap
-set AKOOL_AVATAR_ENDPOINT=/avatar
+set AKOOL_ACTION_REPLICA_ENDPOINT=/action_replica
+set AKOOL_AVATAR_ENDPOINT=/avatar   # legacy alias
 set AKOOL_API_KEY=your_key
 uvicorn app.main:app --host 0.0.0.0 --port 10000 --reload
 ```
@@ -59,4 +61,6 @@ For local dev, set `NEXT_PUBLIC_API_BASE=http://localhost:10000`.
 ## Sprint 2: Akool dry-run (no network)
 Set `USE_MOCK_AI=false` and `AKOOL_DRY_RUN=true` to route through Akool engine logic
 while still returning preset outputs (no external requests).
+
+
 
