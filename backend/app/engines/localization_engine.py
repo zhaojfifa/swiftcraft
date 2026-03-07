@@ -11,7 +11,7 @@ import httpx
 from app.engines.base import EngineResult, EngineRunError
 from app.models.task import TaskRecord
 from app.services.r2_client import R2Client
-from app.utils.dubbing_service import srt_to_text, synthesize_mp3
+from app.utils.dubbing_service import get_last_tts_status, srt_to_text, synthesize_mp3
 from app.utils.fastwhisper_asr import (
     ASRSegment,
     get_last_transcribe_status,
@@ -106,11 +106,48 @@ class LocalizationEngine:
                 f"peak_db={peak if peak is not None else 'n/a'}"
             )
 
+        def _probe_audio_stats(path: Path) -> tuple[float | None, float | None]:
+            if not path.exists():
+                return None, None
+            rms = audio_rms_db(path, on_log=on_log)
+            peak = audio_peak_db(path, on_log=on_log)
+            return rms, peak
+
         def _is_audio_silent(path: Path) -> bool:
             if not path.exists():
                 return True
             rms = audio_rms_db(path, on_log=on_log)
             return rms is None or rms <= -80.0
+
+        def _synthesize_segment_audio(seg_path: Path, text: str, seg_index: int) -> tuple[float, float]:
+            synthesize_mp3(
+                text,
+                voice_id=voice_id,
+                provider="azure-speech",
+                output_path=seg_path,
+                speed=voice_speed,
+                target_lang=target_lang,
+                logger=on_log,
+                debug_raw_dir=workspace,
+            )
+            tts_status = get_last_tts_status()
+            on_log(
+                f"[loc][tts] index={seg_index} provider_status={tts_status.get('status','')} "
+                f"provider_reason={tts_status.get('reason','')} bytes_len={tts_status.get('response_bytes_len','')} "
+                f"content_type={tts_status.get('response_content_type','')} "
+                f"output_format={tts_status.get('requested_output_format','')} "
+                f"resolved_voice={tts_status.get('resolved_voice','')}"
+            )
+            _log_audio_diagnostics(f"segment_{seg_index:03d}_post_tts", seg_path)
+            rms, peak = _probe_audio_stats(seg_path)
+            if rms is None or (peak is not None and peak <= -80.0) or (rms is not None and rms <= -80.0):
+                raise EngineRunError(
+                    f"TTS_SEGMENT_SILENT: index={seg_index} rms_db={rms if rms is not None else 'n/a'} "
+                    f"peak_db={peak if peak is not None else 'n/a'}"
+                )
+            tts_sec_local = _probe_duration(seg_path) or 0.0
+            ratio_local = (tts_sec_local / target_sec) if target_sec > 0 else 0.0
+            return tts_sec_local, ratio_local
 
         def _env_bool(name: str, default: bool) -> bool:
             value = os.getenv(name)
@@ -666,15 +703,7 @@ class LocalizationEngine:
                     seg_atempo = 1.0
                     tts_retry_type = "none"
                     warning_flags: list[str] = []
-                    synthesize_mp3(
-                        text,
-                        voice_id=voice_id,
-                        provider="azure-speech",
-                        output_path=seg_path,
-                        speed=voice_speed,
-                    )
-                    tts_sec = _probe_duration(seg_path) or 0.0
-                    ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
+                    tts_sec, ratio = _synthesize_segment_audio(seg_path, text, idx)
 
                     if ratio > 1.25:
                         seg_retry_used = True
@@ -683,16 +712,8 @@ class LocalizationEngine:
                         except Exception:
                             shorter = text
                         if shorter and shorter != text:
-                            synthesize_mp3(
-                                shorter,
-                                voice_id=voice_id,
-                                provider="azure-speech",
-                                output_path=seg_path,
-                                speed=voice_speed,
-                            )
+                            tts_sec, ratio = _synthesize_segment_audio(seg_path, shorter, idx)
                             final_tts_text = shorter
-                            tts_sec = _probe_duration(seg_path) or 0.0
-                            ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
                             tts_retry_type = "concise"
                         on_log(f"[loc] TTS_CONCISE_RETRY_USED index={idx}")
                         if ultra_short_mode:
@@ -707,16 +728,8 @@ class LocalizationEngine:
                             ultra_shorter = final_tts_text
                         if ultra_shorter and ultra_shorter != final_tts_text:
                             on_log(f"[loc] TTS_ULTRA_SHORT_REWRITE_USED index={idx}")
-                            synthesize_mp3(
-                                ultra_shorter,
-                                voice_id=voice_id,
-                                provider="azure-speech",
-                                output_path=seg_path,
-                                speed=voice_speed,
-                            )
+                            tts_sec, ratio = _synthesize_segment_audio(seg_path, ultra_shorter, idx)
                             final_tts_text = ultra_shorter
-                            tts_sec = _probe_duration(seg_path) or 0.0
-                            ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
                             seg_retry_used = True
                             tts_retry_type = "ultra_short"
 
@@ -728,16 +741,8 @@ class LocalizationEngine:
                             shorter_again = final_tts_text
                         if shorter_again and shorter_again != final_tts_text:
                             on_log(f"[loc] TTS_TEXT_REWRITE_FOR_DURATION index={idx}")
-                            synthesize_mp3(
-                                shorter_again,
-                                voice_id=voice_id,
-                                provider="azure-speech",
-                                output_path=seg_path,
-                                speed=voice_speed,
-                            )
+                            tts_sec, ratio = _synthesize_segment_audio(seg_path, shorter_again, idx)
                             final_tts_text = shorter_again
-                            tts_sec = _probe_duration(seg_path) or 0.0
-                            ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
                             tts_retry_type = "duration_rewrite"
 
                     if target_sec >= 1.5 and ratio < 0.75:
@@ -749,16 +754,8 @@ class LocalizationEngine:
                         if expanded and expanded != final_tts_text:
                             on_log(f"[loc] TTS_TEXT_EXPAND_FOR_DURATION index={idx}")
                             on_log(f"[loc] TTS_EXPAND_REWRITE_TEXT_USED index={idx}")
-                            synthesize_mp3(
-                                expanded,
-                                voice_id=voice_id,
-                                provider="azure-speech",
-                                output_path=seg_path,
-                                speed=voice_speed,
-                            )
+                            tts_sec, ratio = _synthesize_segment_audio(seg_path, expanded, idx)
                             final_tts_text = expanded
-                            tts_sec = _probe_duration(seg_path) or tts_sec
-                            ratio = (tts_sec / target_sec) if target_sec > 0 else ratio
                             on_log(f"[loc] TTS_EXPAND_RETRY_AUDIO_SEC index={idx} sec={tts_sec:.3f}")
                             on_log(f"[loc] TTS_EXPAND_RETRY_RATIO index={idx} ratio={ratio:.3f}")
                             expand_retry_used = True

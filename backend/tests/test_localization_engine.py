@@ -266,6 +266,7 @@ def test_localization_asr_fallback_phrase_fails_on_non_silent_audio(monkeypatch,
         "segments_to_srt",
         lambda *_args, **_kwargs: "1\n00:00:00,000 --> 00:00:03,000\nLocalized narration.\n",
     )
+    monkeypatch.setattr(module, "synthesize_mp3", _fake_synthesize_mp3)
     monkeypatch.setattr(module, "render_with_original_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"orig-audio"))
     monkeypatch.setattr(module, "mix_ducking", lambda *_args, **_kwargs: _args[2].write_bytes(b"mixed"))
     monkeypatch.setattr(module, "mux", lambda *_args, **_kwargs: _args[2].write_bytes(b"localized-mp4"))
@@ -337,6 +338,7 @@ def test_localization_tts_gate_degrades_on_empty_translation(monkeypatch, tmp_pa
         ),
     )
     monkeypatch.setattr(module, "srt_to_text", lambda *_args, **_kwargs: "   ")
+    monkeypatch.setattr(module, "synthesize_mp3", _fake_synthesize_mp3)
     monkeypatch.setattr(module, "mix_ducking", lambda *_args, **_kwargs: _args[2].write_bytes(b"mixed"))
     monkeypatch.setattr(module, "render_with_original_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"orig-audio"))
     monkeypatch.setattr(module, "mux", lambda *_args, **_kwargs: _args[2].write_bytes(b"localized-mp4"))
