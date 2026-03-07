@@ -540,11 +540,13 @@ def mix_ducking(
         filter_complex = (
             "[0:a]aresample=16000,asetpts=N/SR/TB[bgm];"
             "[1:a]aresample=16000,asetpts=N/SR/TB,asplit=2[dub_sc][dub_mix];"
-            "[bgm][dub_sc]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=400[ducked];"
-            "[ducked][dub_mix]amix=inputs=2:duration=longest:weights=0.55 1.00,aresample=48000[a]"
+            "[bgm][dub_sc]sidechaincompress=threshold=0.015:ratio=12:attack=10:release=350[ducked];"
+            "[ducked]volume=0.28[ducked_low];"
+            "[dub_mix]volume=1.20[dub_hot];"
+            "[ducked_low][dub_hot]amix=inputs=2:duration=longest:normalize=0,aresample=48000[a]"
         )
         mix_strategy = "duck_then_amix"
-        mix_weights = "bgm=0.55,dub=1.00"
+        mix_weights = "ducked_gain=0.28,dub_gain=1.20,threshold=0.015,ratio=12,attack=10,release=350"
     else:
         filter_complex = (
             "[0:a]aresample=16000[a0];"
@@ -574,6 +576,7 @@ def mix_ducking(
     if on_log:
         on_log(f"[loc][mix] MIX_STRATEGY={mix_strategy}")
         on_log(f"[loc][mix] MIX_WEIGHTS={mix_weights}")
+        on_log(f"[loc][mix] MIX_GAIN={mix_weights}")
     run_ffmpeg(cmd, timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MIX", "180")), tag="ffmpeg_mix", on_log=on_log)
     output_sec = probe_duration_sec(mixed_wav_out, on_log=on_log)
     if on_log:
@@ -665,6 +668,7 @@ def burn_subtitles(
         subtitle_filter = f"ass={_escape_filter_path(subtitle_ass)}:fontsdir={_escape_filter_path(fonts_dir)}"
     if on_log:
         on_log(f"[loc][ass] ASS_BURN_SUBTITLE_PATH={subtitle_ass}")
+        on_log(f"[loc][ass] ASS_FONT_DIR={fonts_dir if fonts_dir is not None else 'n/a'}")
     cmd = [
         "ffmpeg",
         "-hide_banner",

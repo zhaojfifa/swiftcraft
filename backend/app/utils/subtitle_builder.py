@@ -55,9 +55,29 @@ def resolve_ass_font() -> tuple[str, Optional[Path], bool]:
             return env_font, custom_dir, False
         return env_font, None, False
 
+    def _has_myanmar_font(font_dir: Path) -> bool:
+        if not font_dir.exists():
+            return False
+        patterns = ["*.ttf", "*.otf", "*.ttc"]
+        for pat in patterns:
+            for f in font_dir.glob(pat):
+                name = f.name.lower()
+                if "myanmar" in name or "mmr" in name:
+                    return True
+        return False
+
+    repo_root = Path(__file__).resolve().parents[3]
+    default_font_dirs = [
+        Path("/opt/render/project/src/assets/fonts"),
+        repo_root / "assets" / "fonts",
+        Path("/usr/share/fonts/truetype/noto"),
+        Path("/usr/share/fonts/noto"),
+    ]
+    for d in default_font_dirs:
+        if _has_myanmar_font(d):
+            return "Noto Sans Myanmar", d, False
+
     candidates = [
-        ("Noto Sans Myanmar", Path("/usr/share/fonts/truetype/noto")),
-        ("Noto Sans Myanmar", Path("/usr/share/fonts/noto")),
         ("Myanmar Text", Path("/usr/share/fonts/truetype/msttcorefonts")),
         ("DejaVu Sans", Path("/usr/share/fonts/truetype/dejavu")),
         ("Arial", None),

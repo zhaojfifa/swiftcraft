@@ -528,6 +528,7 @@ class LocalizationEngine:
             on_log(f"[loc][ass] ASS_STYLE_FONT={ass_font_name}")
             on_log(f"[loc][ass] ASS_FONT_RESOLVED={ass_font_name}")
             on_log(f"[loc][ass] ASS_FONT_FALLBACK_USED={str(ass_font_fallback_used).lower()}")
+            on_log(f"[loc][ass] ASS_FONT_DIR={str(ass_fonts_dir) if ass_fonts_dir is not None else 'n/a'}")
             translated_segments_path.write_text(
                 json.dumps(translated_segments, ensure_ascii=False, indent=2),
                 encoding="utf-8",
