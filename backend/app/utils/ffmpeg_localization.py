@@ -471,8 +471,14 @@ def concat_audio_files(
         "0",
         "-i",
         str(list_file),
-        "-c",
-        "copy",
+        "-ac",
+        "1",
+        "-ar",
+        "24000",
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "64k",
         str(output_audio),
     ]
     run_ffmpeg(

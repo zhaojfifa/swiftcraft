@@ -106,6 +106,12 @@ class LocalizationEngine:
                 f"peak_db={peak if peak is not None else 'n/a'}"
             )
 
+        def _is_audio_silent(path: Path) -> bool:
+            if not path.exists():
+                return True
+            rms = audio_rms_db(path, on_log=on_log)
+            return rms is None or rms <= -80.0
+
         def _env_bool(name: str, default: bool) -> bool:
             value = os.getenv(name)
             if value is None:
@@ -840,12 +846,14 @@ class LocalizationEngine:
                         f"[loc] TTS_SEGMENT index={idx} src_dur={target_sec:.3f} "
                         f"tts_dur={tts_sec:.3f} ratio={ratio:.3f}"
                     )
+                    _log_audio_diagnostics(f"segment_{idx:03d}", seg_path)
 
                 if not segment_assets:
                     raise EngineRunError("TTS_TEXT_EMPTY: empty text passed to synthesizer")
 
                 dub_mp3_path = workspace / "dub.mp3"
                 concat_audio_files(segment_assets, dub_mp3_path, on_log=on_log)
+                _log_audio_diagnostics("dub_mp3", dub_mp3_path)
                 dub_duration_sec = _probe_duration(dub_mp3_path)
                 on_log(f"[loc] DUB_TOTAL_SEC_BEFORE_RENDER={dub_duration_sec if dub_duration_sec is not None else 'n/a'}")
                 if (
@@ -857,11 +865,16 @@ class LocalizationEngine:
                     target_total = source_video_duration_sec_for_tts * 0.99
                     stretch_audio_to_duration(dub_mp3_path, aligned_mp3, target_total, on_log=on_log)
                     dub_mp3_path = aligned_mp3
+                    _log_audio_diagnostics("dub_aligned_mp3", aligned_mp3)
                     dub_duration_sec = _probe_duration(aligned_mp3)
                     alignment_strategy = f"{alignment_strategy}+atempo"
                 on_log(f"[loc] DUB_TOTAL_SEC_AFTER_ALIGN={dub_duration_sec if dub_duration_sec is not None else 'n/a'}")
                 on_log(f"[loc] DUB_ALIGNMENT_STRATEGY={alignment_strategy}")
                 tts_text_strategy = alignment_strategy
+                if _is_audio_silent(dub_mp3_path):
+                    raise EngineRunError(
+                        f"TTS_SILENT_AUDIO: silent dub track before rendering_audio path={dub_mp3_path}"
+                    )
 
                 tts_alignment_qa_path.write_text(
                     json.dumps(
