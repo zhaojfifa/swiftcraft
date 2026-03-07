@@ -9,6 +9,7 @@ type Props = {
   setActiveTab: (tab: TabId) => void;
   videoUrl: string | null;
   subtitleUrl: string | null;
+  subtitleAssUrl: string | null;
   audioUrl: string | null;
   manifestUrl: string | null;
   manifestFallback: unknown;
@@ -19,6 +20,7 @@ export default function OutputTabs({
   setActiveTab,
   videoUrl,
   subtitleUrl,
+  subtitleAssUrl,
   audioUrl,
   manifestUrl,
   manifestFallback,
@@ -58,6 +60,30 @@ export default function OutputTabs({
   }, [manifestUrl]);
 
   const manifestText = manifestPreview || JSON.stringify(manifestFallback || {}, null, 2);
+  const manifestObj = (() => {
+    try {
+      return manifestText ? (JSON.parse(manifestText) as Record<string, unknown>) : null;
+    } catch {
+      return null;
+    }
+  })();
+  const subtitleBurned = String(manifestObj?.subtitle_burned ?? "n/a");
+  const outputDuration = String(
+    (manifestObj?.metrics as Record<string, unknown> | undefined)?.total_latency_ms ?? "n/a",
+  );
+  const translationRatio = String(
+    (manifestObj?.translation as Record<string, unknown> | undefined)?.length_ratio_avg ?? "n/a",
+  );
+  const warningCount = Array.isArray(
+    (manifestObj?.tts as Record<string, unknown> | undefined)?.segment_alignment,
+  )
+    ? (
+        (manifestObj?.tts as Record<string, unknown>).segment_alignment as Array<Record<string, unknown>>
+      ).reduce((acc, row) => {
+        const flags = row.warning_flags;
+        return acc + (Array.isArray(flags) ? flags.length : 0);
+      }, 0)
+    : 0;
 
   return (
     <div className="w-full rounded-xl border border-slate-200 bg-white overflow-hidden">
@@ -90,13 +116,19 @@ export default function OutputTabs({
 
         {activeTab === "subtitles" ? (
           <div className="space-y-3">
-            {subtitleUrl ? (
-              <a href={subtitleUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline">
-                Download subtitle
-              </a>
-            ) : (
-              <div className="text-slate-400">Not available.</div>
-            )}
+            <div className="flex flex-wrap gap-4 text-sm">
+              {subtitleUrl ? (
+                <a href={subtitleUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline">
+                  Download SRT
+                </a>
+              ) : null}
+              {subtitleAssUrl ? (
+                <a href={subtitleAssUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline">
+                  Download ASS
+                </a>
+              ) : null}
+              {!subtitleUrl && !subtitleAssUrl ? <div className="text-slate-400">Not available.</div> : null}
+            </div>
             <pre className="text-xs bg-slate-50 border border-slate-200 rounded p-3 max-h-72 overflow-auto whitespace-pre-wrap">
               {subtitlePreview || "No preview (or blocked by CORS)."}
             </pre>
@@ -127,6 +159,12 @@ export default function OutputTabs({
             ) : (
               <div className="text-slate-400">Not available via URL, showing metadata preview.</div>
             )}
+            <div className="grid grid-cols-2 gap-2 rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+              <div>subtitle burned: {subtitleBurned}</div>
+              <div>output duration(ms): {outputDuration}</div>
+              <div>translation ratio: {translationRatio}</div>
+              <div>warnings: {warningCount}</div>
+            </div>
             <pre className="text-xs bg-slate-50 border border-slate-200 rounded p-3 max-h-72 overflow-auto whitespace-pre-wrap break-all">
               {manifestText}
             </pre>

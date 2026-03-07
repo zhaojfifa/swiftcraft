@@ -21,6 +21,7 @@ from app.utils.fastwhisper_asr import (
 )
 from app.utils.ffmpeg_localization import (
     audio_rms_db,
+    burn_subtitles,
     extract_audio,
     mix_ducking,
     mux,
@@ -34,6 +35,7 @@ from app.utils.ffmpeg_localization import (
     write_silence_audio,
     concat_audio_files,
 )
+from app.utils.subtitle_builder import build_ass_from_segments, build_srt_from_segments
 from app.utils.translate_gemini import (
     build_translation_qa,
     concise_rewrite_with_gemini,
@@ -68,13 +70,6 @@ class LocalizationEngine:
 
         def _segment_count(srt_text: str) -> int:
             return len([ln for ln in srt_text.splitlines() if ln.strip().isdigit()])
-
-        def _srt_ts(seconds: float) -> str:
-            total_ms = max(0, int(round(seconds * 1000)))
-            hh, rem = divmod(total_ms, 3600 * 1000)
-            mm, rem = divmod(rem, 60 * 1000)
-            ss, ms = divmod(rem, 1000)
-            return f"{hh:02}:{mm:02}:{ss:02},{ms:03}"
 
         def mark_step(name: str, stage: str, progress: int) -> float:
             on_stage(stage, progress)
@@ -153,21 +148,6 @@ class LocalizationEngine:
                     }
                 )
             return payload
-
-        def _translated_segments_to_srt(rows: list[dict[str, Any]]) -> str:
-            out: list[str] = []
-            for row in rows:
-                idx = int(row.get("index") or 0)
-                if idx <= 0:
-                    continue
-                start = float(row.get("start") or 0.0)
-                end = float(row.get("end") or max(start + 0.2, 0.2))
-                text = str(row.get("translated") or "").strip() or "[UNTRANSLATED]"
-                out.append(str(idx))
-                out.append(f"{_srt_ts(start)} --> {_srt_ts(max(end, start + 0.1))}")
-                out.append(text)
-                out.append("")
-            return "\n".join(out).strip() + "\n"
 
         def _merged_tts_text_from_translated_segments(rows: list[dict[str, Any]]) -> str:
             parts = [normalize_zh_text(str(r.get("translated") or "")) for r in rows]
@@ -442,11 +422,6 @@ class LocalizationEngine:
             if no_subtitles:
                 fallback_reason = "SILENT_AUDIO_OR_EMPTY_ASR"
                 source_video_duration_sec_for_marker = _probe_duration(source_video) or 5.0
-                target_srt = (
-                    "1\n"
-                    f"00:00:00,000 --> {_srt_ts(source_video_duration_sec_for_marker)}\n"
-                    "[NO_SUBTITLES] No speech detected.\n"
-                )
                 translated_segments = [
                     {
                         "index": 1,
@@ -456,6 +431,7 @@ class LocalizationEngine:
                         "translated": "[NO_SUBTITLES] No speech detected.",
                     }
                 ]
+                target_srt = build_srt_from_segments(translated_segments)
             else:
                 try:
                     if translation_provider == "gemini":
@@ -490,13 +466,14 @@ class LocalizationEngine:
                             )
                     if translation_missing_indexes or any(not str(x.get("translated") or "").strip() for x in translated_segments):
                         raise EngineRunError("TRANSLATION_MISSING_SEGMENTS")
-                    target_srt = _translated_segments_to_srt(translated_segments)
+                    target_srt = build_srt_from_segments(translated_segments)
                 except Exception as tr_exc:
                     translation_fallback_used = True
                     fallback_reason = f"translation_exception:{type(tr_exc).__name__}"
                     on_log(f"[loc][degrade] translation_fallback_used reason={fallback_reason}")
                     translated_segments = []
                     for seg in origin_segments:
+                        fallback_text = f"[UNTRANSLATED] {str(seg['text']).strip()}"
                         translated_segments.append(
                             {
                                 "index": int(seg["index"]),
@@ -504,17 +481,43 @@ class LocalizationEngine:
                                 "end": float(seg["end"]),
                                 "origin": str(seg["text"]),
                                 "origin_raw": str(seg.get("text_raw") or seg["text"]),
-                                "translated": f"[UNTRANSLATED] {str(seg['text']).strip()}",
+                                "translated": fallback_text,
+                                "translation_dubbing_initial": fallback_text,
+                                "translation_dubbing_final": fallback_text,
+                                "translation_subtitle_final": fallback_text,
                             }
                         )
-                    target_srt = _translated_segments_to_srt(translated_segments)
+                    target_srt = build_srt_from_segments(translated_segments)
             for row in translated_segments:
                 idx = int(row.get("index") or 0)
                 raw_src = raw_text_by_index.get(idx, str(row.get("origin") or ""))
                 row["origin_raw"] = str(row.get("origin_raw") or raw_src)
                 row["origin"] = normalize_zh_text(str(row.get("origin") or raw_src))
+                translated_final = str(
+                    row.get("translation_dubbing_final")
+                    or row.get("translation_final")
+                    or row.get("translated")
+                    or ""
+                ).strip()
+                subtitle_final = str(
+                    row.get("translation_subtitle_final")
+                    or row.get("translation_final")
+                    or row.get("translated")
+                    or translated_final
+                ).strip()
+                row["translation_dubbing_initial"] = str(
+                    row.get("translation_dubbing_initial")
+                    or row.get("translation_initial")
+                    or row.get("translated")
+                    or translated_final
+                )
+                row["translation_dubbing_final"] = translated_final
+                row["translation_subtitle_final"] = subtitle_final
+                row["translated"] = translated_final
             target_srt_path = workspace / "target.srt"
             target_srt_path.write_text(target_srt, encoding="utf-8")
+            target_ass_path = workspace / "target.ass"
+            target_ass_path.write_text(build_ass_from_segments(translated_segments), encoding="utf-8")
             translated_segments_path.write_text(
                 json.dumps(translated_segments, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -586,13 +589,13 @@ class LocalizationEngine:
                     seg_start = float(row.get("start") or 0.0)
                     seg_end = float(row.get("end") or seg_start + 0.2)
                     target_sec = max(0.2, seg_end - seg_start)
-                    text = str(row.get("translated") or "").strip()
+                    text = str(row.get("translation_dubbing_final") or row.get("translated") or "").strip()
                     if not text:
                         text = str(row.get("origin") or "").strip() or "[UNTRANSLATED]"
                     dub_text_len += len(text)
                     original_text_norm = str(row.get("origin") or "")
                     original_text_raw = str(row.get("origin_raw") or original_text_norm)
-                    translated_text = str(row.get("translated") or "")
+                    translated_text = str(row.get("translation_subtitle_final") or row.get("translated") or "")
                     translation_initial = str(row.get("translation_initial") or translated_text)
                     translation_final = str(row.get("translation_final") or translated_text)
                     final_tts_text = text
@@ -717,16 +720,16 @@ class LocalizationEngine:
                             seg_atempo = tts_sec / target_sec
                             if seg_atempo > 2.0:
                                 on_log(f"[loc][warn] TTS_SEGMENT_TOO_FAST index={idx} factor={seg_atempo:.3f}")
-                                warning_flags.append("segment_too_fast_gt_2_0")
+                                warning_flags.append("tts_atempo_gt_2_0")
                             seg_path = aligned_seg
                             tts_sec = _probe_duration(seg_path) or target_sec
                             ratio = (tts_sec / target_sec) if target_sec > 0 else 0.0
                             on_log(f"[loc] TTS_ATEMPO_APPLIED index={idx} factor={seg_atempo:.3f}")
                             alignment_strategy = "segment_tts+atempo"
                             tts_retry_type = "duration_rewrite" if tts_retry_type == "none" else tts_retry_type
-                            if seg_atempo > 2.5:
+                            if seg_atempo > 2.4:
                                 on_log(f"[loc][warn] TTS_SEGMENT_ATEMPO_HARD_WARNING index={idx} factor={seg_atempo:.3f}")
-                                warning_flags.append("segment_atempo_gt_2_5")
+                                warning_flags.append("tts_atempo_gt_2_4_hard")
                         except Exception as ex_align:
                             on_log(f"[loc][warn] TTS_ATEMPO_SKIP index={idx} reason={type(ex_align).__name__}")
 
@@ -758,10 +761,18 @@ class LocalizationEngine:
                             "duration_bucket": "ultra_short" if ultra_short_mode else ("short" if target_sec < 1.5 else "normal"),
                             "src_text_raw": original_text_raw,
                             "src_text_norm": original_text_norm,
+                            "source_text_raw": original_text_raw,
+                            "source_text_norm": original_text_norm,
                             "translation_initial": translation_initial,
                             "translation_final": translation_final,
+                            "translation_dubbing_initial": translation_initial,
+                            "translation_dubbing_final": translation_final,
+                            "translation_subtitle_final": translation_final,
                             "tts_text_initial": translated_text,
                             "tts_text_final": final_tts_text,
+                            "subtitle_text_final": translation_final,
+                            "subtitle_chars": len(translation_final),
+                            "subtitle_line_count": max(1, str(translation_final).count("\\N") + 1) if translation_final else 0,
                             "translated_text": translated_text,
                             "final_tts_text": final_tts_text,
                             "src_dur": target_sec,
@@ -842,23 +853,25 @@ class LocalizationEngine:
                 }
             end_step("synthesizing", step)
 
-            step = mark_step("rendering", "RENDERING", 78)
+            mixed_wav = workspace / "mixed.wav"
+            localized_mp4_path = workspace / "localized.mp4"
+            source_video_duration_sec = _probe_duration(source_video)
+            mixed_audio_duration_sec = None
+
+            step = mark_step("rendering_audio", "RENDERING_AUDIO", 78)
             try:
-                mixed_wav = workspace / "mixed.wav"
-                localized_mp4_path = workspace / "localized.mp4"
-                source_video_duration_sec = _probe_duration(source_video)
-                on_log(f"[loc][render] source_video_size={source_video.stat().st_size if source_video.exists() else 'missing'}")
-                on_log(f"[loc][render] audio_wav_size={audio_wav.stat().st_size if audio_wav.exists() else 'missing'}")
+                on_log(f"[loc][render_audio] source_video_size={source_video.stat().st_size if source_video.exists() else 'missing'}")
+                on_log(f"[loc][render_audio] audio_wav_size={audio_wav.stat().st_size if audio_wav.exists() else 'missing'}")
                 on_log(
-                    f"[loc][render] dub_mp3_size={dub_mp3_path.stat().st_size if (dub_mp3_path and dub_mp3_path.exists()) else 'n/a'}"
+                    f"[loc][render_audio] dub_mp3_size={dub_mp3_path.stat().st_size if (dub_mp3_path and dub_mp3_path.exists()) else 'n/a'}"
                 )
                 on_log(
-                    f"[loc][render] ffmpeg_timeouts="
+                    f"[loc][render_audio] ffmpeg_timeouts="
                     f"mix={os.getenv('FFMPEG_TIMEOUT_SEC_MIX','180')} "
                     f"mux={os.getenv('FFMPEG_TIMEOUT_SEC_MUX','180')}"
                 )
                 on_log(
-                    "[loc][render] mix_start "
+                    "[loc][render_audio] mix_start "
                     f"source_video={source_video} exists={source_video.exists()} size={_file_size(source_video)} "
                     f"audio_wav={audio_wav} exists={audio_wav.exists()} size={_file_size(audio_wav)} "
                     f"dub_mp3={dub_mp3_path} exists={bool(dub_mp3_path and dub_mp3_path.exists())} "
@@ -873,7 +886,7 @@ class LocalizationEngine:
                     mix_ducking(audio_wav, dub_mp3_path, mixed_wav, preserve_bgm=preserve_bgm, ducking=ducking, on_log=on_log)
                 mixed_audio_duration_sec = _probe_duration(mixed_wav)
                 on_log(
-                    "[loc][render] mix_end "
+                    "[loc][render_audio] mix_end "
                     f"elapsed_ms={int((time.perf_counter() - mix_started) * 1000)} "
                     f"mixed_wav={mixed_wav} exists={mixed_wav.exists()} size={_file_size(mixed_wav)} "
                     f"mixed_audio_sec={mixed_audio_duration_sec if mixed_audio_duration_sec is not None else 'n/a'}"
@@ -884,15 +897,44 @@ class LocalizationEngine:
                     f"dub_audio_sec={dub_duration_sec if dub_duration_sec is not None else 'n/a'} "
                     f"mixed_audio_sec={mixed_audio_duration_sec if mixed_audio_duration_sec is not None else 'n/a'}"
                 )
+            except Exception as render_exc:
                 on_log(
-                    "[loc][render] mux_start "
-                    f"output={localized_mp4_path} source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'}"
+                    f"[loc][render_audio] rendering_audio_exception type={type(render_exc).__name__} msg={render_exc}"
+                )
+                raise
+            end_step("rendering_audio", step)
+
+            step = mark_step("building_subtitle", "BUILDING_SUBTITLE", 83)
+            subtitle_segment_count = _segment_count(target_srt_path.read_text(encoding="utf-8")) if target_srt_path.exists() else 0
+            on_log(
+                f"[loc] step=building_subtitle details target_srt={target_srt_path.exists()} "
+                f"target_ass={target_ass_path.exists()} segments={subtitle_segment_count}"
+            )
+            end_step("building_subtitle", step)
+
+            step = mark_step("burning_subtitle", "BURNING_SUBTITLE", 87)
+            try:
+                localized_audio_only_path = workspace / "localized_audio_only.mp4"
+                on_log(
+                    "[loc][burn_subtitle] mux_audio_only_start "
+                    f"output={localized_audio_only_path} source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'}"
                 )
                 mux_started = time.perf_counter()
-                mux(source_video, mixed_wav, localized_mp4_path, source_video_duration_sec=source_video_duration_sec, on_log=on_log)
+                mux(
+                    source_video,
+                    mixed_wav,
+                    localized_audio_only_path,
+                    source_video_duration_sec=source_video_duration_sec,
+                    on_log=on_log,
+                )
+                on_log(
+                    "[loc][burn_subtitle] burn_ass_start "
+                    f"video_in={localized_audio_only_path} subtitle_ass={target_ass_path} output={localized_mp4_path}"
+                )
+                burn_subtitles(localized_audio_only_path, target_ass_path, localized_mp4_path, on_log=on_log)
                 output_video_duration_sec = _probe_duration(localized_mp4_path)
                 on_log(
-                    "[loc][render] mux_end "
+                    "[loc][burn_subtitle] burn_ass_end "
                     f"elapsed_ms={int((time.perf_counter() - mux_started) * 1000)} "
                     f"output_exists={localized_mp4_path.exists()} size={_file_size(localized_mp4_path)} "
                     f"output_video_sec={output_video_duration_sec if output_video_duration_sec is not None else 'n/a'}"
@@ -913,27 +955,39 @@ class LocalizationEngine:
                     )
             except Exception as render_exc:
                 on_log(
-                    f"[loc][render] rendering_exception type={type(render_exc).__name__} msg={render_exc}"
+                    f"[loc][burn_subtitle] burning_subtitle_exception type={type(render_exc).__name__} msg={render_exc}"
                 )
                 on_log(
-                    f"[loc][render] rendering_exception_types "
+                    f"[loc][burn_subtitle] rendering_exception_types "
                     f"source_video={type(source_video).__name__} audio_wav={type(audio_wav).__name__} "
                     f"dub_mp3={type(dub_mp3_path).__name__} mixed_wav={type(mixed_wav).__name__}"
                 )
                 raise
-            end_step("rendering", step)
+            end_step("burning_subtitle", step)
 
             step = mark_step("uploading", "UPLOADING", 90)
             output_key = f"outputs/{task_id}/localized.mp4"
             subtitle_key = f"outputs/{task_id}/target.srt"
+            subtitle_ass_key = f"outputs/{task_id}/target.ass"
             manifest_key = f"outputs/{task_id}/manifest.json"
             origin_segments_key = f"outputs/{task_id}/origin_segments.json"
             translated_segments_key = f"outputs/{task_id}/translated_segments.json"
             translation_qa_key = f"outputs/{task_id}/translation_qa.json"
             tts_alignment_qa_key = f"outputs/{task_id}/tts_alignment_qa.json"
+            localized_audio_only_key = f"outputs/{task_id}/localized_audio_only.mp4"
 
             output_url = self.r2.upload_bytes(output_key, localized_mp4_path.read_bytes(), content_type="video/mp4")
+            localized_audio_only_url = self.r2.upload_bytes(
+                localized_audio_only_key,
+                localized_audio_only_path.read_bytes(),
+                content_type="video/mp4",
+            )
             subtitle_url = self.r2.upload_bytes(subtitle_key, target_srt_path.read_bytes(), content_type="text/plain")
+            subtitle_ass_url = self.r2.upload_bytes(
+                subtitle_ass_key,
+                target_ass_path.read_bytes(),
+                content_type="text/plain",
+            )
             origin_segments_url = self.r2.upload_bytes(
                 origin_segments_key,
                 origin_segments_path.read_bytes(),
@@ -969,8 +1023,14 @@ class LocalizationEngine:
             outputs = {
                 "video_key": output_key,
                 "video_url": output_url,
+                "localized_final_key": output_key,
+                "localized_final_url": output_url,
+                "localized_audio_only_key": localized_audio_only_key,
+                "localized_audio_only_url": localized_audio_only_url,
                 "subtitle_key": subtitle_key,
                 "subtitle_url": subtitle_url,
+                "subtitle_ass_key": subtitle_ass_key,
+                "subtitle_ass_url": subtitle_ass_url,
                 "manifest_key": manifest_key,
                 "manifest_url": manifest_url,
                 "origin_segments_key": origin_segments_key,
@@ -988,12 +1048,26 @@ class LocalizationEngine:
                 outputs["audio_url"] = audio_url
             elif no_subtitles:
                 outputs["audio_omitted_reason"] = "SILENT_AUDIO_OR_EMPTY_ASR"
+            outputs["video"] = {"key": output_key, "url": output_url}
+            outputs["subtitle_srt"] = {"key": subtitle_key, "url": subtitle_url}
+            outputs["subtitle_ass"] = {"key": subtitle_ass_key, "url": subtitle_ass_url}
+            outputs["audio"] = {"key": audio_key, "url": audio_url}
+            outputs["manifest"] = {"key": manifest_key, "url": manifest_url}
+            outputs["origin_segments"] = {"key": origin_segments_key, "url": origin_segments_url}
+            outputs["translated_segments"] = {"key": translated_segments_key, "url": translated_segments_url}
+            outputs["translation_qa"] = {"key": translation_qa_key, "url": translation_qa_url}
+            outputs["tts_alignment_qa"] = {"key": tts_alignment_qa_key, "url": tts_alignment_qa_url}
             policy_flags = ["cannot_remove_burned_in_subtitles_baseline"]
             manifest = {
                 "task_id": task_id,
                 "service": "localization",
                 "mode": record.mode,
                 "source_url": source_url,
+                "subtitle_burned": True,
+                "subtitle_format": "ass",
+                "subtitle_mode": subtitle_mode,
+                "localized_audio_only_url": localized_audio_only_url,
+                "localized_final_url": output_url,
                 "outputs": outputs,
                 "metrics": {
                     "elapsed_ms_by_step": metrics,

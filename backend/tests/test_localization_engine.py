@@ -95,6 +95,7 @@ def _patch_engine_runtime(monkeypatch, module, tmp_path: Path) -> None:
     monkeypatch.setattr(module, "write_silence_audio", lambda out, *_args, **_kwargs: Path(out).write_bytes(b"sil"))
     monkeypatch.setattr(module, "concat_audio_files", lambda files, out, **_kwargs: Path(out).write_bytes(b"mp3"))
     monkeypatch.setattr(module, "stretch_audio_to_duration", lambda inp, out, *_args, **_kwargs: Path(out).write_bytes(Path(inp).read_bytes()))
+    monkeypatch.setattr(module, "burn_subtitles", lambda *_args, **_kwargs: _args[2].write_bytes(b"burned-mp4"))
 
 
 def _write_tone_wav(path: Path, *, tone_sec: float, silence_sec_before: float = 0.0, silence_sec_after: float = 0.0) -> None:
