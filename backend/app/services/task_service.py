@@ -71,6 +71,34 @@ def _extract_avatar_prompt(payload: Dict[str, Any]) -> Optional[str]:
     return text or None
 
 
+def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, Any]:
+    inputs = payload.get("inputs")
+    data = dict(inputs) if isinstance(inputs, dict) else {}
+
+    def _to_bool(value: Any, default: bool) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off", ""}:
+            return False
+        return default
+
+    prompt = str(data.get("prompt") or "").strip() or None
+    return {
+        "service_type": "action_replica",
+        "mode": mode,
+        "character_orientation": str(data.get("character_orientation") or "front"),
+        "preserve_camera": _to_bool(data.get("preserve_camera"), True),
+        "preserve_motion": _to_bool(data.get("preserve_motion"), True),
+        "preserve_timing": _to_bool(data.get("preserve_timing"), True),
+        "prompt": prompt,
+    }
+
+
 def _normalize_localization_inputs(payload: Dict[str, Any], mode: str) -> tuple[Dict[str, Any], Dict[str, Any]]:
     raw_inputs = payload.get("inputs")
     normalized = dict(raw_inputs) if isinstance(raw_inputs, dict) else {}
@@ -215,7 +243,9 @@ class TaskService:
         if service in {"avatar", "action_replica"}:
             if not self._avatar_enabled():
                 return "mock"
-            return "wan26_r2v" if mode == "intelligent" else "wan26_flash"
+            if mode == "intelligent":
+                return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_INTELLIGENT", "wan26_r2v").strip() or "wan26_r2v")
+            return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_BASELINE", "wan26_r2v").strip() or "wan26_r2v")
         if service == "localization":
             return "localization_basic" if mode == "baseline" else "mock"
         return str(payload.get("provider") or self._default_provider()).strip().lower()
@@ -286,6 +316,9 @@ class TaskService:
             resolved_service = "avatar"
         avatar_image_key = _extract_avatar_image_key(payload) if resolved_service == "avatar" else None
         avatar_prompt = _extract_avatar_prompt(payload) if resolved_service == "avatar" else None
+        action_replica_cfg = (
+            _extract_action_replica_run_config(payload, resolved_mode) if resolved_service == "avatar" else {}
+        )
         localization_inputs: Dict[str, Any] = {}
         localization_policy: Dict[str, Any] = {}
         if resolved_service == "localization":
@@ -332,6 +365,11 @@ class TaskService:
             task_id = uuid.uuid4().hex
             provider = self._resolve_provider(resolved_service, payload, resolved_mode)
             metadata_dict["provider"] = provider
+            if resolved_service == "avatar":
+                action_replica_cfg["provider"] = provider
+                action_replica_cfg["source_video_url"] = input_video_url
+                action_replica_cfg["character_image_url"] = input_image_url
+                metadata_dict["run_config_snapshot"] = action_replica_cfg
             if resolved_service == "localization":
                 metadata_dict["policy"] = localization_policy
             if face_enhancer is not None:
@@ -363,7 +401,14 @@ class TaskService:
                     "input_image_url": input_image_url,
                     "input_video_url": input_video_url,
                     "prompt": avatar_prompt,
-                    "inputs": localization_inputs if resolved_service == "localization" else {},
+                    "preserve_camera": action_replica_cfg.get("preserve_camera"),
+                    "preserve_motion": action_replica_cfg.get("preserve_motion"),
+                    "preserve_timing": action_replica_cfg.get("preserve_timing"),
+                    "inputs": (
+                        localization_inputs
+                        if resolved_service == "localization"
+                        else (action_replica_cfg if resolved_service == "avatar" else {})
+                    ),
                 },
             )
             return self._to_response(record, resolved_service_type)
@@ -396,6 +441,18 @@ class TaskService:
             resolved_mode,
             {
                 "provider": provider,
+                **(
+                    {
+                        "run_config_snapshot": {
+                            **action_replica_cfg,
+                            "provider": provider,
+                            "source_video_url": input_video_url,
+                            "character_image_url": input_image_url,
+                        }
+                    }
+                    if resolved_service == "avatar"
+                    else {}
+                ),
                 **({"policy": localization_policy} if resolved_service == "localization" else {}),
             },
             None,
@@ -418,7 +475,14 @@ class TaskService:
                 "input_video_url": input_video_url,
                 "input_image_url": input_image_url,
                 "prompt": avatar_prompt,
-                "inputs": localization_inputs if resolved_service == "localization" else {},
+                "preserve_camera": action_replica_cfg.get("preserve_camera"),
+                "preserve_motion": action_replica_cfg.get("preserve_motion"),
+                "preserve_timing": action_replica_cfg.get("preserve_timing"),
+                "inputs": (
+                    localization_inputs
+                    if resolved_service == "localization"
+                    else (action_replica_cfg if resolved_service == "avatar" else {})
+                ),
             },
         )
         return self._to_response(record, resolved_service_type)
@@ -430,7 +494,9 @@ class TaskService:
         if record.service in {"avatar", "action_replica"}:
             if not self._avatar_enabled():
                 return "mock"
-            return "wan26_r2v" if record.mode == "intelligent" else "wan26_flash"
+            if record.mode == "intelligent":
+                return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_INTELLIGENT", "wan26_r2v").strip() or "wan26_r2v")
+            return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_BASELINE", "wan26_r2v").strip() or "wan26_r2v")
         if record.service == "localization":
             return "localization_basic" if record.mode == "baseline" else "mock"
         return self._default_provider()
@@ -544,6 +610,52 @@ class TaskService:
             metadata["run_config_snapshot"] = payload["run_config_snapshot"]
         if isinstance(payload.get("manifest_preview"), dict):
             metadata["manifest_preview"] = payload["manifest_preview"]
+
+        if record.service == "avatar":
+            run_cfg = metadata.get("run_config_snapshot")
+            run_cfg_dict = dict(run_cfg) if isinstance(run_cfg, dict) else {}
+            output_key_resolved = str(output_key or record.output_key or f"outputs/{task_id}/result.mp4")
+            output_url_resolved = str(output_url or record.output_url or "")
+            total_latency_ms = None
+            metrics_payload = payload.get("metrics")
+            if isinstance(metrics_payload, dict):
+                total_latency_ms = metrics_payload.get("total_latency_ms")
+            manifest_key = f"outputs/{task_id}/manifest.json"
+            manifest = {
+                "task_id": task_id,
+                "service": "action_replica",
+                "mode": record.mode,
+                "provider": metadata.get("provider"),
+                "source_video_url": run_cfg_dict.get("source_video_url") or record.input_video_url,
+                "character_image_url": run_cfg_dict.get("character_image_url") or record.input_image_url,
+                "preserve_camera": run_cfg_dict.get("preserve_camera", True),
+                "preserve_motion": run_cfg_dict.get("preserve_motion", True),
+                "preserve_timing": run_cfg_dict.get("preserve_timing", True),
+                "prompt": run_cfg_dict.get("prompt"),
+                "outputs": {
+                    "video_key": output_key_resolved,
+                    "video_url": output_url_resolved,
+                    "manifest_key": manifest_key,
+                },
+                "metrics": {"total_latency_ms": total_latency_ms},
+            }
+            try:
+                r2 = R2Client()
+                r2.put_json(manifest_key, manifest)
+                manifest_url = r2.public_url(manifest_key)
+                manifest["outputs"]["manifest_url"] = manifest_url
+                merged_outputs["video_key"] = output_key_resolved
+                merged_outputs["video_url"] = output_url_resolved
+                merged_outputs["manifest_key"] = manifest_key
+                merged_outputs["manifest_url"] = manifest_url
+                metadata["outputs"] = merged_outputs
+                metadata.setdefault("manifest_preview", manifest)
+            except Exception as manifest_exc:
+                logger.warning(
+                    "[action_replica] manifest upload skipped: %s: %s",
+                    type(manifest_exc).__name__,
+                    manifest_exc,
+                )
 
         updated = record.copy(
             update={
