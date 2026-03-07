@@ -34,6 +34,7 @@ from app.utils.ffmpeg_localization import (
     write_silence_audio,
     concat_audio_files,
 )
+from app.utils.subtitle_builder import build_ass_from_segments, build_srt_from_segments
 from app.utils.translate_gemini import (
     build_translation_qa,
     concise_rewrite_with_gemini,
@@ -68,13 +69,6 @@ class LocalizationEngine:
 
         def _segment_count(srt_text: str) -> int:
             return len([ln for ln in srt_text.splitlines() if ln.strip().isdigit()])
-
-        def _srt_ts(seconds: float) -> str:
-            total_ms = max(0, int(round(seconds * 1000)))
-            hh, rem = divmod(total_ms, 3600 * 1000)
-            mm, rem = divmod(rem, 60 * 1000)
-            ss, ms = divmod(rem, 1000)
-            return f"{hh:02}:{mm:02}:{ss:02},{ms:03}"
 
         def mark_step(name: str, stage: str, progress: int) -> float:
             on_stage(stage, progress)
@@ -153,21 +147,6 @@ class LocalizationEngine:
                     }
                 )
             return payload
-
-        def _translated_segments_to_srt(rows: list[dict[str, Any]]) -> str:
-            out: list[str] = []
-            for row in rows:
-                idx = int(row.get("index") or 0)
-                if idx <= 0:
-                    continue
-                start = float(row.get("start") or 0.0)
-                end = float(row.get("end") or max(start + 0.2, 0.2))
-                text = str(row.get("translated") or "").strip() or "[UNTRANSLATED]"
-                out.append(str(idx))
-                out.append(f"{_srt_ts(start)} --> {_srt_ts(max(end, start + 0.1))}")
-                out.append(text)
-                out.append("")
-            return "\n".join(out).strip() + "\n"
 
         def _merged_tts_text_from_translated_segments(rows: list[dict[str, Any]]) -> str:
             parts = [normalize_zh_text(str(r.get("translated") or "")) for r in rows]
@@ -442,11 +421,6 @@ class LocalizationEngine:
             if no_subtitles:
                 fallback_reason = "SILENT_AUDIO_OR_EMPTY_ASR"
                 source_video_duration_sec_for_marker = _probe_duration(source_video) or 5.0
-                target_srt = (
-                    "1\n"
-                    f"00:00:00,000 --> {_srt_ts(source_video_duration_sec_for_marker)}\n"
-                    "[NO_SUBTITLES] No speech detected.\n"
-                )
                 translated_segments = [
                     {
                         "index": 1,
@@ -456,6 +430,7 @@ class LocalizationEngine:
                         "translated": "[NO_SUBTITLES] No speech detected.",
                     }
                 ]
+                target_srt = build_srt_from_segments(translated_segments)
             else:
                 try:
                     if translation_provider == "gemini":
@@ -490,7 +465,7 @@ class LocalizationEngine:
                             )
                     if translation_missing_indexes or any(not str(x.get("translated") or "").strip() for x in translated_segments):
                         raise EngineRunError("TRANSLATION_MISSING_SEGMENTS")
-                    target_srt = _translated_segments_to_srt(translated_segments)
+                    target_srt = build_srt_from_segments(translated_segments)
                 except Exception as tr_exc:
                     translation_fallback_used = True
                     fallback_reason = f"translation_exception:{type(tr_exc).__name__}"
@@ -507,7 +482,7 @@ class LocalizationEngine:
                                 "translated": f"[UNTRANSLATED] {str(seg['text']).strip()}",
                             }
                         )
-                    target_srt = _translated_segments_to_srt(translated_segments)
+                    target_srt = build_srt_from_segments(translated_segments)
             for row in translated_segments:
                 idx = int(row.get("index") or 0)
                 raw_src = raw_text_by_index.get(idx, str(row.get("origin") or ""))
@@ -515,6 +490,8 @@ class LocalizationEngine:
                 row["origin"] = normalize_zh_text(str(row.get("origin") or raw_src))
             target_srt_path = workspace / "target.srt"
             target_srt_path.write_text(target_srt, encoding="utf-8")
+            target_ass_path = workspace / "target.ass"
+            target_ass_path.write_text(build_ass_from_segments(translated_segments), encoding="utf-8")
             translated_segments_path.write_text(
                 json.dumps(translated_segments, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -896,7 +873,8 @@ class LocalizationEngine:
             step = mark_step("building_subtitle", "BUILDING_SUBTITLE", 83)
             subtitle_segment_count = _segment_count(target_srt_path.read_text(encoding="utf-8")) if target_srt_path.exists() else 0
             on_log(
-                f"[loc] step=building_subtitle details target_srt={target_srt_path.exists()} segments={subtitle_segment_count}"
+                f"[loc] step=building_subtitle details target_srt={target_srt_path.exists()} "
+                f"target_ass={target_ass_path.exists()} segments={subtitle_segment_count}"
             )
             end_step("building_subtitle", step)
 
@@ -944,6 +922,7 @@ class LocalizationEngine:
             step = mark_step("uploading", "UPLOADING", 90)
             output_key = f"outputs/{task_id}/localized.mp4"
             subtitle_key = f"outputs/{task_id}/target.srt"
+            subtitle_ass_key = f"outputs/{task_id}/target.ass"
             manifest_key = f"outputs/{task_id}/manifest.json"
             origin_segments_key = f"outputs/{task_id}/origin_segments.json"
             translated_segments_key = f"outputs/{task_id}/translated_segments.json"
@@ -952,6 +931,11 @@ class LocalizationEngine:
 
             output_url = self.r2.upload_bytes(output_key, localized_mp4_path.read_bytes(), content_type="video/mp4")
             subtitle_url = self.r2.upload_bytes(subtitle_key, target_srt_path.read_bytes(), content_type="text/plain")
+            subtitle_ass_url = self.r2.upload_bytes(
+                subtitle_ass_key,
+                target_ass_path.read_bytes(),
+                content_type="text/plain",
+            )
             origin_segments_url = self.r2.upload_bytes(
                 origin_segments_key,
                 origin_segments_path.read_bytes(),
@@ -989,6 +973,8 @@ class LocalizationEngine:
                 "video_url": output_url,
                 "subtitle_key": subtitle_key,
                 "subtitle_url": subtitle_url,
+                "subtitle_ass_key": subtitle_ass_key,
+                "subtitle_ass_url": subtitle_ass_url,
                 "manifest_key": manifest_key,
                 "manifest_url": manifest_url,
                 "origin_segments_key": origin_segments_key,
