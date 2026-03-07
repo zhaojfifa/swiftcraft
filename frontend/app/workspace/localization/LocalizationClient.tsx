@@ -95,7 +95,7 @@ export default function LocalizationClient() {
   const [subtitleMode, setSubtitleMode] = useState<"sidecar" | "burned">("burned");
   const [audioStrategy, setAudioStrategy] = useState<AudioStrategy>("mute_original");
   const [dubGain, setDubGain] = useState(1.0);
-  const [bgmGain, setBgmGain] = useState(0.25);
+  const [bgmGain, setBgmGain] = useState(0.0);
   const [voiceSpeed, setVoiceSpeed] = useState(1.0);
   const [lipsyncEnabled, setLipsyncEnabled] = useState(false);
   const [lipsyncScope, setLipsyncScope] = useState<"face" | "full">("face");

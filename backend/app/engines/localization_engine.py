@@ -708,8 +708,21 @@ class LocalizationEngine:
                     original_text_norm = str(row.get("origin") or "")
                     original_text_raw = str(row.get("origin_raw") or original_text_norm)
                     translated_text = str(row.get("translation_subtitle_final") or row.get("translated") or "")
-                    translation_initial = str(row.get("translation_initial") or translated_text)
-                    translation_final = str(row.get("translation_final") or translated_text)
+                    translation_dubbing_initial = str(
+                        row.get("translation_dubbing_initial")
+                        or row.get("translation_initial")
+                        or text
+                    )
+                    translation_dubbing_final = str(
+                        row.get("translation_dubbing_final")
+                        or row.get("translation_final")
+                        or text
+                    )
+                    translation_subtitle_final = str(
+                        row.get("translation_subtitle_final")
+                        or translated_text
+                        or translation_dubbing_final
+                    )
                     final_tts_text = text
                     ultra_short_mode = target_sec < 0.7
                     ultra_short_max_atempo = _env_float("TTS_ULTRA_SHORT_MAX_ATEMPO", 2.0)
@@ -857,17 +870,17 @@ class LocalizationEngine:
                             "src_text_norm": original_text_norm,
                             "source_text_raw": original_text_raw,
                             "source_text_norm": original_text_norm,
-                            "translation_initial": translation_initial,
-                            "translation_final": translation_final,
-                            "translation_dubbing_initial": translation_initial,
-                            "translation_dubbing_final": translation_final,
-                            "translation_subtitle_final": translation_final,
-                            "tts_text_initial": translated_text,
+                            "translation_initial": translation_dubbing_initial,
+                            "translation_final": translation_dubbing_final,
+                            "translation_dubbing_initial": translation_dubbing_initial,
+                            "translation_dubbing_final": translation_dubbing_final,
+                            "translation_subtitle_final": translation_subtitle_final,
+                            "tts_text_initial": translation_dubbing_final,
                             "tts_text_final": final_tts_text,
-                            "subtitle_text_final": translation_final,
-                            "subtitle_chars": len(translation_final),
-                            "subtitle_line_count": max(1, str(translation_final).count("\\N") + 1) if translation_final else 0,
-                            "translated_text": translated_text,
+                            "subtitle_text_final": translation_subtitle_final,
+                            "subtitle_chars": len(translation_subtitle_final),
+                            "subtitle_line_count": max(1, str(translation_subtitle_final).count("\\N") + 1) if translation_subtitle_final else 0,
+                            "translated_text": translation_subtitle_final,
                             "final_tts_text": final_tts_text,
                             "src_dur": target_sec,
                             "target_sec": target_sec,
