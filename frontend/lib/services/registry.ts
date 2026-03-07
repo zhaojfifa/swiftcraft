@@ -58,9 +58,11 @@ export const SERVICE_REGISTRY: ServiceConfig[] = [
     route: "/workspace?service=action_replica",
     enabled: true,
     inputs: [
-      { id: "character_image", type: "image", label: "Character Image" },
-      { id: "motion_video", type: "video", label: "Motion Reference (Video)" },
-      { id: "orientation", type: "select", label: "Orientation" },
+      { id: "character_image_url", type: "image", label: "Character Image" },
+      { id: "source_video_url", type: "video", label: "Source Video" },
+      { id: "preserve_camera", type: "select", label: "Preserve Camera" },
+      { id: "preserve_motion", type: "select", label: "Preserve Motion" },
+      { id: "preserve_timing", type: "select", label: "Preserve Timing" },
       { id: "prompt", type: "text", label: "Prompt" }
     ],
     ui: {

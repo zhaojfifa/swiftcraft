@@ -43,6 +43,9 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [faceEnhancer, setFaceEnhancer] = useState(true);
   const [orientation, setOrientation] = useState<"front" | "side" | "back">("front");
   const [prompt, setPrompt] = useState<string>("");
+  const [preserveCamera, setPreserveCamera] = useState(true);
+  const [preserveMotion, setPreserveMotion] = useState(true);
+  const [preserveTiming, setPreserveTiming] = useState(true);
   const [showPromptTips, setShowPromptTips] = useState(false);
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -334,6 +337,9 @@ export default function SwapClient({ service = "swap" }: Props) {
         character_image: characterKey,
         motion_video: motionKey,
         character_orientation: orientation,
+        preserve_camera: preserveCamera,
+        preserve_motion: preserveMotion,
+        preserve_timing: preserveTiming,
         prompt: prompt.trim() ? prompt.trim() : undefined
       }
     });
@@ -416,6 +422,9 @@ export default function SwapClient({ service = "swap" }: Props) {
           character_image: "(character key)",
           motion_video: "(motion key)",
           character_orientation: orientation,
+          preserve_camera: preserveCamera,
+          preserve_motion: preserveMotion,
+          preserve_timing: preserveTiming,
           prompt: prompt ? "(optional)" : ""
         }
       }
@@ -434,7 +443,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     ? [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"action_replica\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${modeApi}\",\"input_key\":\"<source_key>\",\"inputs\":{\"character_image_url\":\"<character_key>\",\"source_video_url\":\"<source_key>\",\"character_orientation\":\"${orientation}\"}}'`
+        `  -d '{\"service_type\":\"action_replica\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${modeApi}\",\"input_key\":\"<source_key>\",\"inputs\":{\"character_image_url\":\"<character_key>\",\"source_video_url\":\"<source_key>\",\"preserve_camera\":${preserveCamera},\"preserve_motion\":${preserveMotion},\"preserve_timing\":${preserveTiming},\"character_orientation\":\"${orientation}\"}}'`
       ].join(" \\\n")
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
@@ -678,7 +687,7 @@ export default function SwapClient({ service = "swap" }: Props) {
 
                         <div className="space-y-3">
                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex justify-between">
-                            Motion Reference (Video)
+                            Source Video
                             <span className="text-[10px] font-normal text-slate-400">MP4, 4-8s</span>
                           </label>
                           <div className="flex items-center justify-between text-[11px] text-slate-400">
@@ -834,7 +843,39 @@ export default function SwapClient({ service = "swap" }: Props) {
                       <>
                         <div className="space-y-3">
                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                            Orientation
+                            Preserve Strategy
+                          </label>
+                          <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <label className="flex items-center justify-between text-xs text-slate-600">
+                              <span>Preserve Camera</span>
+                              <input
+                                type="checkbox"
+                                checked={preserveCamera}
+                                onChange={(event) => setPreserveCamera(event.target.checked)}
+                              />
+                            </label>
+                            <label className="flex items-center justify-between text-xs text-slate-600">
+                              <span>Preserve Motion</span>
+                              <input
+                                type="checkbox"
+                                checked={preserveMotion}
+                                onChange={(event) => setPreserveMotion(event.target.checked)}
+                              />
+                            </label>
+                            <label className="flex items-center justify-between text-xs text-slate-600">
+                              <span>Preserve Timing</span>
+                              <input
+                                type="checkbox"
+                                checked={preserveTiming}
+                                onChange={(event) => setPreserveTiming(event.target.checked)}
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Orientation (Optional)
                           </label>
                           <select
                             value={orientation}
