@@ -736,10 +736,18 @@ class LocalizationEngine:
                             "duration_bucket": "ultra_short" if ultra_short_mode else ("short" if target_sec < 1.5 else "normal"),
                             "src_text_raw": original_text_raw,
                             "src_text_norm": original_text_norm,
+                            "source_text_raw": original_text_raw,
+                            "source_text_norm": original_text_norm,
                             "translation_initial": translation_initial,
                             "translation_final": translation_final,
+                            "translation_dubbing_initial": translation_initial,
+                            "translation_dubbing_final": translation_final,
+                            "translation_subtitle_final": translation_final,
                             "tts_text_initial": translated_text,
                             "tts_text_final": final_tts_text,
+                            "subtitle_text_final": translation_final,
+                            "subtitle_chars": len(translation_final),
+                            "subtitle_line_count": max(1, str(translation_final).count("\\N") + 1) if translation_final else 0,
                             "translated_text": translated_text,
                             "final_tts_text": final_tts_text,
                             "src_dur": target_sec,
@@ -941,8 +949,14 @@ class LocalizationEngine:
             translated_segments_key = f"outputs/{task_id}/translated_segments.json"
             translation_qa_key = f"outputs/{task_id}/translation_qa.json"
             tts_alignment_qa_key = f"outputs/{task_id}/tts_alignment_qa.json"
+            localized_audio_only_key = f"outputs/{task_id}/localized_audio_only.mp4"
 
             output_url = self.r2.upload_bytes(output_key, localized_mp4_path.read_bytes(), content_type="video/mp4")
+            localized_audio_only_url = self.r2.upload_bytes(
+                localized_audio_only_key,
+                localized_audio_only_path.read_bytes(),
+                content_type="video/mp4",
+            )
             subtitle_url = self.r2.upload_bytes(subtitle_key, target_srt_path.read_bytes(), content_type="text/plain")
             subtitle_ass_url = self.r2.upload_bytes(
                 subtitle_ass_key,
@@ -984,6 +998,10 @@ class LocalizationEngine:
             outputs = {
                 "video_key": output_key,
                 "video_url": output_url,
+                "localized_final_key": output_key,
+                "localized_final_url": output_url,
+                "localized_audio_only_key": localized_audio_only_key,
+                "localized_audio_only_url": localized_audio_only_url,
                 "subtitle_key": subtitle_key,
                 "subtitle_url": subtitle_url,
                 "subtitle_ass_key": subtitle_ass_key,
@@ -1005,12 +1023,26 @@ class LocalizationEngine:
                 outputs["audio_url"] = audio_url
             elif no_subtitles:
                 outputs["audio_omitted_reason"] = "SILENT_AUDIO_OR_EMPTY_ASR"
+            outputs["video"] = {"key": output_key, "url": output_url}
+            outputs["subtitle_srt"] = {"key": subtitle_key, "url": subtitle_url}
+            outputs["subtitle_ass"] = {"key": subtitle_ass_key, "url": subtitle_ass_url}
+            outputs["audio"] = {"key": audio_key, "url": audio_url}
+            outputs["manifest"] = {"key": manifest_key, "url": manifest_url}
+            outputs["origin_segments"] = {"key": origin_segments_key, "url": origin_segments_url}
+            outputs["translated_segments"] = {"key": translated_segments_key, "url": translated_segments_url}
+            outputs["translation_qa"] = {"key": translation_qa_key, "url": translation_qa_url}
+            outputs["tts_alignment_qa"] = {"key": tts_alignment_qa_key, "url": tts_alignment_qa_url}
             policy_flags = ["cannot_remove_burned_in_subtitles_baseline"]
             manifest = {
                 "task_id": task_id,
                 "service": "localization",
                 "mode": record.mode,
                 "source_url": source_url,
+                "subtitle_burned": True,
+                "subtitle_format": "ass",
+                "subtitle_mode": subtitle_mode,
+                "localized_audio_only_url": localized_audio_only_url,
+                "localized_final_url": output_url,
                 "outputs": outputs,
                 "metrics": {
                     "elapsed_ms_by_step": metrics,

@@ -43,8 +43,14 @@ class TaskStage(str, Enum):
 class TaskOutputsOut(BaseModel):
     video_key: Optional[str] = None
     video_url: Optional[str] = None
+    localized_final_key: Optional[str] = None
+    localized_final_url: Optional[str] = None
+    localized_audio_only_key: Optional[str] = None
+    localized_audio_only_url: Optional[str] = None
     subtitle_key: Optional[str] = None
     subtitle_url: Optional[str] = None
+    subtitle_ass_key: Optional[str] = None
+    subtitle_ass_url: Optional[str] = None
     audio_key: Optional[str] = None
     audio_url: Optional[str] = None
     manifest_key: Optional[str] = None
