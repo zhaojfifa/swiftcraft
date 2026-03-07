@@ -19,8 +19,11 @@ type Mode = "baseline" | "intelligent";
 type OutputMap = {
   video_url?: string;
   subtitle_url?: string;
+  subtitle_ass_url?: string;
   audio_url?: string;
   manifest_url?: string;
+  localized_audio_only_url?: string;
+  localized_final_url?: string;
   manifest_json?: unknown;
   [k: string]: unknown;
 };
@@ -54,11 +57,12 @@ function extractLocalizationOutputs(task: TaskRecord | null) {
     task?.output_url,
   );
   const subtitleUrl = pickString(merged.subtitle_url, mdOutputs.subtitle_url, mpOutputs.subtitle_url);
+  const subtitleAssUrl = pickString(merged.subtitle_ass_url, mdOutputs.subtitle_ass_url, mpOutputs.subtitle_ass_url);
   const audioUrl = pickString(merged.audio_url, mdOutputs.audio_url, mpOutputs.audio_url);
   const manifestUrl = pickString(merged.manifest_url, mdOutputs.manifest_url, mpOutputs.manifest_url);
   const manifestFallback = merged.manifest_json ?? mdOutputs.manifest_json ?? manifestPreview ?? merged;
 
-  return { videoUrl, subtitleUrl, audioUrl, manifestUrl, manifestFallback };
+  return { videoUrl, subtitleUrl, subtitleAssUrl, audioUrl, manifestUrl, manifestFallback };
 }
 
 function shouldStopPolling(task: TaskRecord | null): boolean {
@@ -87,7 +91,7 @@ export default function LocalizationClient() {
   const [inputVideoUrl, setInputVideoUrl] = useState<string | null>(null);
   const [targetLang, setTargetLang] = useState("my");
   const [voiceId, setVoiceId] = useState("mm_female_1");
-  const [subtitleMode, setSubtitleMode] = useState<"sidecar" | "burned">("sidecar");
+  const [subtitleMode, setSubtitleMode] = useState<"sidecar" | "burned">("burned");
   const [preserveBgm, setPreserveBgm] = useState(true);
   const [ducking, setDucking] = useState(true);
   const [lipsyncEnabled, setLipsyncEnabled] = useState(false);
@@ -107,6 +111,7 @@ export default function LocalizationClient() {
   const extracted = useMemo(() => extractLocalizationOutputs(task), [task]);
   const videoUrl = resolveAssetUrl(extracted.videoUrl);
   const subtitleUrl = resolveAssetUrl(extracted.subtitleUrl);
+  const subtitleAssUrl = resolveAssetUrl(extracted.subtitleAssUrl);
   const audioUrl = resolveAssetUrl(extracted.audioUrl);
   const manifestUrl = resolveAssetUrl(extracted.manifestUrl);
   const manifestFallback = extracted.manifestFallback;
@@ -390,6 +395,7 @@ export default function LocalizationClient() {
               setActiveTab={setActiveOutputTab}
               videoUrl={videoUrl}
               subtitleUrl={subtitleUrl}
+              subtitleAssUrl={subtitleAssUrl}
               audioUrl={audioUrl}
               manifestUrl={manifestUrl}
               manifestFallback={manifestFallback}
