@@ -539,9 +539,9 @@ def mix_ducking(
         # Duck original audio by dub sidechain, then mix ducked original + dub.
         filter_complex = (
             "[0:a]aresample=16000,asetpts=N/SR/TB[bgm];"
-            "[1:a]aresample=16000,asetpts=N/SR/TB[dub];"
-            "[bgm][dub]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=400[ducked];"
-            "[ducked][dub]amix=inputs=2:duration=longest:weights=0.55 1.00,aresample=48000[a]"
+            "[1:a]aresample=16000,asetpts=N/SR/TB,asplit=2[dub_sc][dub_mix];"
+            "[bgm][dub_sc]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=400[ducked];"
+            "[ducked][dub_mix]amix=inputs=2:duration=longest:weights=0.55 1.00,aresample=48000[a]"
         )
         mix_strategy = "duck_then_amix"
         mix_weights = "bgm=0.55,dub=1.00"
