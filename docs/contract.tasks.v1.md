@@ -62,7 +62,7 @@ POST /api/v1/tasks
 Response (TaskResponseOut)
 {
   "task_id": "string",
-  "service_type": "face_swap|action_replica|localization",
+  "service_type": "swap|action_replica|localization",
   "model_id": "string|null",
   "mode": "string",
   "status": "queued|running|succeeded|failed",

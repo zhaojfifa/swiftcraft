@@ -42,7 +42,8 @@ def _start_runner_thread(task_id: str) -> None:
                             "service": {"type": "string", "example": "swap"},
                             "mode": {"type": "string", "example": "baseline"},
                             "input_key": {"type": "string", "example": "presets/swap/baseline.mp4"},
-                            "service_type": {"type": "string", "example": "face_swap"},
+                            "service_type": {"type": "string", "example": "swap"},
+                            "subtype": {"type": "string", "example": "scene"},
                             "inputs": {
                                 "type": "object",
                                 "properties": {

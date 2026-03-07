@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class ServiceType(str, Enum):
+    swap = "swap"
+    # legacy alias
     face_swap = "face_swap"
     action_replica = "action_replica"
     # legacy alias kept for backward compatibility
@@ -81,12 +83,27 @@ class LegacySwapRequest(BaseModel):
 
 
 class SwapInputs(BaseModel):
-    source_video: str
-    target_image: str
+    source_video: Optional[str] = None
+    source_video_url: Optional[str] = None
+    target_image: Optional[str] = None
+    target_image_url: Optional[str] = None
+
+    @model_validator(mode="after")
+    def normalize_aliases(self) -> "SwapInputs":
+        if not self.source_video and self.source_video_url:
+            self.source_video = self.source_video_url
+        if not self.target_image and self.target_image_url:
+            self.target_image = self.target_image_url
+        if not self.source_video:
+            raise ValueError("inputs.source_video (or source_video_url) is required for swap.")
+        if not self.target_image:
+            raise ValueError("inputs.target_image (or target_image_url) is required for swap.")
+        return self
 
 
 class SwapRequest(BaseModel):
-    service_type: Literal["face_swap"] = "face_swap"
+    service_type: Literal["swap", "face_swap"] = "swap"
+    subtype: Literal["scene", "face"] = "scene"
     mode: str
     inputs: SwapInputs
 

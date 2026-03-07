@@ -23,6 +23,7 @@ from app.schemas.task import (
     LegacySwapRequest,
     LocalizationRequest,
     ServiceType,
+    SwapRequest,
     TaskOutputsOut,
     TaskResponseOut,
     TaskStage,
@@ -178,7 +179,7 @@ def _service_type_from_legacy(service: str) -> ServiceType:
         return ServiceType.action_replica
     if service == "localization":
         return ServiceType.localization
-    return ServiceType.face_swap
+    return ServiceType.swap
 
 
 def _status_from_record(record: TaskRecord) -> TaskStatus:
@@ -336,12 +337,16 @@ class TaskService:
             mode = parsed.mode
             if service_type == ServiceType.face_swap:
                 service = "swap"
+            elif service_type == ServiceType.swap:
+                service = "swap"
             elif service_type in {ServiceType.action_replica, ServiceType.avatar_transfer}:
                 service = "avatar"
             else:
                 service = "localization"
             if isinstance(parsed, (AvatarRequest, LocalizationRequest)):
                 input_key = parsed.input_key
+            if isinstance(parsed, SwapRequest):
+                payload["subtype"] = parsed.subtype
         else:
             legacy = LegacySwapRequest.model_validate(payload)
             service = legacy.service
@@ -362,6 +367,9 @@ class TaskService:
         localization_inputs: Dict[str, Any] = {}
         localization_policy: Dict[str, Any] = {}
         localization_contract: Dict[str, Any] = {}
+        swap_subtype = str(payload.get("subtype") or "scene").strip().lower()
+        if swap_subtype not in {"scene", "face"}:
+            swap_subtype = "scene"
         if resolved_service == "localization":
             localization_inputs, localization_policy = _normalize_localization_inputs(payload, resolved_mode)
             localization_contract = _extract_localization_intelligence_contract(localization_inputs, resolved_mode)
@@ -417,6 +425,12 @@ class TaskService:
                 metadata_dict["run_config_snapshot"] = localization_contract
                 if resolved_mode == "intelligent":
                     metadata_dict["intelligence_contract"] = localization_contract
+            if resolved_service == "swap":
+                metadata_dict["run_config_snapshot"] = {
+                    "service_type": "swap",
+                    "subtype": swap_subtype,
+                    "mode": resolved_mode,
+                }
             if face_enhancer is not None:
                 metadata_dict["face_enhancer"] = face_enhancer
             resolved_input_key = resolve_input_key(resolved_service, resolved_mode)
@@ -505,6 +519,17 @@ class TaskService:
                     if resolved_service == "localization" and resolved_mode == "intelligent"
                     else {}
                 ),
+                **(
+                    {
+                        "run_config_snapshot": {
+                            "service_type": "swap",
+                            "subtype": swap_subtype,
+                            "mode": resolved_mode,
+                        }
+                    }
+                    if resolved_service == "swap"
+                    else {}
+                ),
             },
             None,
             input_video_url,
@@ -534,6 +559,7 @@ class TaskService:
                     if resolved_service == "localization"
                     else (action_replica_cfg if resolved_service == "avatar" else {})
                 ),
+                "swap_subtype": swap_subtype if resolved_service == "swap" else None,
             },
         )
         return self._to_response(record, resolved_service_type)
