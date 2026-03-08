@@ -432,6 +432,8 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskRequestId = String(taskMetadata.request_id || "");
   const taskModeSummary = String(taskMetadata.mode || (task?.mode || "") || "");
   const taskProviderSummary = String(taskMetadata.provider || "");
+  const taskEngineSummary = String(taskMetadata.engine || "");
+  const taskModelIdSummary = String(taskMetadata.model_id || "");
   const taskPromptSource = String(taskMetadata.prompt_source || "");
   const taskPromptProfile = String(taskMetadata.prompt_profile || "");
   const taskPromptStrength = String(taskMetadata.prompt_strength || "");
@@ -1157,6 +1159,8 @@ export default function SwapClient({ service = "swap" }: Props) {
                       <div className="mt-1 space-y-0.5 text-[11px] text-slate-600">
                         <div>Mode: {taskModeSummary || "-"}</div>
                         <div>Provider: {taskProviderSummary || "-"}</div>
+                        <div>Engine: {taskEngineSummary || "-"}</div>
+                        <div>Model ID: {taskModelIdSummary || "-"}</div>
                         <div>Prompt Source: {taskPromptSource || "-"}</div>
                         <div>Prompt Profile: {taskPromptProfile || "-"}</div>
                         <div>Prompt Strength: {taskPromptStrength || "-"}</div>
