@@ -6,6 +6,7 @@ from typing import Dict
 def resolve_character_orientation(
     preserve_camera: bool,
     preserve_motion: bool,
+    preserve_timing: bool,
     preserve_background: bool,
     orientation_strategy: str = "auto",
 ) -> str:
@@ -14,26 +15,27 @@ def resolve_character_orientation(
         return "video"
     if strategy == "prefer_image_camera":
         return "image"
-    if preserve_motion and not preserve_camera:
+    if preserve_motion or preserve_timing:
         return "video"
-    if preserve_camera and preserve_background:
+    if preserve_background and not preserve_camera:
+        return "video"
+    if preserve_camera and not (preserve_motion or preserve_timing):
         return "image"
-    if preserve_motion and preserve_camera:
-        return "video"
     return "video"
 
 
 def resolve_prompt_profile(
     preserve_camera: bool,
     preserve_motion: bool,
+    preserve_timing: bool,
     preserve_background: bool,
 ) -> str:
-    if preserve_motion and not preserve_camera:
+    if preserve_motion or preserve_timing:
         return "motion_priority"
-    if preserve_camera and preserve_background:
+    if preserve_background:
+        return "balanced"
+    if preserve_camera:
         return "camera_priority"
-    if preserve_camera and preserve_motion:
-        return "motion_priority"
     return "balanced"
 
 
@@ -60,8 +62,11 @@ def build_action_replica_prompts(
     prompt_profile = resolve_prompt_profile(
         preserve_camera=preserve_camera,
         preserve_motion=preserve_motion,
+        preserve_timing=preserve_timing,
         preserve_background=preserve_background,
     )
+    if preserve_camera and preserve_motion and preserve_timing and preserve_background:
+        prompt_profile = "motion_priority"
     profile_id = (
         "action_replica.intelligent.kling.v1" if mode_norm == "intelligent" else "action_replica.basic.wan.v2"
     )
@@ -74,10 +79,10 @@ def build_action_replica_prompts(
         "Maintain a realistic single-person performance consistent with the source video."
     )
     intelligent_default = (
-        "Perform strict identity replacement of the original subject with the provided character. "
-        "Preserve the exact body choreography, hand gesture path, head movement, pose timing, camera path, framing, "
-        "and environmental continuity from the source video. Keep the scene structure, background, lighting direction, "
-        "and composition stable. The output should look like the same shot with only the person replaced."
+        "Replace the original subject with the provided character while keeping action fidelity as top priority. "
+        "Maintain the same body choreography, hand motion path, pose transition, and gesture pacing from the source video. "
+        "Then preserve background continuity, scene layout, and lighting stability. "
+        "Keep camera framing and movement close to the source, but do not over-constrain minor visual detail."
     )
 
     motion_priority = (

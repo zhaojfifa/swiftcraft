@@ -153,6 +153,7 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
     resolved_character_orientation = resolve_character_orientation(
         preserve_camera=preserve_camera,
         preserve_motion=preserve_motion,
+        preserve_timing=preserve_timing,
         preserve_background=preserve_background,
         orientation_strategy=orientation_strategy,
     )
@@ -870,11 +871,13 @@ class TaskService:
                 "prompt_profile": run_cfg_dict.get("prompt_profile"),
                 "prompt_profile_id": run_cfg_dict.get("prompt_profile_id"),
                 "prompt_strength": run_cfg_dict.get("prompt_strength", "medium"),
+                "priority_policy": "motion>background>camera>detail",
                 "orientation_strategy": run_cfg_dict.get("orientation_strategy", "auto"),
                 "resolved_character_orientation": run_cfg_dict.get("resolved_character_orientation", "video"),
                 "candidate_count": run_cfg_dict.get("candidate_count", 1),
                 "seed": run_cfg_dict.get("seed"),
                 "seed_strategy": run_cfg_dict.get("seed_strategy", "fixed"),
+                "retry_count": metadata.get("policy_retry_count", 0),
                 "outputs": {
                     "video_key": output_key_resolved,
                     "video_url": output_url_resolved,
