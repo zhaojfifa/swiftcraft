@@ -45,12 +45,17 @@ POST /api/v1/tasks
 {
   "service_type": "action_replica",
   "model_id": "kling-v2.6-std-motion",
-  "mode": "intelligent",
+  "mode": "baseline",
   "inputs": {
     "provider": "wan26_r2v|fal_kling_action_replica",
     "character_image_url": "https://cdn.example/uploads/<character>.png",
     "source_video_url": "https://cdn.example/uploads/<source>.mp4",
-    "prompt": "optional text"
+    "prompt": "optional text",
+    "negative_prompt": "optional text",
+    "prompt_strength": "weak|medium|strong",
+    "preserve_camera": true,
+    "preserve_motion": true,
+    "preserve_timing": true
   }
 }
 

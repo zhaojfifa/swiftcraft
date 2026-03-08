@@ -89,6 +89,10 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
         return default
 
     prompt = str(data.get("prompt") or "").strip() or None
+    negative_prompt = str(data.get("negative_prompt") or "").strip() or None
+    prompt_strength = str(data.get("prompt_strength") or "medium").strip().lower() or "medium"
+    if prompt_strength not in {"weak", "medium", "strong"}:
+        prompt_strength = "medium"
     provider_hint = str(data.get("provider") or payload.get("provider") or "").strip().lower() or None
     return {
         "service_type": "action_replica",
@@ -99,6 +103,9 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
         "preserve_timing": _to_bool(data.get("preserve_timing"), True),
         "provider_hint": provider_hint,
         "prompt": prompt,
+        "negative_prompt": negative_prompt,
+        "prompt_strength": prompt_strength,
+        "prompt_used": bool(prompt),
     }
 
 
@@ -285,7 +292,10 @@ class TaskService:
             if requested in {"wan26_r2v", "wan26_action_replica", "wan26"}:
                 return "wan26_r2v"
             if mode == "intelligent":
-                return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_INTELLIGENT", "wan26_r2v").strip() or "wan26_r2v")
+                return (
+                    os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_INTELLIGENT", "fal_kling_action_replica").strip()
+                    or "fal_kling_action_replica"
+                )
             return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_BASELINE", "wan26_r2v").strip() or "wan26_r2v")
         if service == "localization":
             return "localization_basic" if mode == "baseline" else "localization_intelligent"
@@ -583,7 +593,10 @@ class TaskService:
             if not self._avatar_enabled():
                 return "mock"
             if record.mode == "intelligent":
-                return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_INTELLIGENT", "wan26_r2v").strip() or "wan26_r2v")
+                return (
+                    os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_INTELLIGENT", "fal_kling_action_replica").strip()
+                    or "fal_kling_action_replica"
+                )
             return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_BASELINE", "wan26_r2v").strip() or "wan26_r2v")
         if record.service == "localization":
             return "localization_basic" if record.mode == "baseline" else "localization_intelligent"

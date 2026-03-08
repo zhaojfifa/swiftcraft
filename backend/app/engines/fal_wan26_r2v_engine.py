@@ -183,10 +183,42 @@ class FalWan26R2VEngine:
                 raise EngineRunError(f"task_id={task_id} missing required field: input_video_url")
             on_stage("running", 5)
 
-            prompt = (
-                str(inputs.get("prompt") or "").strip()
-                or "Keep identity and motion intent. High quality, stable character and consistent style."
+            user_prompt = str(inputs.get("prompt") or "").strip()
+            user_negative_prompt = str(inputs.get("negative_prompt") or "").strip()
+            prompt_strength = str(inputs.get("prompt_strength") or "medium").strip().lower() or "medium"
+            if prompt_strength not in {"weak", "medium", "strong"}:
+                prompt_strength = "medium"
+            preserve_camera = bool(inputs.get("preserve_camera", True))
+            preserve_motion = bool(inputs.get("preserve_motion", True))
+            preserve_timing = bool(inputs.get("preserve_timing", True))
+
+            system_prompt = (
+                "Replace the original human subject in the source video with the provided character identity. "
+                "Preserve the original camera movement, shot composition, motion path, body timing, gesture timing, "
+                "pacing, scene layout, and environment continuity. Keep the output aligned to the source video as "
+                "closely as possible. Do not redesign the scene. Do not introduce new camera moves. "
+                "Do not significantly alter pose sequence or action timing. Focus on identity replacement while "
+                "maintaining motion fidelity and spatial consistency."
             )
+            strength_hint = {
+                "weak": "Apply slight styling preference only; prioritize source fidelity.",
+                "medium": "Apply moderate styling while preserving source structure.",
+                "strong": "Apply strong identity/style guidance while preserving motion and camera continuity.",
+            }[prompt_strength]
+            prompt_parts = [system_prompt, f"Strength policy: {strength_hint}"]
+            if user_prompt:
+                prompt_parts.append("Additional style and appearance guidance:")
+                prompt_parts.append(user_prompt)
+            final_prompt = "\n\n".join(prompt_parts)
+            system_negative_prompt = (
+                "identity drift, face deformation, inconsistent face, wrong person, extra fingers, bad hands, "
+                "warped limbs, body distortion, motion drift, camera drift, scene redesign, background change, "
+                "framing change, incorrect perspective, low detail face, flicker, unstable identity, over-stylization"
+            )
+            final_negative_prompt = (
+                f"{system_negative_prompt}, {user_negative_prompt}" if user_negative_prompt else system_negative_prompt
+            )
+            prompt = final_prompt
             duration_sec = int(self.duration)
             submit_video_url = record.input_video_url
             slice_meta: Dict[str, Any] = {}
@@ -206,6 +238,7 @@ class FalWan26R2VEngine:
             def build_args(video_url: str) -> Dict[str, Any]:
                 return {
                     "prompt": prompt,
+                    "negative_prompt": final_negative_prompt,
                     "video_urls": [video_url],
                     "aspect_ratio": self.aspect_ratio,
                     "resolution": self.resolution,
@@ -397,6 +430,16 @@ class FalWan26R2VEngine:
             ).strip()
             request_id = result_request_id or last_request_id or ""
             on_log(f"[r2v] submit ok request_id={request_id or 'n/a'}")
+            on_log(
+                f"[ar] prompt_used={str(bool(user_prompt)).lower()} prompt_strength={prompt_strength} "
+                f"preserve_camera={str(preserve_camera).lower()} preserve_motion={str(preserve_motion).lower()} "
+                f"preserve_timing={str(preserve_timing).lower()}"
+            )
+            on_log(f"[ar] final_prompt_preview={(final_prompt[:240] + '...') if len(final_prompt) > 240 else final_prompt}")
+            on_log(
+                "[ar] final_negative_prompt_preview="
+                f"{(final_negative_prompt[:240] + '...') if len(final_negative_prompt) > 240 else final_negative_prompt}"
+            )
 
             video_url = result.get("video_url") or result.get("video") or result.get("url")
             if isinstance(video_url, dict):
@@ -437,6 +480,13 @@ class FalWan26R2VEngine:
                     "policy_retry_count": policy_retry_count,
                     "policy_violation_type": policy_violation_type,
                     "policy_violation_url": policy_violation_url,
+                    "prompt_used": bool(user_prompt),
+                    "prompt_strength": prompt_strength,
+                    "preserve_camera": preserve_camera,
+                    "preserve_motion": preserve_motion,
+                    "preserve_timing": preserve_timing,
+                    "final_prompt_preview": final_prompt[:400],
+                    "final_negative_prompt_preview": final_negative_prompt[:400],
                     **slice_meta,
                 },
             )

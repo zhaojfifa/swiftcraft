@@ -34,7 +34,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const isSwap = serviceType === "swap";
   const isAvatar = serviceType === "action_replica" || serviceType === "avatar";
 
-  const [mode, setMode] = useState<SwapMode>("intelligent");
+  const [mode, setMode] = useState<SwapMode>("baseline");
   const [swapSubtype, setSwapSubtype] = useState<"scene" | "face">("scene");
   const [inputSource, setInputSource] = useState<"preset" | "upload">("preset");
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -44,6 +44,8 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [faceEnhancer, setFaceEnhancer] = useState(true);
   const [orientation, setOrientation] = useState<"front" | "side" | "back">("front");
   const [prompt, setPrompt] = useState<string>("");
+  const [negativePrompt, setNegativePrompt] = useState<string>("");
+  const [promptStrength, setPromptStrength] = useState<"weak" | "medium" | "strong">("medium");
   const [preserveCamera, setPreserveCamera] = useState(true);
   const [preserveMotion, setPreserveMotion] = useState(true);
   const [preserveTiming, setPreserveTiming] = useState(true);
@@ -342,10 +344,12 @@ export default function SwapClient({ service = "swap" }: Props) {
         character_image: characterKey,
         motion_video: motionKey,
         character_orientation: orientation,
-          preserve_camera: preserveCamera,
-          preserve_motion: preserveMotion,
-          preserve_timing: preserveTiming,
-          prompt: prompt.trim() ? prompt.trim() : undefined
+        preserve_camera: preserveCamera,
+        preserve_motion: preserveMotion,
+        preserve_timing: preserveTiming,
+        prompt: prompt.trim() ? prompt.trim() : undefined,
+        negative_prompt: negativePrompt.trim() ? negativePrompt.trim() : undefined,
+        prompt_strength: promptStrength,
       }
     });
   };
@@ -435,7 +439,9 @@ export default function SwapClient({ service = "swap" }: Props) {
           preserve_camera: preserveCamera,
           preserve_motion: preserveMotion,
           preserve_timing: preserveTiming,
-          prompt: prompt ? "(optional)" : ""
+          prompt: prompt ? "(optional)" : "",
+          negative_prompt: negativePrompt ? "(optional)" : "",
+          prompt_strength: promptStrength,
         }
       }
     : {
@@ -454,7 +460,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     ? [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"action_replica\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${modeApi}\",\"input_key\":\"<source_key>\",\"inputs\":{\"provider\":\"${actionReplicaProvider}\",\"character_image_url\":\"<character_key>\",\"source_video_url\":\"<source_key>\",\"preserve_camera\":${preserveCamera},\"preserve_motion\":${preserveMotion},\"preserve_timing\":${preserveTiming},\"character_orientation\":\"${orientation}\"}}'`
+        `  -d '{\"service_type\":\"action_replica\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${modeApi}\",\"input_key\":\"<source_key>\",\"inputs\":{\"provider\":\"${actionReplicaProvider}\",\"character_image_url\":\"<character_key>\",\"source_video_url\":\"<source_key>\",\"preserve_camera\":${preserveCamera},\"preserve_motion\":${preserveMotion},\"preserve_timing\":${preserveTiming},\"character_orientation\":\"${orientation}\",\"prompt\":\"<optional>\",\"negative_prompt\":\"<optional>\",\"prompt_strength\":\"${promptStrength}\"}}'`
       ].join(" \\\n")
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
@@ -952,6 +958,23 @@ export default function SwapClient({ service = "swap" }: Props) {
                         </div>
 
                         <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Prompt Strength
+                          </label>
+                          <select
+                            value={promptStrength}
+                            onChange={(event) =>
+                              setPromptStrength(event.target.value as "weak" | "medium" | "strong")
+                            }
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <option value="weak">Weak</option>
+                            <option value="medium">Medium</option>
+                            <option value="strong">Strong</option>
+                          </select>
+                        </div>
+
+                        <div className="space-y-3">
                           <div className="flex items-center justify-between">
                             <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                               Prompt
@@ -996,6 +1019,13 @@ export default function SwapClient({ service = "swap" }: Props) {
                             value={prompt}
                             onChange={(event) => setPrompt(event.target.value)}
                             placeholder="Optional prompt for style or motion"
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400"
+                          />
+                          <input
+                            type="text"
+                            value={negativePrompt}
+                            onChange={(event) => setNegativePrompt(event.target.value)}
+                            placeholder="Negative prompt (optional)"
                             className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400"
                           />
                         </div>
