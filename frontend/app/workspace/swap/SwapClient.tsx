@@ -46,6 +46,9 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [prompt, setPrompt] = useState<string>("");
   const [negativePrompt, setNegativePrompt] = useState<string>("");
   const [promptStrength, setPromptStrength] = useState<"low" | "medium" | "high">("medium");
+  const [promptProfile, setPromptProfile] = useState<"balanced" | "camera_priority" | "motion_priority" | "identity_priority">("balanced");
+  const [expressionMode, setExpressionMode] = useState<"natural" | "neutral" | "vivid">("natural");
+  const [fidelityBias, setFidelityBias] = useState<"identity" | "balanced" | "motion">("balanced");
   const [preserveCamera, setPreserveCamera] = useState(true);
   const [preserveMotion, setPreserveMotion] = useState(true);
   const [preserveTiming, setPreserveTiming] = useState(true);
@@ -53,7 +56,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [actionReplicaProvider, setActionReplicaProvider] = useState<"wan26_r2v" | "kling_motioncontrol_v3_pro">(
     "wan26_r2v",
   );
-  const [orientationStrategy, setOrientationStrategy] = useState<"auto" | "prefer_video_motion" | "prefer_image_camera">("auto");
+  const [orientationStrategy, setOrientationStrategy] = useState<"auto" | "prefer_video_motion" | "prefer_image_identity">("auto");
   const [showPromptTips, setShowPromptTips] = useState(false);
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -102,6 +105,17 @@ export default function SwapClient({ service = "swap" }: Props) {
   useEffect(() => {
     if (!isAvatar) return;
     setActionReplicaProvider(mode === "intelligent" ? "kling_motioncontrol_v3_pro" : "wan26_r2v");
+    if (mode === "intelligent") {
+      setExpressionMode("neutral");
+      setFidelityBias("motion");
+      setOrientationStrategy("prefer_video_motion");
+      setPromptProfile("motion_priority");
+    } else {
+      setExpressionMode("natural");
+      setFidelityBias("balanced");
+      setOrientationStrategy("auto");
+      setPromptProfile("balanced");
+    }
   }, [isAvatar, mode]);
 
   useEffect(() => {
@@ -118,7 +132,7 @@ export default function SwapClient({ service = "swap" }: Props) {
 
   const serviceApi = String(serviceType || "swap").toLowerCase();
   const modeApi = String(mode || "baseline").toLowerCase() as SwapMode;
-  const actionReplicaMode = modeApi === "intelligent" ? "intelligent" : "baseline";
+  const actionReplicaMode = modeApi === "intelligent" ? "intelligent" : "basic";
   const presetKey = resolvePresetInputKey(serviceApi, modeApi);
   const cdnBase = (process.env.NEXT_PUBLIC_CDN_BASE_URL || "").replace(/\/+$/, "");
   const safeDemoMotionKey = (process.env.NEXT_PUBLIC_SAFE_DEMO_MOTION_KEY || "").trim();
@@ -358,9 +372,14 @@ export default function SwapClient({ service = "swap" }: Props) {
         preserve_timing: preserveTiming,
         preserve_background: preserveBackground,
         orientation_strategy: orientationStrategy,
+        prompt_source: prompt.trim() ? "user" : "default",
+        user_prompt: prompt.trim() ? prompt.trim() : undefined,
+        prompt_profile: promptProfile,
         prompt: prompt.trim() ? prompt.trim() : undefined,
         negative_prompt: negativePrompt.trim() ? negativePrompt.trim() : undefined,
         prompt_strength: promptStrength,
+        expression_mode: expressionMode,
+        fidelity_bias: fidelityBias,
         candidate_count: 1,
         seed_strategy: "fixed",
       }
@@ -447,6 +466,11 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskPromptSource = String(taskMetadata.prompt_source || "");
   const taskPromptProfile = String(taskMetadata.prompt_profile || "");
   const taskPromptStrength = String(taskMetadata.prompt_strength || "");
+  const taskExpressionMode = String(taskMetadata.expression_mode || "");
+  const taskFidelityBias = String(taskMetadata.fidelity_bias || "");
+  const taskOrientationStrategy = String(taskMetadata.orientation_strategy || "");
+  const taskResolvedOrientation = String(taskMetadata.resolved_character_orientation || "");
+  const taskPriorityPolicy = String(taskMetadata.priority_policy || "");
   const taskCandidateCount = String(taskMetadata.candidate_count || "");
   const canUseSafeDemo = Boolean(safeDemoMotionKey && safeDemoCharacterKey) && !isRunning;
   const canRun = isAvatar
@@ -470,9 +494,14 @@ export default function SwapClient({ service = "swap" }: Props) {
           preserve_timing: preserveTiming,
           preserve_background: preserveBackground,
           orientation_strategy: orientationStrategy,
+          prompt_source: prompt ? "user" : "default",
+          user_prompt: prompt ? "(optional)" : "",
+          prompt_profile: promptProfile,
           prompt: prompt ? "(optional)" : "",
           negative_prompt: negativePrompt ? "(optional)" : "",
           prompt_strength: promptStrength,
+          expression_mode: expressionMode,
+          fidelity_bias: fidelityBias,
           candidate_count: 1,
           seed_strategy: "fixed",
         }
@@ -493,7 +522,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     ? [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"action_replica\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${actionReplicaMode}\",\"input_key\":\"<source_key>\",\"inputs\":{\"provider\":\"${actionReplicaProvider}\",\"character_image_url\":\"<character_key>\",\"source_video_url\":\"<source_key>\",\"preserve_camera\":${preserveCamera},\"preserve_motion\":${preserveMotion},\"preserve_timing\":${preserveTiming},\"preserve_background\":${preserveBackground},\"orientation_strategy\":\"${orientationStrategy}\",\"character_orientation\":\"${orientation}\",\"prompt\":\"<optional>\",\"negative_prompt\":\"<optional>\",\"prompt_strength\":\"${promptStrength}\",\"candidate_count\":1,\"seed_strategy\":\"fixed\"}}'`
+        `  -d '{\"service_type\":\"action_replica\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${actionReplicaMode}\",\"input_key\":\"<source_key>\",\"inputs\":{\"provider\":\"${actionReplicaProvider}\",\"character_image_url\":\"<character_key>\",\"source_video_url\":\"<source_key>\",\"preserve_camera\":${preserveCamera},\"preserve_motion\":${preserveMotion},\"preserve_timing\":${preserveTiming},\"preserve_background\":${preserveBackground},\"orientation_strategy\":\"${orientationStrategy}\",\"character_orientation\":\"${orientation}\",\"prompt_source\":\"${prompt ? "user" : "default"}\",\"user_prompt\":\"<optional>\",\"prompt_profile\":\"${promptProfile}\",\"prompt\":\"<optional>\",\"negative_prompt\":\"<optional>\",\"prompt_strength\":\"${promptStrength}\",\"expression_mode\":\"${expressionMode}\",\"fidelity_bias\":\"${fidelityBias}\",\"candidate_count\":1,\"seed_strategy\":\"fixed\"}}'`
       ].join(" \\\n")
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
@@ -986,18 +1015,18 @@ export default function SwapClient({ service = "swap" }: Props) {
                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                             Orientation Strategy
                           </label>
-                          <select
+                              <select
                             value={orientationStrategy}
                             onChange={(event) =>
                               setOrientationStrategy(
-                                event.target.value as "auto" | "prefer_video_motion" | "prefer_image_camera",
+                                event.target.value as "auto" | "prefer_video_motion" | "prefer_image_identity",
                               )
                             }
                             className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
                           >
                             <option value="auto">Auto</option>
                             <option value="prefer_video_motion">Prefer Video Motion</option>
-                            <option value="prefer_image_camera">Prefer Image Camera</option>
+                            <option value="prefer_image_identity">Prefer Image Identity</option>
                           </select>
                         </div>
 
@@ -1019,6 +1048,26 @@ export default function SwapClient({ service = "swap" }: Props) {
 
                         <div className="space-y-3">
                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Prompt Profile
+                          </label>
+                          <select
+                            value={promptProfile}
+                            onChange={(event) =>
+                              setPromptProfile(
+                                event.target.value as "balanced" | "camera_priority" | "motion_priority" | "identity_priority",
+                              )
+                            }
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <option value="balanced">Balanced</option>
+                            <option value="motion_priority">Motion Priority</option>
+                            <option value="camera_priority">Camera Priority</option>
+                            <option value="identity_priority">Identity Priority</option>
+                          </select>
+                        </div>
+
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                             Prompt Strength
                           </label>
                           <select
@@ -1031,6 +1080,36 @@ export default function SwapClient({ service = "swap" }: Props) {
                             <option value="low">Low</option>
                             <option value="medium">Medium</option>
                             <option value="high">High</option>
+                          </select>
+                        </div>
+
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Expression Mode
+                          </label>
+                          <select
+                            value={expressionMode}
+                            onChange={(event) => setExpressionMode(event.target.value as "natural" | "neutral" | "vivid")}
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <option value="natural">Natural</option>
+                            <option value="neutral">Neutral</option>
+                            <option value="vivid">Vivid</option>
+                          </select>
+                        </div>
+
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Fidelity Bias
+                          </label>
+                          <select
+                            value={fidelityBias}
+                            onChange={(event) => setFidelityBias(event.target.value as "identity" | "balanced" | "motion")}
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <option value="balanced">Balanced</option>
+                            <option value="motion">Motion</option>
+                            <option value="identity">Identity</option>
                           </select>
                         </div>
 
@@ -1195,6 +1274,11 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Prompt Source: {taskPromptSource || "-"}</div>
                         <div>Prompt Profile: {taskPromptProfile || "-"}</div>
                         <div>Prompt Strength: {taskPromptStrength || "-"}</div>
+                        <div>Expression Mode: {taskExpressionMode || "-"}</div>
+                        <div>Fidelity Bias: {taskFidelityBias || "-"}</div>
+                        <div>Orientation Strategy: {taskOrientationStrategy || "-"}</div>
+                        <div>Resolved Orientation: {taskResolvedOrientation || "-"}</div>
+                        <div>Priority Policy: {taskPriorityPolicy || "-"}</div>
                         <div>Candidate Count: {taskCandidateCount || "1"}</div>
                         <div>Remote Status: {latestRemoteStatus || "-"}</div>
                       </div>

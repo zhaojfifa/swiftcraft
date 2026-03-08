@@ -11,10 +11,10 @@ def test_action_replica_provider_override_to_kling(monkeypatch):
     monkeypatch.setattr(svc, "_avatar_enabled", lambda: True)
     provider = svc._resolve_provider(
         "avatar",
-        {"inputs": {"provider": "fal_kling_action_replica"}},
+        {"inputs": {"provider": "kling_motioncontrol_v3_pro"}},
         "baseline",
     )
-    assert provider == "fal_kling_action_replica"
+    assert provider == "kling_motioncontrol_v3_pro"
 
 
 def test_action_replica_provider_override_to_wan(monkeypatch):
@@ -51,7 +51,7 @@ def test_action_replica_default_provider_mapping(monkeypatch):
     svc = _svc()
     monkeypatch.setattr(svc, "_avatar_enabled", lambda: True)
     assert svc._resolve_provider("avatar", {"inputs": {}}, "baseline") == "wan26_r2v"
-    assert svc._resolve_provider("avatar", {"inputs": {}}, "intelligent") == "fal_kling_action_replica"
+    assert svc._resolve_provider("avatar", {"inputs": {}}, "intelligent") == "kling_motioncontrol_v3_pro"
 
 
 def test_action_replica_prompt_contract_defaults():
@@ -59,6 +59,8 @@ def test_action_replica_prompt_contract_defaults():
     assert cfg["prompt_strength"] == "medium"
     assert cfg["prompt_used"] is False
     assert cfg["preserve_camera"] is True
+    assert cfg["expression_mode"] == "natural"
+    assert cfg["fidelity_bias"] == "balanced"
 
 
 def test_action_replica_prompt_contract_with_user_inputs():
@@ -75,6 +77,6 @@ def test_action_replica_prompt_contract_with_user_inputs():
     )
     assert cfg["prompt"] == "office style"
     assert cfg["negative_prompt"] == "flicker"
-    assert cfg["prompt_strength"] == "strong"
+    assert cfg["prompt_strength"] == "high"
     assert cfg["prompt_used"] is True
     assert cfg["preserve_camera"] is False
