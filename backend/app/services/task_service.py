@@ -484,9 +484,16 @@ class TaskService:
 
             task_id = uuid.uuid4().hex
             provider = self._resolve_provider(resolved_service, payload, resolved_mode)
+            provider_raw = str(
+                (action_replica_cfg.get("provider_hint") or payload.get("provider") or provider)
+            ).strip().lower()
             metadata_dict["provider"] = provider
             if resolved_service == "avatar":
+                metadata_dict["provider_raw"] = provider_raw
+                metadata_dict["provider_resolved"] = provider
                 action_replica_cfg["provider"] = provider
+                action_replica_cfg["provider_raw"] = provider_raw
+                action_replica_cfg["provider_resolved"] = provider
                 action_replica_cfg["source_video_url"] = input_video_url
                 action_replica_cfg["character_image_url"] = input_image_url
                 metadata_dict["run_config_snapshot"] = action_replica_cfg
@@ -551,6 +558,7 @@ class TaskService:
 
         task_id = uuid.uuid4().hex
         provider = self._resolve_provider(resolved_service, payload, resolved_mode)
+        provider_raw = str((action_replica_cfg.get("provider_hint") or payload.get("provider") or provider)).strip().lower()
         input_image_url = str(payload.get("input_image_url") or "").strip() or None
         input_video_url = str(payload.get("input_video_url") or "").strip() or None
         if resolved_service == "avatar" and not input_image_url:
@@ -573,9 +581,13 @@ class TaskService:
                 "provider": provider,
                 **(
                     {
+                        "provider_raw": provider_raw,
+                        "provider_resolved": provider,
                         "run_config_snapshot": {
                             **action_replica_cfg,
                             "provider": provider,
+                            "provider_raw": provider_raw,
+                            "provider_resolved": provider,
                             "source_video_url": input_video_url,
                             "character_image_url": input_image_url,
                         }
@@ -797,7 +809,9 @@ class TaskService:
                 "service": "action_replica",
                 "mode": record.mode,
                 "provider": metadata.get("provider"),
-                "provider_resolved": metadata.get("provider"),
+                "provider_resolved": metadata.get("provider_resolved") or metadata.get("provider"),
+                "engine": metadata.get("engine"),
+                "model_id": metadata.get("model_id"),
                 "source_video_url": run_cfg_dict.get("source_video_url") or record.input_video_url,
                 "character_image_url": run_cfg_dict.get("character_image_url") or record.input_image_url,
                 "preserve_camera": run_cfg_dict.get("preserve_camera", True),
@@ -888,6 +902,28 @@ class TaskService:
         provider = self._resolve_provider_from_record(record)
         engine = get_engine(provider)
         engine_name = engine.__class__.__name__
+        if record.service in {"avatar", "action_replica"}:
+            snapshot = (record.metadata or {}).get("run_config_snapshot")
+            provider_raw = ""
+            mode_name = str(record.mode or "").strip().lower()
+            if isinstance(snapshot, dict):
+                provider_raw = str(
+                    snapshot.get("provider_raw")
+                    or snapshot.get("provider_hint")
+                    or snapshot.get("provider")
+                    or ""
+                ).strip().lower()
+                mode_name = str(snapshot.get("mode") or mode_name).strip().lower()
+            self.store.append_log(
+                task_id,
+                f"[ar][resolve] mode={mode_name or 'basic'} provider_raw={provider_raw or provider} "
+                f"provider_resolved={provider} engine={engine_name}",
+            )
+            meta = dict(record.metadata or {})
+            meta["provider_resolved"] = provider
+            meta["engine"] = engine_name
+            self.store.save(record.copy(update={"metadata": meta}))
+            record = self.store.get_task(task_id) or record
         self.store.append_log(task_id, f"[dispatch] provider={provider or 'default'} engine={engine_name}")
         self.store.set_stage(task_id, "running", 1)
 

@@ -236,7 +236,38 @@ class FalWan26R2VEngine:
                 "medium": "Apply moderate styling while preserving source structure.",
                 "high": "Apply stronger guidance while preserving camera, motion, timing, and background continuity.",
             }[prompt_strength]
+            if preserve_camera:
+                camera_positive = (
+                    "Preserve the exact original camera language, framing, lens distance, shot scale, and camera path. "
+                    "Do not change shot type, crop, or viewpoint."
+                )
+            else:
+                camera_positive = ""
+            if preserve_motion:
+                motion_positive = (
+                    "Keep the original body motion path, gesture sequence, pose transitions, and limb trajectory. "
+                    "Only replace identity, not behavior."
+                )
+            else:
+                motion_positive = ""
+            if preserve_timing:
+                timing_positive = (
+                    "Preserve the original temporal pacing, gesture timing, pauses, and beat alignment frame-by-frame."
+                )
+            else:
+                timing_positive = ""
+            if preserve_background:
+                background_positive = (
+                    "Keep the original environment, background layout, object placement, lighting direction, and "
+                    "scene continuity unchanged."
+                )
+            else:
+                background_positive = ""
+
             prompt_parts = [system_prompt, f"Strength policy: {strength_hint}"]
+            for clause in (camera_positive, motion_positive, timing_positive, background_positive):
+                if clause:
+                    prompt_parts.append(clause)
             if user_prompt:
                 prompt_parts.append("Additional style and appearance guidance:")
                 prompt_parts.append(user_prompt)
@@ -256,9 +287,36 @@ class FalWan26R2VEngine:
                 if (mode == "intelligent" or provider == "kling_reference_v2v_pro")
                 else wan_system_negative_prompt
             )
+            preserve_negative_terms: list[str] = []
+            if preserve_camera:
+                preserve_negative_terms.extend(
+                    ["camera drift", "reframing", "shot redesign", "crop change", "focal change", "viewpoint change"]
+                )
+            if preserve_motion:
+                preserve_negative_terms.extend(
+                    ["motion drift", "pose redesign", "gesture change", "limb path change", "body choreography change"]
+                )
+            if preserve_timing:
+                preserve_negative_terms.extend(
+                    ["timing shift", "pacing change", "delayed action", "accelerated gesture", "asynchronous motion"]
+                )
+            if preserve_background:
+                preserve_negative_terms.extend(
+                    ["background change", "scene redesign", "new environment", "object relocation", "lighting change", "depth inconsistency"]
+                )
+            if prompt_strength == "high":
+                prompt_parts.append(
+                    "Strict mode: exact continuity required, unchanged shot geometry, do not redesign any scene elements."
+                )
+                preserve_negative_terms.extend(
+                    ["scene rewrite", "composition drift", "continuity break", "identity instability", "major structural change"]
+                )
+            final_prompt = "\n\n".join(prompt_parts)
             final_negative_prompt = (
                 f"{system_negative_prompt}, {user_negative_prompt}" if user_negative_prompt else system_negative_prompt
             )
+            if preserve_negative_terms:
+                final_negative_prompt = f"{final_negative_prompt}, {', '.join(preserve_negative_terms)}"
             prompt = final_prompt
             duration_sec = int(duration_value)
             submit_video_url = record.input_video_url
@@ -473,6 +531,7 @@ class FalWan26R2VEngine:
             on_log(f"[r2v] submit ok request_id={request_id or 'n/a'}")
             on_log(f"[ar] provider={provider}")
             on_log(f"[ar] mode={mode}")
+            on_log(f"[ar][provider] model_id={self.model_id}")
             on_log(
                 f"[ar] prompt_used={str(bool(user_prompt)).lower()} prompt_source={prompt_source} "
                 f"prompt_profile={prompt_profile} prompt_strength={prompt_strength} "
