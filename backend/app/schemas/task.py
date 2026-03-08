@@ -115,6 +115,8 @@ class AvatarInputs(BaseModel):
     source_video_url: Optional[str] = None
     character_orientation: str
     prompt: Optional[str] = None
+    negative_prompt: Optional[str] = None
+    prompt_strength: Literal["weak", "medium", "strong"] = "medium"
 
     @model_validator(mode="after")
     def normalize_aliases(self) -> "AvatarInputs":

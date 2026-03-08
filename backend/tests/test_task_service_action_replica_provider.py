@@ -1,4 +1,4 @@
-from app.services.task_service import TaskService
+from app.services.task_service import TaskService, _extract_action_replica_run_config
 from app.models.task import TaskRecord
 
 
@@ -45,3 +45,36 @@ def test_swap_scene_provider_from_record(monkeypatch):
         metadata={"run_config_snapshot": {"subtype": "scene"}},
     )
     assert svc._resolve_provider_from_record(record) == "fal_pixverse_swap"
+
+
+def test_action_replica_default_provider_mapping(monkeypatch):
+    svc = _svc()
+    monkeypatch.setattr(svc, "_avatar_enabled", lambda: True)
+    assert svc._resolve_provider("avatar", {"inputs": {}}, "baseline") == "wan26_r2v"
+    assert svc._resolve_provider("avatar", {"inputs": {}}, "intelligent") == "fal_kling_action_replica"
+
+
+def test_action_replica_prompt_contract_defaults():
+    cfg = _extract_action_replica_run_config({"inputs": {}}, mode="baseline")
+    assert cfg["prompt_strength"] == "medium"
+    assert cfg["prompt_used"] is False
+    assert cfg["preserve_camera"] is True
+
+
+def test_action_replica_prompt_contract_with_user_inputs():
+    cfg = _extract_action_replica_run_config(
+        {
+            "inputs": {
+                "prompt": "office style",
+                "negative_prompt": "flicker",
+                "prompt_strength": "strong",
+                "preserve_camera": False,
+            }
+        },
+        mode="baseline",
+    )
+    assert cfg["prompt"] == "office style"
+    assert cfg["negative_prompt"] == "flicker"
+    assert cfg["prompt_strength"] == "strong"
+    assert cfg["prompt_used"] is True
+    assert cfg["preserve_camera"] is False

@@ -6,8 +6,8 @@ Action Replica 是 SwiftCraft 场景 API 之一：以角色替换与动作复刻
 正式名称：`action_replica`。`avatar` 仅作为历史兼容 alias。
 
 ## 2. 模式分层
-- Basic：默认交付路径，优先稳定性与成本可控
-- Intelligent：质量增强路径，不应阻塞 Basic 成果
+- Basic：默认交付路径（当前最佳主链），优先稳定性与成本可控
+- Intelligent：在 Basic 之上的增强路径（多候选/重试/修复能力预留），不应阻塞 Basic 成果
 
 ## 3. 当前实现基线
 - 统一任务入口：`POST /api/v1/tasks`
@@ -19,10 +19,12 @@ Action Replica 是 SwiftCraft 场景 API 之一：以角色替换与动作复刻
 
 Provider baseline（当前）：
 - `wan26_r2v`（默认）
-- `fal_kling_action_replica`（candidate，可切换）
+- `fal_kling_action_replica`（intelligent 默认 candidate，可切换）
 
 请求建议：
 - `inputs.provider` 显式传入 provider（未传则走服务端默认）
+- `inputs.prompt` / `inputs.negative_prompt` / `inputs.prompt_strength`（weak|medium|strong）
+- `inputs.preserve_camera` / `inputs.preserve_motion` / `inputs.preserve_timing`
 
 建议收敛（逐步）：
 - `outputs.video_url/video_key`
