@@ -186,40 +186,81 @@ class FalWan26R2VEngine:
             user_prompt = str(inputs.get("prompt") or "").strip()
             user_negative_prompt = str(inputs.get("negative_prompt") or "").strip()
             prompt_strength = str(inputs.get("prompt_strength") or "medium").strip().lower() or "medium"
-            if prompt_strength not in {"weak", "medium", "strong"}:
+            if prompt_strength == "weak":
+                prompt_strength = "low"
+            elif prompt_strength == "strong":
+                prompt_strength = "high"
+            if prompt_strength not in {"low", "medium", "high"}:
                 prompt_strength = "medium"
+            mode = str(inputs.get("mode") or record.mode or "basic").strip().lower()
+            provider = str(inputs.get("provider") or "wan26_r2v").strip().lower()
+            aspect_ratio = str(inputs.get("aspect_ratio") or self.aspect_ratio)
+            resolution = str(inputs.get("resolution") or self.resolution).lower()
+            duration_value = str(inputs.get("duration") or self.duration)
+            duration_value = duration_value if duration_value in {"5", "10"} else str(self.duration)
             preserve_camera = bool(inputs.get("preserve_camera", True))
             preserve_motion = bool(inputs.get("preserve_motion", True))
             preserve_timing = bool(inputs.get("preserve_timing", True))
+            preserve_background = bool(inputs.get("preserve_background", True))
+            try:
+                candidate_count = max(1, int(inputs.get("candidate_count") or 1))
+            except Exception:
+                candidate_count = 1
+            seed = inputs.get("seed")
+            seed_strategy = str(inputs.get("seed_strategy") or "fixed").strip().lower() or "fixed"
+            if seed_strategy not in {"fixed", "sweep"}:
+                seed_strategy = "fixed"
 
-            system_prompt = (
+            wan_system_prompt = (
                 "Replace the original human subject in the source video with the provided character identity. "
-                "Preserve the original camera movement, shot composition, motion path, body timing, gesture timing, "
-                "pacing, scene layout, and environment continuity. Keep the output aligned to the source video as "
-                "closely as possible. Do not redesign the scene. Do not introduce new camera moves. "
-                "Do not significantly alter pose sequence or action timing. Focus on identity replacement while "
-                "maintaining motion fidelity and spatial consistency."
+                "Keep the shot duration, motion rhythm, camera direction, and overall pose progression close to the "
+                "source video. Maintain similar framing and general scene structure. Do not redesign the scene unless "
+                "necessary. The output should feel like the same clip with a replaced person."
             )
+            kling_system_prompt = (
+                "Replace only the main human subject in the source video with the provided character identity. "
+                "Strictly preserve the original camera movement, shot composition, body motion path, gesture timing, "
+                "pacing, scene layout, background structure, object placement, perspective, and lighting continuity. "
+                "The result must look like the same original shot with the person replaced, not a newly invented scene. "
+                "Preserve action fidelity and environment continuity as highest priority."
+            )
+            system_prompt = kling_system_prompt if (mode == "intelligent" or provider == "kling_reference_v2v_pro") else wan_system_prompt
+            prompt_profile = (
+                "action_replica.intelligent.kling.v1"
+                if (mode == "intelligent" or provider == "kling_reference_v2v_pro")
+                else "action_replica.basic.wan.v1"
+            )
+            prompt_source = "user+default" if user_prompt else "default"
             strength_hint = {
-                "weak": "Apply slight styling preference only; prioritize source fidelity.",
+                "low": "Keep prompt concise, low stylization, low rewrite pressure.",
                 "medium": "Apply moderate styling while preserving source structure.",
-                "strong": "Apply strong identity/style guidance while preserving motion and camera continuity.",
+                "high": "Apply stronger guidance while preserving camera, motion, timing, and background continuity.",
             }[prompt_strength]
             prompt_parts = [system_prompt, f"Strength policy: {strength_hint}"]
             if user_prompt:
                 prompt_parts.append("Additional style and appearance guidance:")
                 prompt_parts.append(user_prompt)
             final_prompt = "\n\n".join(prompt_parts)
-            system_negative_prompt = (
+            wan_system_negative_prompt = (
                 "identity drift, face deformation, inconsistent face, wrong person, extra fingers, bad hands, "
-                "warped limbs, body distortion, motion drift, camera drift, scene redesign, background change, "
-                "framing change, incorrect perspective, low detail face, flicker, unstable identity, over-stylization"
+                "warped limbs, body distortion, major background change, camera drift, framing change, scene redesign, "
+                "inconsistent scale, duplicate person, low detail face"
+            )
+            kling_system_negative_prompt = (
+                "identity drift, face inconsistency, wrong person, new scene, background redesign, camera drift, "
+                "motion drift, timing drift, pose mismatch, body deformation, hand defects, extra limbs, framing change, "
+                "perspective error, object relocation, low facial detail, flicker, unstable identity"
+            )
+            system_negative_prompt = (
+                kling_system_negative_prompt
+                if (mode == "intelligent" or provider == "kling_reference_v2v_pro")
+                else wan_system_negative_prompt
             )
             final_negative_prompt = (
                 f"{system_negative_prompt}, {user_negative_prompt}" if user_negative_prompt else system_negative_prompt
             )
             prompt = final_prompt
-            duration_sec = int(self.duration)
+            duration_sec = int(duration_value)
             submit_video_url = record.input_video_url
             slice_meta: Dict[str, Any] = {}
             policy_retry_count = 0
@@ -240,9 +281,9 @@ class FalWan26R2VEngine:
                     "prompt": prompt,
                     "negative_prompt": final_negative_prompt,
                     "video_urls": [video_url],
-                    "aspect_ratio": self.aspect_ratio,
-                    "resolution": self.resolution,
-                    "duration": self.duration,
+                    "aspect_ratio": aspect_ratio,
+                    "resolution": resolution,
+                    "duration": duration_value,
                     "enable_prompt_expansion": self.enable_prompt_expansion,
                     "multi_shots": self.multi_shots,
                     "enable_safety_checker": self.enable_safety_checker,
@@ -430,10 +471,13 @@ class FalWan26R2VEngine:
             ).strip()
             request_id = result_request_id or last_request_id or ""
             on_log(f"[r2v] submit ok request_id={request_id or 'n/a'}")
+            on_log(f"[ar] provider={provider}")
+            on_log(f"[ar] mode={mode}")
             on_log(
-                f"[ar] prompt_used={str(bool(user_prompt)).lower()} prompt_strength={prompt_strength} "
+                f"[ar] prompt_used={str(bool(user_prompt)).lower()} prompt_source={prompt_source} "
+                f"prompt_profile={prompt_profile} prompt_strength={prompt_strength} "
                 f"preserve_camera={str(preserve_camera).lower()} preserve_motion={str(preserve_motion).lower()} "
-                f"preserve_timing={str(preserve_timing).lower()}"
+                f"preserve_timing={str(preserve_timing).lower()} preserve_background={str(preserve_background).lower()}"
             )
             on_log(f"[ar] final_prompt_preview={(final_prompt[:240] + '...') if len(final_prompt) > 240 else final_prompt}")
             on_log(
@@ -470,21 +514,28 @@ class FalWan26R2VEngine:
                 output_key=output_key,
                 output_url=output_url,
                 metadata={
-                    "provider": "wan26_r2v",
+                    "provider": provider,
+                    "provider_resolved": provider,
                     "model_id": self.model_id,
-                    "duration_sec": int(self.duration),
-                    "aspect_ratio": self.aspect_ratio,
-                    "resolution": self.resolution,
+                    "duration_sec": int(duration_value),
+                    "aspect_ratio": aspect_ratio,
+                    "resolution": resolution,
                     "request_id": request_id or None,
                     "r2v_logs": r2v_logs,
                     "policy_retry_count": policy_retry_count,
                     "policy_violation_type": policy_violation_type,
                     "policy_violation_url": policy_violation_url,
                     "prompt_used": bool(user_prompt),
+                    "prompt_source": prompt_source,
+                    "prompt_profile": prompt_profile,
                     "prompt_strength": prompt_strength,
                     "preserve_camera": preserve_camera,
                     "preserve_motion": preserve_motion,
                     "preserve_timing": preserve_timing,
+                    "preserve_background": preserve_background,
+                    "candidate_count": candidate_count,
+                    "seed": seed,
+                    "seed_strategy": seed_strategy,
                     "final_prompt_preview": final_prompt[:400],
                     "final_negative_prompt_preview": final_negative_prompt[:400],
                     **slice_meta,
