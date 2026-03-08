@@ -23,6 +23,9 @@ class FalKlingMotionControlV3ProEngine(FalWan26R2VEngine):
             os.getenv("SWIFT_ACTION_REPLICA_KLING_MOTION_MODEL", "fal-ai/kling-video/v3/pro/motion-control").strip()
             or "fal-ai/kling-video/v3/pro/motion-control"
         )
+        self.watchdog_timeout_sec = max(30, int(os.getenv("SWIFT_AR_INTELLIGENT_WATCHDOG_TIMEOUT_SEC", "1200")))
+        self.poll_timeout_sec = max(30, int(os.getenv("SWIFT_AR_INTELLIGENT_POLL_TIMEOUT_SEC", "1200")))
+        self.timeout_sec = self.watchdog_timeout_sec
 
     async def run(
         self,
@@ -97,6 +100,7 @@ class FalKlingMotionControlV3ProEngine(FalWan26R2VEngine):
             args["elements"] = elements
 
         on_stage("running", 5)
+        on_log(f"[ar][poll] request_id=n/a elapsed_sec=0 remote_status=queued")
         on_log(f"[ar] provider={provider}")
         on_log(f"[ar][provider] model_id={self.model_id}")
         on_log(f"[ar] mode={mode}")
@@ -120,6 +124,7 @@ class FalKlingMotionControlV3ProEngine(FalWan26R2VEngine):
                 self._submit_request(fal_client, args, on_queue_update=lambda _u: None, on_log=on_log),
             )
             request_id = str(submit_info.get("request_id") or "").strip()
+            on_log(f"[ar][poll] request_id={request_id or 'n/a'} elapsed_sec=0 remote_status=in_progress")
             if "result" in submit_info:
                 result = submit_info["result"]
             else:
@@ -140,8 +145,10 @@ class FalKlingMotionControlV3ProEngine(FalWan26R2VEngine):
                 raise EngineRunError(f"kling result missing video url: {result}")
 
             on_stage("rendering", 85)
+            on_log(f"[ar][poll] request_id={request_id or 'n/a'} elapsed_sec=0 remote_status=downloading")
             content = await self._run_step("download", on_log, self._download_bytes(str(video_url)))
             output_key = f"outputs/{task_id}/result.mp4"
+            on_log(f"[ar][poll] request_id={request_id or 'n/a'} elapsed_sec=0 remote_status=uploading")
             output_url = await self._run_step(
                 "r2_upload",
                 on_log,

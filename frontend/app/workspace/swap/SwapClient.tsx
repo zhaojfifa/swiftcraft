@@ -414,6 +414,14 @@ export default function SwapClient({ service = "swap" }: Props) {
   // Preview priority: output -> local upload (upload mode) -> empty placeholder.
   const previewUrl = outputUrl ?? (inputSource === "upload" ? inputVideoUrl : null);
   const logs = [...uiLogs, ...(task?.logs ?? [])];
+  const latestRemoteStatus = (() => {
+    for (let i = logs.length - 1; i >= 0; i -= 1) {
+      const line = logs[i] || "";
+      const m = line.match(/\[ar\]\[poll\].*remote_status=([a-z_]+)/i);
+      if (m?.[1]) return m[1].toLowerCase();
+    }
+    return "";
+  })();
   const taskId = task?.task_id ?? task?.id ?? "";
   const showUploadBlocks = (isSwap && inputSource === "upload") || isAvatar;
   const lowerError = (task?.error || "").toLowerCase();
@@ -1188,6 +1196,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Prompt Profile: {taskPromptProfile || "-"}</div>
                         <div>Prompt Strength: {taskPromptStrength || "-"}</div>
                         <div>Candidate Count: {taskCandidateCount || "1"}</div>
+                        <div>Remote Status: {latestRemoteStatus || "-"}</div>
                       </div>
                     ) : null}
                   </div>

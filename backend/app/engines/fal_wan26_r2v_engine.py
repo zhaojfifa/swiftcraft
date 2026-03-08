@@ -469,11 +469,13 @@ class FalWan26R2VEngine:
                 raise EngineRunError(f"r2v result missing video url: {result}")
 
             on_stage("rendering", 85)
+            on_log(f"[ar][poll] request_id={request_id or 'n/a'} elapsed_sec=0 remote_status=downloading")
             content = await self._run_step("download", on_log, self._download_bytes(str(video_url)))
             on_log(f"[r2v] download ok bytes={len(content)}")
 
             output_key = f"outputs/{task_id}/result.mp4"
             on_log(f"[r2] upload start key={output_key}")
+            on_log(f"[ar][poll] request_id={request_id or 'n/a'} elapsed_sec=0 remote_status=uploading")
             output_url = await self._run_step(
                 "r2_upload",
                 on_log,
@@ -657,7 +659,9 @@ class FalWan26R2VEngine:
         while True:
             elapsed = time.perf_counter() - started
             if elapsed >= next_heartbeat:
-                on_log(f"[r2v][poll] heartbeat request_id={request_id} elapsed_sec={int(elapsed)}")
+                on_log(
+                    f"[ar][poll] request_id={request_id} elapsed_sec={int(elapsed)} remote_status=in_progress"
+                )
                 next_heartbeat += 10.0
             try:
                 result = await asyncio.to_thread(fal_client.result, self.model_id, request_id)
@@ -667,6 +671,10 @@ class FalWan26R2VEngine:
             if data and not self._is_pending_payload(data):
                 on_queue_update(data)
                 return data
+            remote_status = str(data.get("status") or data.get("state") or "in_progress") if data else "in_progress"
+            on_log(
+                f"[ar][poll] request_id={request_id} elapsed_sec={int(elapsed)} remote_status={remote_status}"
+            )
             await asyncio.sleep(2)
 
     def _extract_policy_violation(self, exc: Exception) -> tuple[bool, Optional[str], Optional[str]]:
