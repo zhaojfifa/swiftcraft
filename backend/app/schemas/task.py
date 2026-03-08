@@ -113,10 +113,21 @@ class AvatarInputs(BaseModel):
     character_image_url: Optional[str] = None
     motion_video: Optional[str] = None
     source_video_url: Optional[str] = None
-    character_orientation: str
+    provider: Optional[Literal["wan26_r2v", "kling_reference_v2v_pro"]] = None
+    character_orientation: Optional[Literal["front", "auto"]] = "front"
+    aspect_ratio: Optional[Literal["9:16", "16:9", "1:1", "3:4", "4:3"]] = None
+    duration: Optional[Literal[5, 10]] = None
+    resolution: Optional[Literal["720p", "1080p"]] = None
     prompt: Optional[str] = None
     negative_prompt: Optional[str] = None
-    prompt_strength: Literal["weak", "medium", "strong"] = "medium"
+    prompt_strength: Literal["low", "medium", "high"] = "medium"
+    preserve_camera: Optional[bool] = True
+    preserve_motion: Optional[bool] = True
+    preserve_timing: Optional[bool] = True
+    preserve_background: Optional[bool] = True
+    candidate_count: Optional[int] = None
+    seed: Optional[int] = None
+    seed_strategy: Optional[Literal["fixed", "sweep"]] = None
 
     @model_validator(mode="after")
     def normalize_aliases(self) -> "AvatarInputs":
