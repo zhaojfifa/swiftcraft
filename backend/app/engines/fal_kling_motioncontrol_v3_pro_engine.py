@@ -51,22 +51,31 @@ class FalKlingMotionControlV3ProEngine(FalWan26R2VEngine):
         mode = str(inputs.get("mode") or record.mode or "intelligent").strip().lower() or "intelligent"
         provider = "kling_motioncontrol_v3_pro"
         prompt_strength = str(inputs.get("prompt_strength") or "medium").strip().lower() or "medium"
-        user_prompt = str(inputs.get("prompt") or "").strip()
+        prompt_source_raw = str(inputs.get("prompt_source") or "default").strip().lower() or "default"
+        user_prompt = str(inputs.get("user_prompt") or inputs.get("prompt") or "").strip()
         user_negative_prompt = str(inputs.get("negative_prompt") or "").strip()
         preserve_camera = bool(inputs.get("preserve_camera", True))
         preserve_motion = bool(inputs.get("preserve_motion", True))
         preserve_timing = bool(inputs.get("preserve_timing", True))
         preserve_background = bool(inputs.get("preserve_background", True))
-        orientation_strategy = str(inputs.get("orientation_strategy") or "auto").strip().lower() or "auto"
+        expression_mode = str(inputs.get("expression_mode") or "neutral").strip().lower() or "neutral"
+        fidelity_bias = str(inputs.get("fidelity_bias") or "motion").strip().lower() or "motion"
+        orientation_strategy = str(inputs.get("orientation_strategy") or "prefer_video_motion").strip().lower() or "prefer_video_motion"
         resolved_character_orientation = str(inputs.get("resolved_character_orientation") or "video").strip().lower() or "video"
         if resolved_character_orientation not in {"video", "image"}:
             resolved_character_orientation = "video"
+        keep_original_sound = bool(inputs.get("keep_original_sound", False))
 
         prompt_bundle = build_action_replica_prompts(
             mode=mode,
+            provider=provider,
             prompt_strength=prompt_strength,
+            prompt_source=prompt_source_raw,
             user_prompt=user_prompt,
             user_negative_prompt=user_negative_prompt,
+            expression_mode=expression_mode,
+            fidelity_bias=fidelity_bias,
+            resolved_character_orientation=resolved_character_orientation,
             preserve_camera=preserve_camera,
             preserve_motion=preserve_motion,
             preserve_timing=preserve_timing,
@@ -78,9 +87,11 @@ class FalKlingMotionControlV3ProEngine(FalWan26R2VEngine):
         prompt_profile = prompt_bundle["prompt_profile"]
         prompt_profile_id = prompt_bundle["prompt_profile_id"]
         prompt_strength = prompt_bundle["prompt_strength"]
+        prompt_source = prompt_bundle["prompt_source"]
+        expression_mode = prompt_bundle["expression_mode"]
+        fidelity_bias = prompt_bundle["fidelity_bias"]
+        priority_policy = prompt_bundle["priority_policy"]
 
-        # Motion-control route may not expose explicit negative prompt parameter in all variants.
-        # Keep negative guidance effective by appending a compact avoid-list.
         composed_prompt = f"{final_prompt}\n\nAvoid: {final_negative}"
 
         elements_raw = inputs.get("elements")
@@ -93,11 +104,31 @@ class FalKlingMotionControlV3ProEngine(FalWan26R2VEngine):
             "image_url": character_image_url,
             "video_url": source_video_url,
             "character_orientation": resolved_character_orientation,
-            "keep_original_sound": False,
+            "keep_original_sound": keep_original_sound,
             "prompt": composed_prompt,
         }
         if elements:
             args["elements"] = elements
+
+        risk_hints = {
+            "face_small": False,
+            "occlusion_high": False,
+            "fast_motion": False,
+            "extreme_expression": expression_mode == "vivid",
+        }
+        on_log(
+            f"[ar][preflight] orientation_strategy={orientation_strategy} resolved_character_orientation={resolved_character_orientation} "
+            f"prompt_source={prompt_source} prompt_profile={prompt_profile} prompt_strength={prompt_strength} "
+            f"expression_mode={expression_mode} fidelity_bias={fidelity_bias} priority_policy={priority_policy} "
+            f"provider={provider} model_id={self.model_id}"
+        )
+        on_log(
+            "[ar][risk] "
+            f"face_small={str(risk_hints['face_small']).lower()} "
+            f"occlusion_high={str(risk_hints['occlusion_high']).lower()} "
+            f"fast_motion={str(risk_hints['fast_motion']).lower()} "
+            f"extreme_expression={str(risk_hints['extreme_expression']).lower()}"
+        )
 
         on_stage("running", 5)
         on_log(f"[ar][poll] request_id=n/a elapsed_sec=0 remote_status=queued")
@@ -111,8 +142,10 @@ class FalKlingMotionControlV3ProEngine(FalWan26R2VEngine):
             f"[ar] preserve_camera={str(preserve_camera).lower()} preserve_motion={str(preserve_motion).lower()} "
             f"preserve_timing={str(preserve_timing).lower()} preserve_background={str(preserve_background).lower()}"
         )
+        on_log(f"[ar] expression_mode={expression_mode} fidelity_bias={fidelity_bias}")
         on_log(f"[ar] orientation_strategy={orientation_strategy}")
         on_log(f"[ar] resolved_character_orientation={resolved_character_orientation}")
+        on_log(f"[ar] priority_policy={priority_policy}")
         on_log(f"[ar] final_prompt_preview={(composed_prompt[:240] + '...') if len(composed_prompt) > 240 else composed_prompt}")
         on_log(f"[ar] final_negative_prompt_preview={(final_negative[:240] + '...') if len(final_negative) > 240 else final_negative}")
 
@@ -146,14 +179,18 @@ class FalKlingMotionControlV3ProEngine(FalWan26R2VEngine):
 
             on_stage("rendering", 85)
             on_log(f"[ar][poll] request_id={request_id or 'n/a'} elapsed_sec=0 remote_status=downloading")
+            download_started = asyncio.get_running_loop().time()
             content = await self._run_step("download", on_log, self._download_bytes(str(video_url)))
+            download_elapsed_ms = int((asyncio.get_running_loop().time() - download_started) * 1000)
             output_key = f"outputs/{task_id}/result.mp4"
             on_log(f"[ar][poll] request_id={request_id or 'n/a'} elapsed_sec=0 remote_status=uploading")
+            upload_started = asyncio.get_running_loop().time()
             output_url = await self._run_step(
                 "r2_upload",
                 on_log,
                 asyncio.to_thread(self.r2.upload_bytes, key=output_key, content=content, content_type="video/mp4"),
             )
+            upload_elapsed_ms = int((asyncio.get_running_loop().time() - upload_started) * 1000)
             on_stage("completed", 100)
             return EngineResult(
                 output_key=output_key,
@@ -168,16 +205,25 @@ class FalKlingMotionControlV3ProEngine(FalWan26R2VEngine):
                     "prompt_profile": prompt_profile,
                     "prompt_profile_id": prompt_profile_id,
                     "prompt_strength": prompt_strength,
+                    "expression_mode": expression_mode,
+                    "fidelity_bias": fidelity_bias,
+                    "priority_policy": priority_policy,
                     "preserve_camera": preserve_camera,
                     "preserve_motion": preserve_motion,
                     "preserve_timing": preserve_timing,
                     "preserve_background": preserve_background,
                     "orientation_strategy": orientation_strategy,
                     "resolved_character_orientation": resolved_character_orientation,
+                    "keep_original_sound": keep_original_sound,
+                    "risk_hints": risk_hints,
                     "source_video_url": source_video_url,
                     "character_image_url": character_image_url,
                     "final_prompt_preview": composed_prompt[:400],
                     "final_negative_prompt_preview": final_negative[:400],
+                    "final_prompt": composed_prompt,
+                    "final_negative_prompt": final_negative,
+                    "download_elapsed_ms": download_elapsed_ms,
+                    "upload_elapsed_ms": upload_elapsed_ms,
                 },
             )
         except Exception as exc:  # pragma: no cover

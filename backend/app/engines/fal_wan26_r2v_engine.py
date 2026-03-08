@@ -74,7 +74,7 @@ class FalWan26R2VEngine:
         requested_resolution = os.getenv("SWIFT_AVATAR_RESOLUTION", "720p").strip().lower()
         self.resolution = requested_resolution if requested_resolution in allowed_resolution else "720p"
 
-        self.enable_prompt_expansion = _env_bool("SWIFT_AVATAR_ENABLE_PROMPT_EXPANSION", True)
+        self.enable_prompt_expansion = _env_bool("SWIFT_AVATAR_ENABLE_PROMPT_EXPANSION", False)
         self.multi_shots = _env_bool("SWIFT_AVATAR_MULTI_SHOTS", False)
         self.enable_safety_checker = _env_bool("SWIFT_AVATAR_ENABLE_SAFETY_CHECKER", True)
         self.fixed_slice_enabled = _env_bool("SWIFT_R2V_FIXED_SLICE_ENABLED", False)
@@ -184,7 +184,8 @@ class FalWan26R2VEngine:
                 raise EngineRunError(f"task_id={task_id} missing required field: input_video_url")
             on_stage("running", 5)
 
-            user_prompt = str(inputs.get("prompt") or "").strip()
+            prompt_source_raw = str(inputs.get("prompt_source") or "default").strip().lower() or "default"
+            user_prompt = str(inputs.get("user_prompt") or inputs.get("prompt") or "").strip()
             user_negative_prompt = str(inputs.get("negative_prompt") or "").strip()
             prompt_strength = str(inputs.get("prompt_strength") or "medium").strip().lower() or "medium"
             if prompt_strength == "weak":
@@ -197,6 +198,8 @@ class FalWan26R2VEngine:
             provider = str(inputs.get("provider") or "wan26_r2v").strip().lower()
             orientation_strategy = str(inputs.get("orientation_strategy") or "auto").strip().lower() or "auto"
             resolved_character_orientation = str(inputs.get("resolved_character_orientation") or "video").strip().lower() or "video"
+            expression_mode = str(inputs.get("expression_mode") or ("neutral" if mode == "intelligent" else "natural")).strip().lower()
+            fidelity_bias = str(inputs.get("fidelity_bias") or ("motion" if mode == "intelligent" else "balanced")).strip().lower()
             aspect_ratio = str(inputs.get("aspect_ratio") or self.aspect_ratio)
             resolution = str(inputs.get("resolution") or self.resolution).lower()
             duration_value = str(inputs.get("duration") or self.duration)
@@ -214,11 +217,19 @@ class FalWan26R2VEngine:
             if seed_strategy not in {"fixed", "sweep"}:
                 seed_strategy = "fixed"
 
+            run_enable_prompt_expansion = bool(inputs.get("enable_prompt_expansion", self.enable_prompt_expansion))
+            run_multi_shots = bool(inputs.get("multi_shots", self.multi_shots))
+
             prompt_bundle = build_action_replica_prompts(
                 mode=mode,
+                provider=provider,
                 prompt_strength=prompt_strength,
+                prompt_source=prompt_source_raw,
                 user_prompt=user_prompt,
                 user_negative_prompt=user_negative_prompt,
+                expression_mode=expression_mode,
+                fidelity_bias=fidelity_bias,
+                resolved_character_orientation=resolved_character_orientation,
                 preserve_camera=preserve_camera,
                 preserve_motion=preserve_motion,
                 preserve_timing=preserve_timing,
@@ -230,6 +241,10 @@ class FalWan26R2VEngine:
             prompt_profile = prompt_bundle["prompt_profile"]
             prompt_profile_id = prompt_bundle["prompt_profile_id"]
             prompt_strength = prompt_bundle["prompt_strength"]
+            prompt_source = prompt_bundle["prompt_source"]
+            expression_mode = prompt_bundle["expression_mode"]
+            fidelity_bias = prompt_bundle["fidelity_bias"]
+            priority_policy = prompt_bundle["priority_policy"]
             prompt = final_prompt
             duration_sec = int(duration_value)
             submit_video_url = record.input_video_url
@@ -238,6 +253,27 @@ class FalWan26R2VEngine:
             policy_violation_type: Optional[str] = None
             policy_violation_url: Optional[str] = None
             r2v_logs: list[str] = []
+
+            risk_hints = {
+                "face_small": False,
+                "occlusion_high": False,
+                "fast_motion": False,
+                "extreme_expression": expression_mode == "vivid",
+            }
+            on_log(
+                f"[ar][preflight] duration={duration_value} aspect_ratio={aspect_ratio} resolution={resolution} "
+                f"orientation_strategy={orientation_strategy} resolved_character_orientation={resolved_character_orientation} "
+                f"prompt_source={prompt_source} prompt_profile={prompt_profile} prompt_strength={prompt_strength} "
+                f"expression_mode={expression_mode} fidelity_bias={fidelity_bias} priority_policy={priority_policy} "
+                f"provider={provider} model_id={self.model_id}"
+            )
+            on_log(
+                "[ar][risk] "
+                f"face_small={str(risk_hints['face_small']).lower()} "
+                f"occlusion_high={str(risk_hints['occlusion_high']).lower()} "
+                f"fast_motion={str(risk_hints['fast_motion']).lower()} "
+                f"extreme_expression={str(risk_hints['extreme_expression']).lower()}"
+            )
 
             def on_queue_update(update: Any) -> None:
                 if isinstance(update, fal_client.InProgress):
@@ -255,8 +291,8 @@ class FalWan26R2VEngine:
                     "aspect_ratio": aspect_ratio,
                     "resolution": resolution,
                     "duration": duration_value,
-                    "enable_prompt_expansion": self.enable_prompt_expansion,
-                    "multi_shots": self.multi_shots,
+                    "enable_prompt_expansion": run_enable_prompt_expansion,
+                    "multi_shots": run_multi_shots,
                     "enable_safety_checker": self.enable_safety_checker,
                 }
 
@@ -451,8 +487,10 @@ class FalWan26R2VEngine:
                 f"preserve_camera={str(preserve_camera).lower()} preserve_motion={str(preserve_motion).lower()} "
                 f"preserve_timing={str(preserve_timing).lower()} preserve_background={str(preserve_background).lower()}"
             )
+            on_log(f"[ar] expression_mode={expression_mode} fidelity_bias={fidelity_bias}")
             on_log(f"[ar] orientation_strategy={orientation_strategy}")
             on_log(f"[ar] resolved_character_orientation={resolved_character_orientation}")
+            on_log(f"[ar] priority_policy={priority_policy}")
             on_log(f"[ar] final_prompt_preview={(final_prompt[:240] + '...') if len(final_prompt) > 240 else final_prompt}")
             on_log(
                 "[ar] final_negative_prompt_preview="
@@ -470,17 +508,21 @@ class FalWan26R2VEngine:
 
             on_stage("rendering", 85)
             on_log(f"[ar][poll] request_id={request_id or 'n/a'} elapsed_sec=0 remote_status=downloading")
+            download_started = time.perf_counter()
             content = await self._run_step("download", on_log, self._download_bytes(str(video_url)))
+            download_elapsed_ms = int((time.perf_counter() - download_started) * 1000)
             on_log(f"[r2v] download ok bytes={len(content)}")
 
             output_key = f"outputs/{task_id}/result.mp4"
             on_log(f"[r2] upload start key={output_key}")
             on_log(f"[ar][poll] request_id={request_id or 'n/a'} elapsed_sec=0 remote_status=uploading")
+            upload_started = time.perf_counter()
             output_url = await self._run_step(
                 "r2_upload",
                 on_log,
                 asyncio.to_thread(self.r2.upload_bytes, key=output_key, content=content, content_type="video/mp4"),
             )
+            upload_elapsed_ms = int((time.perf_counter() - upload_started) * 1000)
             on_log(f"[r2] upload success key={output_key}")
 
             on_stage("completed", 100)
@@ -506,10 +548,15 @@ class FalWan26R2VEngine:
                     "prompt_profile": prompt_profile,
                     "prompt_profile_id": prompt_profile_id,
                     "prompt_strength": prompt_strength,
+                    "expression_mode": expression_mode,
+                    "fidelity_bias": fidelity_bias,
+                    "priority_policy": priority_policy,
                     "preserve_camera": preserve_camera,
                     "preserve_motion": preserve_motion,
                     "preserve_timing": preserve_timing,
                     "preserve_background": preserve_background,
+                    "enable_prompt_expansion": run_enable_prompt_expansion,
+                    "multi_shots": run_multi_shots,
                     "candidate_count": candidate_count,
                     "seed": seed,
                     "seed_strategy": seed_strategy,
@@ -517,6 +564,13 @@ class FalWan26R2VEngine:
                     "resolved_character_orientation": resolved_character_orientation,
                     "final_prompt_preview": final_prompt[:400],
                     "final_negative_prompt_preview": final_negative_prompt[:400],
+                    "final_prompt": final_prompt,
+                    "final_negative_prompt": final_negative_prompt,
+                    "submit_elapsed_ms": None,
+                    "poll_elapsed_ms": None,
+                    "download_elapsed_ms": download_elapsed_ms,
+                    "upload_elapsed_ms": upload_elapsed_ms,
+                    "risk_hints": risk_hints,
                     **slice_meta,
                 },
             )

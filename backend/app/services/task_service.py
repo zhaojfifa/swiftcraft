@@ -34,7 +34,7 @@ from app.services.r2_client import R2Client
 from app.services.task_manager import TaskManager
 from app.services.task_store import TaskStore
 from app.utils.media import generate_thumbnail, probe_video, save_upload_file
-from app.engines.action_replica_prompt import resolve_character_orientation
+from app.engines.action_replica_prompt import resolve_character_orientation, resolve_priority_policy
 
 APP_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = APP_DIR.parents[1]
@@ -102,7 +102,12 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
             return False
         return default
 
-    prompt = str(data.get("prompt") or "").strip() or None
+    prompt_source = str(data.get("prompt_source") or "default").strip().lower() or "default"
+    if prompt_source not in {"default", "user"}:
+        prompt_source = "default"
+    prompt = str(data.get("user_prompt") or data.get("prompt") or "").strip() or None
+    if prompt and prompt_source == "default":
+        prompt_source = "user"
     negative_prompt = str(data.get("negative_prompt") or "").strip() or None
     prompt_strength = str(data.get("prompt_strength") or "medium").strip().lower() or "medium"
     if prompt_strength == "weak":
@@ -124,9 +129,11 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
     if candidate_count_val < 1:
         candidate_count_val = 1
     mode_norm = str(mode or "").strip().lower()
-    resolved_mode = "intelligent" if mode_norm == "intelligent" else "baseline"
-    prompt_source = "merged" if prompt else "default"
-    prompt_profile = "balanced"
+    resolved_mode = "intelligent" if mode_norm == "intelligent" else "basic"
+    prompt_profile_default = "motion_priority" if resolved_mode == "intelligent" else "balanced"
+    prompt_profile = str(data.get("prompt_profile") or prompt_profile_default).strip().lower() or prompt_profile_default
+    if prompt_profile not in {"balanced", "camera_priority", "motion_priority", "identity_priority"}:
+        prompt_profile = "balanced"
     prompt_profile_id = "action_replica.intelligent.kling.v1" if resolved_mode == "intelligent" else "action_replica.basic.wan.v2"
     try:
         duration_val = int(data.get("duration") or 5)
@@ -143,20 +150,30 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
     orientation_val = str(data.get("character_orientation") or "front").strip().lower() or "front"
     if orientation_val not in {"front", "auto"}:
         orientation_val = "front"
-    orientation_strategy = str(data.get("orientation_strategy") or "auto").strip().lower() or "auto"
-    if orientation_strategy not in {"auto", "prefer_video_motion", "prefer_image_camera"}:
-        orientation_strategy = "auto"
+    orientation_strategy_default = "prefer_video_motion" if resolved_mode == "intelligent" else "auto"
+    orientation_strategy = str(data.get("orientation_strategy") or orientation_strategy_default).strip().lower() or orientation_strategy_default
+    if orientation_strategy not in {"auto", "prefer_video_motion", "prefer_image_camera", "prefer_image_identity"}:
+        orientation_strategy = orientation_strategy_default
     preserve_camera = _to_bool(data.get("preserve_camera"), True)
     preserve_motion = _to_bool(data.get("preserve_motion"), True)
     preserve_timing = _to_bool(data.get("preserve_timing"), True)
     preserve_background = _to_bool(data.get("preserve_background"), True)
+    expression_mode = str(data.get("expression_mode") or ("neutral" if resolved_mode == "intelligent" else "natural")).strip().lower()
+    if expression_mode not in {"natural", "neutral", "vivid"}:
+        expression_mode = "neutral" if resolved_mode == "intelligent" else "natural"
+    fidelity_bias = str(data.get("fidelity_bias") or ("motion" if resolved_mode == "intelligent" else "balanced")).strip().lower()
+    if fidelity_bias not in {"identity", "balanced", "motion"}:
+        fidelity_bias = "motion" if resolved_mode == "intelligent" else "balanced"
     resolved_character_orientation = resolve_character_orientation(
         preserve_camera=preserve_camera,
         preserve_motion=preserve_motion,
         preserve_timing=preserve_timing,
         preserve_background=preserve_background,
         orientation_strategy=orientation_strategy,
+        mode=resolved_mode,
+        fidelity_bias=fidelity_bias,
     )
+    priority_policy = resolve_priority_policy(resolved_mode)
 
     return {
         "service_type": "action_replica",
@@ -171,12 +188,16 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
         "preserve_background": preserve_background,
         "provider_hint": provider_hint,
         "prompt": prompt,
+        "user_prompt": prompt,
         "negative_prompt": negative_prompt,
         "prompt_strength": prompt_strength,
         "prompt_used": bool(prompt),
         "prompt_source": prompt_source,
         "prompt_profile": prompt_profile,
         "prompt_profile_id": prompt_profile_id,
+        "expression_mode": expression_mode,
+        "fidelity_bias": fidelity_bias,
+        "priority_policy": priority_policy,
         "orientation_strategy": orientation_strategy,
         "resolved_character_orientation": resolved_character_orientation,
         "candidate_count": candidate_count_val,
@@ -361,6 +382,18 @@ class TaskService:
         if service in {"avatar", "action_replica"}:
             if not self._avatar_enabled():
                 return "mock"
+            inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+            requested = str((inputs or {}).get("provider") or payload.get("provider") or "").strip().lower()
+            if requested in {
+                "kling_motioncontrol_v3_pro",
+                "kling_reference_v2v_pro",
+                "fal_kling_action_replica",
+                "kling_action_replica",
+                "kling",
+            }:
+                return "kling_motioncontrol_v3_pro"
+            if requested in {"wan26_r2v", "wan26-r2v", "r2v"}:
+                return "wan26_r2v"
             mode_norm = str(mode or "").strip().lower()
             if mode_norm in {"intelligent"}:
                 return (
@@ -836,11 +869,19 @@ class TaskService:
                 "prompt_profile",
                 "prompt_profile_id",
                 "prompt_strength",
+                "expression_mode",
+                "fidelity_bias",
                 "provider",
                 "provider_resolved",
+                "engine",
                 "model_id",
                 "orientation_strategy",
                 "resolved_character_orientation",
+                "priority_policy",
+                "final_prompt",
+                "final_negative_prompt",
+                "final_prompt_preview",
+                "final_negative_prompt_preview",
             ):
                 if metadata.get(key) is not None:
                     run_cfg_dict[key] = metadata.get(key)
@@ -852,6 +893,11 @@ class TaskService:
             if isinstance(metrics_payload, dict):
                 total_latency_ms = metrics_payload.get("total_latency_ms")
             manifest_key = f"outputs/{task_id}/manifest.json"
+            submit_ms = metadata.get("submit_elapsed_ms")
+            poll_ms = metadata.get("poll_elapsed_ms")
+            download_ms = metadata.get("download_elapsed_ms")
+            upload_ms = metadata.get("upload_elapsed_ms")
+            risk_hints = metadata.get("risk_hints") if isinstance(metadata.get("risk_hints"), dict) else {}
             manifest = {
                 "task_id": task_id,
                 "service": "action_replica",
@@ -860,8 +906,7 @@ class TaskService:
                 "provider_resolved": metadata.get("provider_resolved") or metadata.get("provider"),
                 "engine": metadata.get("engine"),
                 "model_id": metadata.get("model_id"),
-                "source_video_url": run_cfg_dict.get("source_video_url") or record.input_video_url,
-                "character_image_url": run_cfg_dict.get("character_image_url") or record.input_image_url,
+                "output_url": output_url_resolved,
                 "preserve_camera": run_cfg_dict.get("preserve_camera", True),
                 "preserve_motion": run_cfg_dict.get("preserve_motion", True),
                 "preserve_timing": run_cfg_dict.get("preserve_timing", True),
@@ -871,19 +916,37 @@ class TaskService:
                 "prompt_profile": run_cfg_dict.get("prompt_profile"),
                 "prompt_profile_id": run_cfg_dict.get("prompt_profile_id"),
                 "prompt_strength": run_cfg_dict.get("prompt_strength", "medium"),
-                "priority_policy": "motion>background>camera>detail",
+                "expression_mode": run_cfg_dict.get("expression_mode", "natural"),
+                "fidelity_bias": run_cfg_dict.get("fidelity_bias", "balanced"),
+                "priority_policy": run_cfg_dict.get("priority_policy") or resolve_priority_policy(record.mode),
                 "orientation_strategy": run_cfg_dict.get("orientation_strategy", "auto"),
                 "resolved_character_orientation": run_cfg_dict.get("resolved_character_orientation", "video"),
                 "candidate_count": run_cfg_dict.get("candidate_count", 1),
                 "seed": run_cfg_dict.get("seed"),
                 "seed_strategy": run_cfg_dict.get("seed_strategy", "fixed"),
                 "retry_count": metadata.get("policy_retry_count", 0),
+                "final_prompt": run_cfg_dict.get("final_prompt") or metadata.get("final_prompt_preview"),
+                "final_negative_prompt": run_cfg_dict.get("final_negative_prompt") or metadata.get("final_negative_prompt_preview"),
+                "inputs": {
+                    "source_video_url": run_cfg_dict.get("source_video_url") or record.input_video_url,
+                    "character_image_url": run_cfg_dict.get("character_image_url") or record.input_image_url,
+                    "duration": run_cfg_dict.get("duration"),
+                    "aspect_ratio": run_cfg_dict.get("aspect_ratio"),
+                },
                 "outputs": {
                     "video_key": output_key_resolved,
                     "video_url": output_url_resolved,
                     "manifest_key": manifest_key,
                 },
-                "metrics": {"total_latency_ms": total_latency_ms},
+                "metrics": {
+                    "total_latency_ms": total_latency_ms,
+                    "submit_ms": submit_ms,
+                    "poll_ms": poll_ms,
+                    "download_ms": download_ms,
+                    "upload_ms": upload_ms,
+                },
+                "warnings": metadata.get("warnings") if isinstance(metadata.get("warnings"), list) else [],
+                "risk_hints": risk_hints,
             }
             try:
                 r2 = R2Client()
