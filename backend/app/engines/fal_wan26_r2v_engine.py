@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, Optional
 import httpx
 
 from app.engines.base import EngineResult, EngineRunError
+from app.engines.action_replica_prompt import build_action_replica_prompts
 from app.models.task import TaskRecord
 from app.services.r2_client import R2Client
 
@@ -194,6 +195,8 @@ class FalWan26R2VEngine:
                 prompt_strength = "medium"
             mode = str(inputs.get("mode") or record.mode or "basic").strip().lower()
             provider = str(inputs.get("provider") or "wan26_r2v").strip().lower()
+            orientation_strategy = str(inputs.get("orientation_strategy") or "auto").strip().lower() or "auto"
+            resolved_character_orientation = str(inputs.get("resolved_character_orientation") or "video").strip().lower() or "video"
             aspect_ratio = str(inputs.get("aspect_ratio") or self.aspect_ratio)
             resolution = str(inputs.get("resolution") or self.resolution).lower()
             duration_value = str(inputs.get("duration") or self.duration)
@@ -211,112 +214,22 @@ class FalWan26R2VEngine:
             if seed_strategy not in {"fixed", "sweep"}:
                 seed_strategy = "fixed"
 
-            wan_system_prompt = (
-                "Replace the original human subject in the source video with the provided character identity. "
-                "Keep the shot duration, motion rhythm, camera direction, and overall pose progression close to the "
-                "source video. Maintain similar framing and general scene structure. Do not redesign the scene unless "
-                "necessary. The output should feel like the same clip with a replaced person."
+            prompt_bundle = build_action_replica_prompts(
+                mode=mode,
+                prompt_strength=prompt_strength,
+                user_prompt=user_prompt,
+                user_negative_prompt=user_negative_prompt,
+                preserve_camera=preserve_camera,
+                preserve_motion=preserve_motion,
+                preserve_timing=preserve_timing,
+                preserve_background=preserve_background,
             )
-            kling_system_prompt = (
-                "Replace only the main human subject in the source video with the provided character identity. "
-                "Strictly preserve the original camera movement, shot composition, body motion path, gesture timing, "
-                "pacing, scene layout, background structure, object placement, perspective, and lighting continuity. "
-                "The result must look like the same original shot with the person replaced, not a newly invented scene. "
-                "Preserve action fidelity and environment continuity as highest priority."
-            )
-            system_prompt = kling_system_prompt if (mode == "intelligent" or provider == "kling_reference_v2v_pro") else wan_system_prompt
-            prompt_profile = (
-                "action_replica.intelligent.kling.v1"
-                if (mode == "intelligent" or provider == "kling_reference_v2v_pro")
-                else "action_replica.basic.wan.v1"
-            )
-            prompt_source = "user+default" if user_prompt else "default"
-            strength_hint = {
-                "low": "Keep prompt concise, low stylization, low rewrite pressure.",
-                "medium": "Apply moderate styling while preserving source structure.",
-                "high": "Apply stronger guidance while preserving camera, motion, timing, and background continuity.",
-            }[prompt_strength]
-            if preserve_camera:
-                camera_positive = (
-                    "Preserve the exact original camera language, framing, lens distance, shot scale, and camera path. "
-                    "Do not change shot type, crop, or viewpoint."
-                )
-            else:
-                camera_positive = ""
-            if preserve_motion:
-                motion_positive = (
-                    "Keep the original body motion path, gesture sequence, pose transitions, and limb trajectory. "
-                    "Only replace identity, not behavior."
-                )
-            else:
-                motion_positive = ""
-            if preserve_timing:
-                timing_positive = (
-                    "Preserve the original temporal pacing, gesture timing, pauses, and beat alignment frame-by-frame."
-                )
-            else:
-                timing_positive = ""
-            if preserve_background:
-                background_positive = (
-                    "Keep the original environment, background layout, object placement, lighting direction, and "
-                    "scene continuity unchanged."
-                )
-            else:
-                background_positive = ""
-
-            prompt_parts = [system_prompt, f"Strength policy: {strength_hint}"]
-            for clause in (camera_positive, motion_positive, timing_positive, background_positive):
-                if clause:
-                    prompt_parts.append(clause)
-            if user_prompt:
-                prompt_parts.append("Additional style and appearance guidance:")
-                prompt_parts.append(user_prompt)
-            final_prompt = "\n\n".join(prompt_parts)
-            wan_system_negative_prompt = (
-                "identity drift, face deformation, inconsistent face, wrong person, extra fingers, bad hands, "
-                "warped limbs, body distortion, major background change, camera drift, framing change, scene redesign, "
-                "inconsistent scale, duplicate person, low detail face"
-            )
-            kling_system_negative_prompt = (
-                "identity drift, face inconsistency, wrong person, new scene, background redesign, camera drift, "
-                "motion drift, timing drift, pose mismatch, body deformation, hand defects, extra limbs, framing change, "
-                "perspective error, object relocation, low facial detail, flicker, unstable identity"
-            )
-            system_negative_prompt = (
-                kling_system_negative_prompt
-                if (mode == "intelligent" or provider == "kling_reference_v2v_pro")
-                else wan_system_negative_prompt
-            )
-            preserve_negative_terms: list[str] = []
-            if preserve_camera:
-                preserve_negative_terms.extend(
-                    ["camera drift", "reframing", "shot redesign", "crop change", "focal change", "viewpoint change"]
-                )
-            if preserve_motion:
-                preserve_negative_terms.extend(
-                    ["motion drift", "pose redesign", "gesture change", "limb path change", "body choreography change"]
-                )
-            if preserve_timing:
-                preserve_negative_terms.extend(
-                    ["timing shift", "pacing change", "delayed action", "accelerated gesture", "asynchronous motion"]
-                )
-            if preserve_background:
-                preserve_negative_terms.extend(
-                    ["background change", "scene redesign", "new environment", "object relocation", "lighting change", "depth inconsistency"]
-                )
-            if prompt_strength == "high":
-                prompt_parts.append(
-                    "Strict mode: exact continuity required, unchanged shot geometry, do not redesign any scene elements."
-                )
-                preserve_negative_terms.extend(
-                    ["scene rewrite", "composition drift", "continuity break", "identity instability", "major structural change"]
-                )
-            final_prompt = "\n\n".join(prompt_parts)
-            final_negative_prompt = (
-                f"{system_negative_prompt}, {user_negative_prompt}" if user_negative_prompt else system_negative_prompt
-            )
-            if preserve_negative_terms:
-                final_negative_prompt = f"{final_negative_prompt}, {', '.join(preserve_negative_terms)}"
+            final_prompt = prompt_bundle["final_prompt"]
+            final_negative_prompt = prompt_bundle["final_negative_prompt"]
+            prompt_source = prompt_bundle["prompt_source"]
+            prompt_profile = prompt_bundle["prompt_profile"]
+            prompt_profile_id = prompt_bundle["prompt_profile_id"]
+            prompt_strength = prompt_bundle["prompt_strength"]
             prompt = final_prompt
             duration_sec = int(duration_value)
             submit_video_url = record.input_video_url
@@ -538,6 +451,8 @@ class FalWan26R2VEngine:
                 f"preserve_camera={str(preserve_camera).lower()} preserve_motion={str(preserve_motion).lower()} "
                 f"preserve_timing={str(preserve_timing).lower()} preserve_background={str(preserve_background).lower()}"
             )
+            on_log(f"[ar] orientation_strategy={orientation_strategy}")
+            on_log(f"[ar] resolved_character_orientation={resolved_character_orientation}")
             on_log(f"[ar] final_prompt_preview={(final_prompt[:240] + '...') if len(final_prompt) > 240 else final_prompt}")
             on_log(
                 "[ar] final_negative_prompt_preview="
@@ -587,6 +502,7 @@ class FalWan26R2VEngine:
                     "prompt_used": bool(user_prompt),
                     "prompt_source": prompt_source,
                     "prompt_profile": prompt_profile,
+                    "prompt_profile_id": prompt_profile_id,
                     "prompt_strength": prompt_strength,
                     "preserve_camera": preserve_camera,
                     "preserve_motion": preserve_motion,
@@ -595,6 +511,8 @@ class FalWan26R2VEngine:
                     "candidate_count": candidate_count,
                     "seed": seed,
                     "seed_strategy": seed_strategy,
+                    "orientation_strategy": orientation_strategy,
+                    "resolved_character_orientation": resolved_character_orientation,
                     "final_prompt_preview": final_prompt[:400],
                     "final_negative_prompt_preview": final_negative_prompt[:400],
                     **slice_meta,

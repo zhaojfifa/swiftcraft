@@ -12,10 +12,16 @@ def get_engine(provider: str):
         from app.engines.fal_wan26_r2v_engine import FalWan26R2VEngine
 
         return FalWan26R2VEngine()
-    if normalized in ("kling_reference_v2v_pro", "fal_kling_action_replica", "kling_action_replica", "kling"):
-        from app.engines.fal_kling_reference_v2v_engine import FalKlingReferenceV2VEngine
+    if normalized in (
+        "kling_motioncontrol_v3_pro",
+        "kling_reference_v2v_pro",
+        "fal_kling_action_replica",
+        "kling_action_replica",
+        "kling",
+    ):
+        from app.engines.fal_kling_motioncontrol_v3_pro_engine import FalKlingMotionControlV3ProEngine
 
-        return FalKlingReferenceV2VEngine()
+        return FalKlingMotionControlV3ProEngine()
     if normalized in ("fal", "wan26", "wan26_flash", "wan26-flash"):
         from app.engines.fal_wan26_flash_engine import FalWan26FlashEngine
 
