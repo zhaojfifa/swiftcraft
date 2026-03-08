@@ -34,6 +34,7 @@ from app.services.r2_client import R2Client
 from app.services.task_manager import TaskManager
 from app.services.task_store import TaskStore
 from app.utils.media import generate_thumbnail, probe_video, save_upload_file
+from app.engines.action_replica_prompt import resolve_character_orientation
 
 APP_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = APP_DIR.parents[1]
@@ -45,6 +46,19 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 THUMB_DIR.mkdir(parents=True, exist_ok=True)
 logger = logging.getLogger(__name__)
+
+ACTION_REPLICA_PROVIDERS: Dict[str, Dict[str, str]] = {
+    "wan26_r2v": {
+        "model_id": "wan/v2.6/reference-to-video",
+        "engine": "FalWan26R2VEngine",
+        "category": "baseline",
+    },
+    "kling_motioncontrol_v3_pro": {
+        "model_id": "fal-ai/kling-video/v3/pro/motion-control",
+        "engine": "FalKlingMotionControlV3ProEngine",
+        "category": "intelligent",
+    },
+}
 
 
 def _extract_avatar_image_key(payload: Dict[str, Any]) -> Optional[str]:
@@ -109,13 +123,11 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
         candidate_count_val = 1
     if candidate_count_val < 1:
         candidate_count_val = 1
-    resolved_mode = "intelligent" if mode == "intelligent" else "basic"
-    prompt_source = "user+default" if prompt else "default"
-    prompt_profile = (
-        "action_replica.intelligent.kling.v1"
-        if (resolved_mode == "intelligent" or provider_hint == "kling_reference_v2v_pro")
-        else "action_replica.basic.wan.v1"
-    )
+    mode_norm = str(mode or "").strip().lower()
+    resolved_mode = "intelligent" if mode_norm == "intelligent" else "baseline"
+    prompt_source = "merged" if prompt else "default"
+    prompt_profile = "balanced"
+    prompt_profile_id = "action_replica.intelligent.kling.v1" if resolved_mode == "intelligent" else "action_replica.basic.wan.v2"
     try:
         duration_val = int(data.get("duration") or 5)
     except Exception:
@@ -131,6 +143,19 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
     orientation_val = str(data.get("character_orientation") or "front").strip().lower() or "front"
     if orientation_val not in {"front", "auto"}:
         orientation_val = "front"
+    orientation_strategy = str(data.get("orientation_strategy") or "auto").strip().lower() or "auto"
+    if orientation_strategy not in {"auto", "prefer_video_motion", "prefer_image_camera"}:
+        orientation_strategy = "auto"
+    preserve_camera = _to_bool(data.get("preserve_camera"), True)
+    preserve_motion = _to_bool(data.get("preserve_motion"), True)
+    preserve_timing = _to_bool(data.get("preserve_timing"), True)
+    preserve_background = _to_bool(data.get("preserve_background"), True)
+    resolved_character_orientation = resolve_character_orientation(
+        preserve_camera=preserve_camera,
+        preserve_motion=preserve_motion,
+        preserve_background=preserve_background,
+        orientation_strategy=orientation_strategy,
+    )
 
     return {
         "service_type": "action_replica",
@@ -139,10 +164,10 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
         "aspect_ratio": aspect_ratio_val,
         "duration": duration_val,
         "resolution": resolution_val,
-        "preserve_camera": _to_bool(data.get("preserve_camera"), True),
-        "preserve_motion": _to_bool(data.get("preserve_motion"), True),
-        "preserve_timing": _to_bool(data.get("preserve_timing"), True),
-        "preserve_background": _to_bool(data.get("preserve_background"), True),
+        "preserve_camera": preserve_camera,
+        "preserve_motion": preserve_motion,
+        "preserve_timing": preserve_timing,
+        "preserve_background": preserve_background,
         "provider_hint": provider_hint,
         "prompt": prompt,
         "negative_prompt": negative_prompt,
@@ -150,6 +175,9 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
         "prompt_used": bool(prompt),
         "prompt_source": prompt_source,
         "prompt_profile": prompt_profile,
+        "prompt_profile_id": prompt_profile_id,
+        "orientation_strategy": orientation_strategy,
+        "resolved_character_orientation": resolved_character_orientation,
         "candidate_count": candidate_count_val,
         "seed": seed,
         "seed_strategy": seed_strategy,
@@ -332,16 +360,11 @@ class TaskService:
         if service in {"avatar", "action_replica"}:
             if not self._avatar_enabled():
                 return "mock"
-            inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
-            requested = str((inputs or {}).get("provider") or payload.get("provider") or "").strip().lower()
-            if requested in {"kling_reference_v2v_pro", "fal_kling_action_replica", "kling_action_replica", "kling"}:
-                return "kling_reference_v2v_pro"
-            if requested in {"wan26_r2v", "wan26_action_replica", "wan26"}:
-                return "wan26_r2v"
-            if mode == "intelligent":
+            mode_norm = str(mode or "").strip().lower()
+            if mode_norm in {"intelligent"}:
                 return (
-                    os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_INTELLIGENT", "kling_reference_v2v_pro").strip()
-                    or "kling_reference_v2v_pro"
+                    os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_INTELLIGENT", "kling_motioncontrol_v3_pro").strip()
+                    or "kling_motioncontrol_v3_pro"
                 )
             return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_BASELINE", "wan26_r2v").strip() or "wan26_r2v")
         if service == "localization":
@@ -423,8 +446,6 @@ class TaskService:
 
         resolved_service = (service or "swap").lower()
         resolved_mode = (mode or "baseline").lower()
-        if resolved_service in {"avatar", "action_replica"} and resolved_mode == "baseline":
-            resolved_mode = "basic"
         resolved_service_type = _service_type_from_legacy(resolved_service)
         # Runtime service key stays `avatar` for engine/store compatibility.
         if resolved_service == "action_replica":
@@ -489,11 +510,16 @@ class TaskService:
             ).strip().lower()
             metadata_dict["provider"] = provider
             if resolved_service == "avatar":
+                provider_meta = ACTION_REPLICA_PROVIDERS.get(provider, {})
                 metadata_dict["provider_raw"] = provider_raw
                 metadata_dict["provider_resolved"] = provider
+                metadata_dict["engine"] = provider_meta.get("engine")
+                metadata_dict["model_id"] = provider_meta.get("model_id")
                 action_replica_cfg["provider"] = provider
                 action_replica_cfg["provider_raw"] = provider_raw
                 action_replica_cfg["provider_resolved"] = provider
+                action_replica_cfg["engine"] = provider_meta.get("engine")
+                action_replica_cfg["model_id"] = provider_meta.get("model_id")
                 action_replica_cfg["source_video_url"] = input_video_url
                 action_replica_cfg["character_image_url"] = input_image_url
                 metadata_dict["run_config_snapshot"] = action_replica_cfg
@@ -537,10 +563,16 @@ class TaskService:
                     "input_image_url": input_image_url,
                     "input_video_url": input_video_url,
                     "prompt": avatar_prompt,
+                    "provider": provider,
+                    "mode": resolved_mode,
                     "preserve_camera": action_replica_cfg.get("preserve_camera"),
                     "preserve_motion": action_replica_cfg.get("preserve_motion"),
                     "preserve_timing": action_replica_cfg.get("preserve_timing"),
                     "preserve_background": action_replica_cfg.get("preserve_background"),
+                    "orientation_strategy": action_replica_cfg.get("orientation_strategy"),
+                    "resolved_character_orientation": action_replica_cfg.get("resolved_character_orientation"),
+                    "prompt_strength": action_replica_cfg.get("prompt_strength"),
+                    "negative_prompt": action_replica_cfg.get("negative_prompt"),
                     "inputs": (
                         localization_inputs
                         if resolved_service == "localization"
@@ -581,6 +613,8 @@ class TaskService:
                 "provider": provider,
                 **(
                     {
+                        "engine": ACTION_REPLICA_PROVIDERS.get(provider, {}).get("engine"),
+                        "model_id": ACTION_REPLICA_PROVIDERS.get(provider, {}).get("model_id"),
                         "provider_raw": provider_raw,
                         "provider_resolved": provider,
                         "run_config_snapshot": {
@@ -588,6 +622,8 @@ class TaskService:
                             "provider": provider,
                             "provider_raw": provider_raw,
                             "provider_resolved": provider,
+                            "engine": ACTION_REPLICA_PROVIDERS.get(provider, {}).get("engine"),
+                            "model_id": ACTION_REPLICA_PROVIDERS.get(provider, {}).get("model_id"),
                             "source_video_url": input_video_url,
                             "character_image_url": input_image_url,
                         }
@@ -634,10 +670,16 @@ class TaskService:
                 "input_video_url": input_video_url,
                 "input_image_url": input_image_url,
                 "prompt": avatar_prompt,
+                "provider": provider,
+                "mode": resolved_mode,
                 "preserve_camera": action_replica_cfg.get("preserve_camera"),
                 "preserve_motion": action_replica_cfg.get("preserve_motion"),
                 "preserve_timing": action_replica_cfg.get("preserve_timing"),
                 "preserve_background": action_replica_cfg.get("preserve_background"),
+                "orientation_strategy": action_replica_cfg.get("orientation_strategy"),
+                "resolved_character_orientation": action_replica_cfg.get("resolved_character_orientation"),
+                "prompt_strength": action_replica_cfg.get("prompt_strength"),
+                "negative_prompt": action_replica_cfg.get("negative_prompt"),
                 "inputs": (
                     localization_inputs
                     if resolved_service == "localization"
@@ -651,16 +693,16 @@ class TaskService:
     def _resolve_provider_from_record(self, record: TaskRecord) -> str:
         provider = str((record.metadata or {}).get("provider") or "").strip().lower()
         if provider:
-            if provider in {"fal_kling_action_replica", "kling_action_replica", "kling"}:
-                return "kling_reference_v2v_pro"
+            if provider in {"fal_kling_action_replica", "kling_action_replica", "kling", "kling_reference_v2v_pro"}:
+                return "kling_motioncontrol_v3_pro"
             return provider
         if record.service in {"avatar", "action_replica"}:
             if not self._avatar_enabled():
                 return "mock"
             if record.mode == "intelligent":
                 return (
-                    os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_INTELLIGENT", "kling_reference_v2v_pro").strip()
-                    or "kling_reference_v2v_pro"
+                    os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_INTELLIGENT", "kling_motioncontrol_v3_pro").strip()
+                    or "kling_motioncontrol_v3_pro"
                 )
             return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_BASELINE", "wan26_r2v").strip() or "wan26_r2v")
         if record.service == "localization":
@@ -788,14 +830,19 @@ class TaskService:
         if record.service == "avatar":
             run_cfg = metadata.get("run_config_snapshot")
             run_cfg_dict = dict(run_cfg) if isinstance(run_cfg, dict) else {}
-            if "prompt_source" not in run_cfg_dict and metadata.get("prompt_source") is not None:
-                run_cfg_dict["prompt_source"] = metadata.get("prompt_source")
-            if "prompt_profile" not in run_cfg_dict and metadata.get("prompt_profile") is not None:
-                run_cfg_dict["prompt_profile"] = metadata.get("prompt_profile")
-            if "prompt_strength" not in run_cfg_dict and metadata.get("prompt_strength") is not None:
-                run_cfg_dict["prompt_strength"] = metadata.get("prompt_strength")
-            if "provider" not in run_cfg_dict and metadata.get("provider") is not None:
-                run_cfg_dict["provider"] = metadata.get("provider")
+            for key in (
+                "prompt_source",
+                "prompt_profile",
+                "prompt_profile_id",
+                "prompt_strength",
+                "provider",
+                "provider_resolved",
+                "model_id",
+                "orientation_strategy",
+                "resolved_character_orientation",
+            ):
+                if metadata.get(key) is not None:
+                    run_cfg_dict[key] = metadata.get(key)
             metadata["run_config_snapshot"] = run_cfg_dict
             output_key_resolved = str(output_key or record.output_key or f"outputs/{task_id}/result.mp4")
             output_url_resolved = str(output_url or record.output_url or "")
@@ -821,7 +868,10 @@ class TaskService:
                 "prompt_used": bool(run_cfg_dict.get("prompt")),
                 "prompt_source": run_cfg_dict.get("prompt_source"),
                 "prompt_profile": run_cfg_dict.get("prompt_profile"),
+                "prompt_profile_id": run_cfg_dict.get("prompt_profile_id"),
                 "prompt_strength": run_cfg_dict.get("prompt_strength", "medium"),
+                "orientation_strategy": run_cfg_dict.get("orientation_strategy", "auto"),
+                "resolved_character_orientation": run_cfg_dict.get("resolved_character_orientation", "video"),
                 "candidate_count": run_cfg_dict.get("candidate_count", 1),
                 "seed": run_cfg_dict.get("seed"),
                 "seed_strategy": run_cfg_dict.get("seed_strategy", "fixed"),

@@ -113,8 +113,9 @@ class AvatarInputs(BaseModel):
     character_image_url: Optional[str] = None
     motion_video: Optional[str] = None
     source_video_url: Optional[str] = None
-    provider: Optional[Literal["wan26_r2v", "kling_reference_v2v_pro"]] = None
+    provider: Optional[Literal["wan26_r2v", "kling_motioncontrol_v3_pro", "kling_reference_v2v_pro"]] = None
     character_orientation: Optional[Literal["front", "auto"]] = "front"
+    orientation_strategy: Optional[Literal["auto", "prefer_video_motion", "prefer_image_camera"]] = "auto"
     aspect_ratio: Optional[Literal["9:16", "16:9", "1:1", "3:4", "4:3"]] = None
     duration: Optional[Literal[5, 10]] = None
     resolution: Optional[Literal["720p", "1080p"]] = None

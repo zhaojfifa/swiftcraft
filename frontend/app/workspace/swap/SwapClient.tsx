@@ -50,9 +50,10 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [preserveMotion, setPreserveMotion] = useState(true);
   const [preserveTiming, setPreserveTiming] = useState(true);
   const [preserveBackground, setPreserveBackground] = useState(true);
-  const [actionReplicaProvider, setActionReplicaProvider] = useState<"wan26_r2v" | "kling_reference_v2v_pro">(
+  const [actionReplicaProvider, setActionReplicaProvider] = useState<"wan26_r2v" | "kling_motioncontrol_v3_pro">(
     "wan26_r2v",
   );
+  const [orientationStrategy, setOrientationStrategy] = useState<"auto" | "prefer_video_motion" | "prefer_image_camera">("auto");
   const [showPromptTips, setShowPromptTips] = useState(false);
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -100,7 +101,7 @@ export default function SwapClient({ service = "swap" }: Props) {
 
   useEffect(() => {
     if (!isAvatar) return;
-    setActionReplicaProvider(mode === "intelligent" ? "kling_reference_v2v_pro" : "wan26_r2v");
+    setActionReplicaProvider(mode === "intelligent" ? "kling_motioncontrol_v3_pro" : "wan26_r2v");
   }, [isAvatar, mode]);
 
   useEffect(() => {
@@ -117,7 +118,7 @@ export default function SwapClient({ service = "swap" }: Props) {
 
   const serviceApi = String(serviceType || "swap").toLowerCase();
   const modeApi = String(mode || "baseline").toLowerCase() as SwapMode;
-  const actionReplicaMode = modeApi === "intelligent" ? "intelligent" : "basic";
+  const actionReplicaMode = modeApi === "intelligent" ? "intelligent" : "baseline";
   const presetKey = resolvePresetInputKey(serviceApi, modeApi);
   const cdnBase = (process.env.NEXT_PUBLIC_CDN_BASE_URL || "").replace(/\/+$/, "");
   const safeDemoMotionKey = (process.env.NEXT_PUBLIC_SAFE_DEMO_MOTION_KEY || "").trim();
@@ -338,7 +339,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const runAvatarTask = async (overrides?: { motionKey?: string; characterKey?: string; modeOverride?: SwapMode }) => {
     const characterKey = overrides?.characterKey || (await uploadFileToR2(imageFile as File));
     const motionKey = overrides?.motionKey || (await uploadFileToR2(videoFile as File));
-    const modeForRequest = (overrides?.modeOverride || modeApi) === "intelligent" ? "intelligent" : "basic";
+    const modeForRequest = (overrides?.modeOverride || modeApi) === "intelligent" ? "intelligent" : "baseline";
     return createTask({
       service_type: "action_replica",
       model_id: "kling-v2.6-std-motion",
@@ -356,6 +357,7 @@ export default function SwapClient({ service = "swap" }: Props) {
         preserve_motion: preserveMotion,
         preserve_timing: preserveTiming,
         preserve_background: preserveBackground,
+        orientation_strategy: orientationStrategy,
         prompt: prompt.trim() ? prompt.trim() : undefined,
         negative_prompt: negativePrompt.trim() ? negativePrompt.trim() : undefined,
         prompt_strength: promptStrength,
@@ -459,6 +461,7 @@ export default function SwapClient({ service = "swap" }: Props) {
           preserve_motion: preserveMotion,
           preserve_timing: preserveTiming,
           preserve_background: preserveBackground,
+          orientation_strategy: orientationStrategy,
           prompt: prompt ? "(optional)" : "",
           negative_prompt: negativePrompt ? "(optional)" : "",
           prompt_strength: promptStrength,
@@ -482,7 +485,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     ? [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"action_replica\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${actionReplicaMode}\",\"input_key\":\"<source_key>\",\"inputs\":{\"provider\":\"${actionReplicaProvider}\",\"character_image_url\":\"<character_key>\",\"source_video_url\":\"<source_key>\",\"preserve_camera\":${preserveCamera},\"preserve_motion\":${preserveMotion},\"preserve_timing\":${preserveTiming},\"preserve_background\":${preserveBackground},\"character_orientation\":\"${orientation}\",\"prompt\":\"<optional>\",\"negative_prompt\":\"<optional>\",\"prompt_strength\":\"${promptStrength}\",\"candidate_count\":1,\"seed_strategy\":\"fixed\"}}'`
+        `  -d '{\"service_type\":\"action_replica\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${actionReplicaMode}\",\"input_key\":\"<source_key>\",\"inputs\":{\"provider\":\"${actionReplicaProvider}\",\"character_image_url\":\"<character_key>\",\"source_video_url\":\"<source_key>\",\"preserve_camera\":${preserveCamera},\"preserve_motion\":${preserveMotion},\"preserve_timing\":${preserveTiming},\"preserve_background\":${preserveBackground},\"orientation_strategy\":\"${orientationStrategy}\",\"character_orientation\":\"${orientation}\",\"prompt\":\"<optional>\",\"negative_prompt\":\"<optional>\",\"prompt_strength\":\"${promptStrength}\",\"candidate_count\":1,\"seed_strategy\":\"fixed\"}}'`
       ].join(" \\\n")
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
@@ -918,16 +921,17 @@ export default function SwapClient({ service = "swap" }: Props) {
                           </label>
                           <select
                             value={actionReplicaProvider}
-                            onChange={(event) =>
-                              setActionReplicaProvider(
-                                event.target.value as "wan26_r2v" | "kling_reference_v2v_pro",
-                              )
-                            }
-                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                            disabled
+                            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
                           >
                             <option value="wan26_r2v">WAN 2.6 (Baseline)</option>
-                            <option value="kling_reference_v2v_pro">Kling Pro (Intelligent)</option>
+                            <option value="kling_motioncontrol_v3_pro">Kling Motion Control V3 Pro (Intelligent)</option>
                           </select>
+                          <p className="text-[11px] text-slate-500">
+                            {mode === "intelligent"
+                              ? "Intelligent mode is fixed to Kling Motion Control V3 Pro."
+                              : "Baseline mode is fixed to WAN 2.6."}
+                          </p>
                         </div>
 
                         <div className="space-y-3">
@@ -968,6 +972,25 @@ export default function SwapClient({ service = "swap" }: Props) {
                               />
                             </label>
                           </div>
+                        </div>
+
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Orientation Strategy
+                          </label>
+                          <select
+                            value={orientationStrategy}
+                            onChange={(event) =>
+                              setOrientationStrategy(
+                                event.target.value as "auto" | "prefer_video_motion" | "prefer_image_camera",
+                              )
+                            }
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <option value="auto">Auto</option>
+                            <option value="prefer_video_motion">Prefer Video Motion</option>
+                            <option value="prefer_image_camera">Prefer Image Camera</option>
+                          </select>
                         </div>
 
                         <div className="space-y-3">
