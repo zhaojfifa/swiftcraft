@@ -80,10 +80,15 @@ class AkoolSwapFaceEngine:
 
         started = time.perf_counter()
         on_stage("running", 5)
+        provider_debug = self.client.debug_snapshot()
         on_log(
             f"[swap][preflight] provider={self.provider} mode={record.mode} swap_type={swap_type} "
             f"timeout_sec={self.timeout_sec} poll_interval_sec={self.poll_interval_sec}"
         )
+        on_log(f"[swap][akool] base_url={provider_debug.get('api_base_url')}")
+        if provider_debug.get("auth_url"):
+            on_log(f"[swap][akool] auth_url={provider_debug.get('auth_url')}")
+        on_log(f"[swap][akool] submit_url={provider_debug.get('submit_endpoint')}")
         on_log(
             f"[swap][input] source_video_key={source_video_key or 'n/a'} "
             f"source_face_image_key={source_face_image_key or 'n/a'} "
@@ -93,6 +98,11 @@ class AkoolSwapFaceEngine:
         on_log(f"[swap][resolved] source_face_image_url={source_face_image_url}")
 
         try:
+            on_log("[swap][akool] auth_start")
+            if self.client.auth_mode == "oauth":
+                await self.client.get_access_token()
+            on_log("[swap][akool] auth_ok")
+            on_log("[swap][akool] submit_start")
             job = await self.client.submit_swap_face(
                 source_video=source_video_url,
                 source_face_image=source_face_image_url,
@@ -100,12 +110,15 @@ class AkoolSwapFaceEngine:
                 face_fidelity=face_fidelity,
                 provider=self.provider,
             )
+            on_log("[swap][akool] submit_ok")
+            on_log(f"[swap][akool] status_url={job.status_url}")
             on_log(
                 f"[swap][provider] request_id={job.request_id or 'n/a'} remote_status={job.remote_status} provider={self.provider}"
             )
             remote_payload = job.raw
             remote_status = job.remote_status
             poll_started = time.perf_counter()
+            on_log("[swap][akool] poll_start")
             while not self.client.extract_result_url(remote_payload):
                 await asyncio.sleep(self.poll_interval_sec)
                 remote_payload = await self.client.poll_swap_face(job)
@@ -118,6 +131,7 @@ class AkoolSwapFaceEngine:
                     raise EngineRunError(f"swap provider failed request_id={job.request_id or 'n/a'} status={remote_status}")
                 if elapsed_ms > self.timeout_sec * 1000:
                     raise EngineRunError(f"swap provider timed out after {self.timeout_sec}s")
+            on_log("[swap][akool] poll_ok")
 
             result_url = self.client.extract_result_url(remote_payload)
             if not result_url:
@@ -162,6 +176,7 @@ class AkoolSwapFaceEngine:
                     "swap_type": swap_type,
                     "keep_original_audio": keep_original_audio,
                     "face_fidelity": face_fidelity,
+                    "provider_debug": provider_debug,
                 },
             )
             self.r2.put_json(manifest_key, manifest)
@@ -186,7 +201,10 @@ class AkoolSwapFaceEngine:
                     "swap_type": swap_type,
                     "keep_original_audio": keep_original_audio,
                     "face_fidelity": face_fidelity,
+                    "provider_debug": provider_debug,
                 },
             )
+        except ValueError as exc:
+            raise EngineRunError(f"akool config invalid: {exc}") from exc
         except httpx.HTTPError as exc:
-            raise EngineRunError(f"akool swap face failed: {type(exc).__name__}: {exc}") from exc
+            raise EngineRunError(f"akool submit/poll failed: {type(exc).__name__}: {exc}") from exc
