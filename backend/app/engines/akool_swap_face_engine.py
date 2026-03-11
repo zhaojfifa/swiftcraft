@@ -24,6 +24,18 @@ class AkoolSwapFaceEngine:
         self.client = AkoolClient()
         self.r2 = R2Client()
 
+    def resolve_public_url(self, value: str | None) -> str | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        if raw.startswith("http://") or raw.startswith("https://"):
+            return raw
+        try:
+            return self.r2.public_url(raw)
+        except Exception:
+            base = settings.PUBLIC_CDN_BASE_URL.rstrip("/")
+            return f"{base}/{raw.lstrip('/')}"
+
     async def run(
         self,
         task_id: str,
@@ -33,23 +45,38 @@ class AkoolSwapFaceEngine:
         on_stage: Callable[[str, int], None],
     ) -> EngineResult:
         run_cfg = dict((record.metadata or {}).get("run_config_snapshot") or {})
-        source_video_url = str(run_cfg.get("source_video_url") or record.input_key or "").strip()
-        source_face_image_url = str(
-            run_cfg.get("source_face_image_url") or run_cfg.get("source_face_image_key") or record.input_image_key or ""
+        source_video_key = str(
+            run_cfg.get("source_video_url") or run_cfg.get("input_key") or record.input_key or ""
         ).strip()
+        source_face_image_key = str(
+            run_cfg.get("source_face_image_key")
+            or run_cfg.get("source_face_image_url")
+            or record.input_image_key
+            or ""
+        ).strip()
+        source_video_url = self.resolve_public_url(source_video_key)
+        source_face_image_url = self.resolve_public_url(source_face_image_key)
         keep_original_audio = bool(run_cfg.get("keep_original_audio", settings.SWIFT_SWAP_KEEP_ORIGINAL_AUDIO_DEFAULT))
         face_fidelity = str(run_cfg.get("face_fidelity") or settings.SWIFT_SWAP_FACE_FIDELITY_DEFAULT).strip().lower() or "balanced"
         swap_type = str(run_cfg.get("swap_type") or "face").strip().lower() or "face"
-        input_snapshot = build_input_snapshot(record, run_cfg)
+        input_snapshot = build_input_snapshot(
+            record,
+            {
+                **run_cfg,
+                "source_video_url": source_video_url,
+                "source_face_image_url": source_face_image_url,
+                "source_face_image_key": source_face_image_key,
+            },
+        )
 
         if not settings.AKOOL_API_KEY:
             raise EngineRunError("swap provider akool_swap_face requires AKOOL_API_KEY")
         if not settings.AKOOL_CLIENT_ID:
             raise EngineRunError("swap provider akool_swap_face requires AKOOL_CLIENT_ID")
         if not source_video_url:
-            raise EngineRunError("swap requires source video")
+            raise EngineRunError("swap face requires source video url/key")
         if not source_face_image_url:
-            raise EngineRunError("swap requires source face image")
+            raise EngineRunError("swap face requires source face image url/key")
 
         started = time.perf_counter()
         on_stage("running", 5)
@@ -58,9 +85,12 @@ class AkoolSwapFaceEngine:
             f"timeout_sec={self.timeout_sec} poll_interval_sec={self.poll_interval_sec}"
         )
         on_log(
-            f"[swap][input] source_video={source_video_url} source_face_image={source_face_image_url} "
+            f"[swap][input] source_video_key={source_video_key or 'n/a'} "
+            f"source_face_image_key={source_face_image_key or 'n/a'} "
             f"keep_original_audio={str(keep_original_audio).lower()} face_fidelity={face_fidelity}"
         )
+        on_log(f"[swap][resolved] source_video_url={source_video_url}")
+        on_log(f"[swap][resolved] source_face_image_url={source_face_image_url}")
 
         try:
             job = await self.client.submit_swap_face(
@@ -121,6 +151,9 @@ class AkoolSwapFaceEngine:
                 run_config_snapshot={
                     **run_cfg,
                     "provider": self.provider,
+                    "source_video_url": source_video_url,
+                    "source_face_image_url": source_face_image_url,
+                    "source_face_image_key": source_face_image_key,
                     "swap_type": swap_type,
                     "keep_original_audio": keep_original_audio,
                     "face_fidelity": face_fidelity,
