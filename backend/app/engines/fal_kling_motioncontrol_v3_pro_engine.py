@@ -64,7 +64,8 @@ class FalKlingMotionControlV3ProEngine(FalWan26R2VEngine):
         resolved_character_orientation = str(inputs.get("resolved_character_orientation") or "video").strip().lower() or "video"
         if resolved_character_orientation not in {"video", "image"}:
             resolved_character_orientation = "video"
-        keep_original_sound = bool(inputs.get("keep_original_sound", False))
+        keep_original_sound = bool(inputs.get("keep_original_sound", True))
+        audio_strategy = "keep_original" if keep_original_sound else "mute_original"
 
         prompt_bundle = build_action_replica_prompts(
             mode=mode,
@@ -215,6 +216,8 @@ class FalKlingMotionControlV3ProEngine(FalWan26R2VEngine):
                     "orientation_strategy": orientation_strategy,
                     "resolved_character_orientation": resolved_character_orientation,
                     "keep_original_sound": keep_original_sound,
+                    "audio_strategy": audio_strategy,
+                    "original_audio_preserved": keep_original_sound,
                     "risk_hints": risk_hints,
                     "source_video_url": source_video_url,
                     "character_image_url": character_image_url,

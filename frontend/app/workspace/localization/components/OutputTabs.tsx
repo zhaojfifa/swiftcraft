@@ -68,8 +68,14 @@ export default function OutputTabs({
     }
   })();
   const subtitleBurned = String(manifestObj?.subtitle_burned ?? "n/a");
+  const sourceSubtitleType = String(manifestObj?.source_subtitle_type ?? "n/a");
   const audioStrategy = String(manifestObj?.audio_strategy ?? "n/a");
   const originalAudioMuted = String(manifestObj?.original_audio_muted ?? "n/a");
+  const originalSubtitleRemoved = String(manifestObj?.original_subtitle_removed ?? "n/a");
+  const originalSubtitleSuppressed = String(manifestObj?.original_subtitle_suppressed ?? "n/a");
+  const subtitleProcessing = (manifestObj?.subtitle_processing as Record<string, unknown> | undefined) || {};
+  const cleanupEnabled = String(subtitleProcessing.cleanup_enabled ?? "n/a");
+  const cleanupStrategy = String(subtitleProcessing.cleanup_strategy ?? "n/a");
   const outputDuration = String(
     (manifestObj?.metrics as Record<string, unknown> | undefined)?.total_latency_ms ?? "n/a",
   );
@@ -168,8 +174,13 @@ export default function OutputTabs({
             )}
             <div className="grid grid-cols-2 gap-2 rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
               <div>subtitle burned: {subtitleBurned}</div>
+              <div>source subtitle type: {sourceSubtitleType}</div>
               <div>audio strategy: {audioStrategy}</div>
               <div>original audio muted: {originalAudioMuted}</div>
+              <div>subtitle removed: {originalSubtitleRemoved}</div>
+              <div>subtitle suppressed: {originalSubtitleSuppressed}</div>
+              <div>cleanup enabled: {cleanupEnabled}</div>
+              <div>cleanup strategy: {cleanupStrategy}</div>
               <div>output duration(ms): {outputDuration}</div>
               <div>translation ratio: {translationRatio}</div>
               <div>warnings: {warningCount}</div>

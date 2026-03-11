@@ -208,6 +208,8 @@ class FalWan26R2VEngine:
             preserve_motion = bool(inputs.get("preserve_motion", True))
             preserve_timing = bool(inputs.get("preserve_timing", True))
             preserve_background = bool(inputs.get("preserve_background", True))
+            keep_original_sound = bool(inputs.get("keep_original_sound", True))
+            audio_strategy = "keep_original" if keep_original_sound else "mute_original"
             try:
                 candidate_count = max(1, int(inputs.get("candidate_count") or 1))
             except Exception:
@@ -291,6 +293,7 @@ class FalWan26R2VEngine:
                     "aspect_ratio": aspect_ratio,
                     "resolution": resolution,
                     "duration": duration_value,
+                    "keep_original_sound": keep_original_sound,
                     "enable_prompt_expansion": run_enable_prompt_expansion,
                     "multi_shots": run_multi_shots,
                     "enable_safety_checker": self.enable_safety_checker,
@@ -488,6 +491,7 @@ class FalWan26R2VEngine:
                 f"preserve_timing={str(preserve_timing).lower()} preserve_background={str(preserve_background).lower()}"
             )
             on_log(f"[ar] expression_mode={expression_mode} fidelity_bias={fidelity_bias}")
+            on_log(f"[ar] audio_strategy={audio_strategy} keep_original_sound={str(keep_original_sound).lower()}")
             on_log(f"[ar] orientation_strategy={orientation_strategy}")
             on_log(f"[ar] resolved_character_orientation={resolved_character_orientation}")
             on_log(f"[ar] priority_policy={priority_policy}")
@@ -555,6 +559,9 @@ class FalWan26R2VEngine:
                     "preserve_motion": preserve_motion,
                     "preserve_timing": preserve_timing,
                     "preserve_background": preserve_background,
+                    "audio_strategy": audio_strategy,
+                    "original_audio_preserved": keep_original_sound,
+                    "keep_original_sound": keep_original_sound,
                     "enable_prompt_expansion": run_enable_prompt_expansion,
                     "multi_shots": run_multi_shots,
                     "candidate_count": candidate_count,

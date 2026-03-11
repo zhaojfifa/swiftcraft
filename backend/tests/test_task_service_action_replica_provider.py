@@ -78,6 +78,8 @@ def test_action_replica_prompt_contract_defaults():
     assert cfg["prompt_strength"] == "medium"
     assert cfg["prompt_used"] is False
     assert cfg["preserve_camera"] is True
+    assert cfg["audio_strategy"] == "keep_original"
+    assert cfg["original_audio_preserved"] is True
     assert cfg["expression_mode"] == "natural"
     assert cfg["fidelity_bias"] == "balanced"
 

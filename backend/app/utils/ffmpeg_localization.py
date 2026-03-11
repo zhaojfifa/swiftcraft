@@ -759,6 +759,8 @@ def burn_subtitles(
     subtitle_ass: Path,
     output_mp4: Path,
     fonts_dir: Optional[Path] = None,
+    subtitle_cleanup_enabled: bool = False,
+    subtitle_cleanup_strategy: str = "bottom_mask",
     on_log: Optional[Callable[[str], None]] = None,
 ) -> None:
     output_mp4.parent.mkdir(parents=True, exist_ok=True)
@@ -777,9 +779,16 @@ def burn_subtitles(
     subtitle_filter = f"ass={_escape_filter_path(subtitle_ass)}"
     if fonts_dir is not None:
         subtitle_filter = f"ass={_escape_filter_path(subtitle_ass)}:fontsdir={_escape_filter_path(fonts_dir)}"
+    filter_chain = subtitle_filter
+    if subtitle_cleanup_enabled and subtitle_cleanup_strategy == "bottom_mask":
+        filter_chain = "drawbox=x=0:y=ih*0.78:w=iw:h=ih*0.22:color=black@0.88:t=fill," + subtitle_filter
     if on_log:
         on_log(f"[loc][ass] ASS_BURN_SUBTITLE_PATH={subtitle_ass}")
         on_log(f"[loc][ass] ASS_FONT_DIR={fonts_dir if fonts_dir is not None else 'n/a'}")
+        on_log(
+            f"[loc][subtitle_cleanup] enabled={str(subtitle_cleanup_enabled).lower()} "
+            f"strategy={subtitle_cleanup_strategy}"
+        )
     cmd = [
         "ffmpeg",
         "-hide_banner",
@@ -788,7 +797,7 @@ def burn_subtitles(
         "-i",
         str(video_in),
         "-vf",
-        subtitle_filter,
+        filter_chain,
         "-c:v",
         "libx264",
         "-preset",

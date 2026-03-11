@@ -251,6 +251,11 @@ class LocalizationEngine:
             target_lang = str((loc_inputs or {}).get("target_lang") or "my").strip().lower() or "my"
             voice_id = str((loc_inputs or {}).get("voice_id") or "mm_female_1")
             subtitle_mode = str((loc_inputs or {}).get("subtitle_mode") or "burned")
+            subtitle_cleanup_enabled = bool((loc_inputs or {}).get("subtitle_cleanup_enabled", True))
+            subtitle_cleanup_strategy = (
+                str((loc_inputs or {}).get("subtitle_cleanup_strategy") or "bottom_mask").strip().lower()
+                or "bottom_mask"
+            )
             raw_audio_strategy = str((loc_inputs or {}).get("audio_strategy") or "").strip().lower()
             if raw_audio_strategy in {"mute_original", "duck_original", "keep_bgm"}:
                 audio_strategy = raw_audio_strategy
@@ -488,6 +493,8 @@ class LocalizationEngine:
                 "target_lang": target_lang,
                 "voice_id": voice_id,
                 "subtitle_mode": subtitle_mode,
+                "subtitle_cleanup_enabled": subtitle_cleanup_enabled,
+                "subtitle_cleanup_strategy": subtitle_cleanup_strategy,
                 "audio_strategy": audio_strategy,
                 "original_audio_muted": original_audio_muted,
                 "dub_gain": dub_gain,
@@ -1113,6 +1120,8 @@ class LocalizationEngine:
                     target_ass_path,
                     localized_mp4_path,
                     fonts_dir=ass_fonts_dir,
+                    subtitle_cleanup_enabled=subtitle_cleanup_enabled,
+                    subtitle_cleanup_strategy=subtitle_cleanup_strategy,
                     on_log=on_log,
                 )
                 output_video_duration_sec = _probe_duration(localized_mp4_path)
@@ -1273,6 +1282,13 @@ class LocalizationEngine:
                     "subtitle_burned": True,
                     "subtitle_format": "ass",
                     "subtitle_mode": subtitle_mode,
+                    "source_subtitle_type": "burned_in",
+                    "subtitle_processing": {
+                        "cleanup_enabled": subtitle_cleanup_enabled,
+                        "cleanup_strategy": subtitle_cleanup_strategy,
+                    },
+                    "original_subtitle_removed": False,
+                    "original_subtitle_suppressed": subtitle_cleanup_enabled,
                     "audio_strategy": audio_strategy,
                     "original_audio_muted": original_audio_muted,
                     "dub_gain": dub_gain,
@@ -1338,6 +1354,13 @@ class LocalizationEngine:
                     "bgm_gain": bgm_gain,
                     "voice_speed": voice_speed,
                     "subtitle_mode": subtitle_mode,
+                    "source_subtitle_type": "burned_in",
+                    "subtitle_processing": {
+                        "cleanup_enabled": subtitle_cleanup_enabled,
+                        "cleanup_strategy": subtitle_cleanup_strategy,
+                    },
+                    "original_subtitle_removed": False,
+                    "original_subtitle_suppressed": subtitle_cleanup_enabled,
                     "translation": translation_meta,
                     "transcription": transcription_meta,
                     "tts": tts_meta,

@@ -3,9 +3,12 @@
 ## Input / Output
 - Input:
   - `service_type=swap`
-  - `subtype=face`
-  - `inputs.source_video_url`
-  - `inputs.target_face_image_url`
+  - `swap_type=face`
+  - `inputs.source_video`
+  - `inputs.target_face_image`
+  - `inputs.provider`
+  - `inputs.keep_original_audio`
+  - `inputs.face_fidelity`
 - Output:
   - `outputs.result_url` / `outputs.video_url`
   - `outputs.manifest_url`
@@ -35,9 +38,13 @@
   },
   "run_config_snapshot": {
     "service_type": "swap",
-    "subtype": "face",
-    "mode": "baseline"
-  }
+    "swap_type": "face",
+    "mode": "baseline",
+    "keep_original_audio": true,
+    "face_fidelity": "balanced"
+  },
+  "swap_type": "face",
+  "keep_original_audio": true
 }
 ```
 
@@ -45,8 +52,8 @@
 1. Open Swap Playground.
 2. Upload one target face image and one 5-10 second single-person front-face video.
 3. Submit `swap/face/baseline`.
-4. Verify result video renders and manifest link is visible.
-5. Verify logs contain `provider`, `mode`, `request_id` or `remote_status`, `elapsed_ms`, `manifest_url`.
+4. Verify result video keeps original audio by default.
+5. Verify manifest contains `swap_type`, `keep_original_audio`, `provider`, `outputs.video_url`.
 
 ## Risks / Constraints
 - Phase 1 only supports single person, front face, 5-10 seconds.

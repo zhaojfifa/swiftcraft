@@ -18,6 +18,10 @@ type Props = {
   setVoiceId: (value: string) => void;
   subtitleMode: "sidecar" | "burned";
   setSubtitleMode: (mode: "sidecar" | "burned") => void;
+  subtitleCleanupEnabled: boolean;
+  setSubtitleCleanupEnabled: (value: boolean) => void;
+  subtitleCleanupStrategy: "bottom_mask";
+  setSubtitleCleanupStrategy: (value: "bottom_mask") => void;
   audioStrategy: AudioStrategy;
   setAudioStrategy: (value: AudioStrategy) => void;
   dubGain: number;
@@ -49,6 +53,10 @@ export default function InputPanel({
   setVoiceId,
   subtitleMode,
   setSubtitleMode,
+  subtitleCleanupEnabled,
+  setSubtitleCleanupEnabled,
+  subtitleCleanupStrategy,
+  setSubtitleCleanupStrategy,
   audioStrategy,
   setAudioStrategy,
   dubGain,
@@ -232,6 +240,25 @@ export default function InputPanel({
                   Burned
                 </button>
               </div>
+            </div>
+
+            <div className="space-y-3">
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Subtitle Cleanup</label>
+              <label className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                <span>Enable burned-subtitle suppression</span>
+                <input
+                  type="checkbox"
+                  checked={subtitleCleanupEnabled}
+                  onChange={(event) => setSubtitleCleanupEnabled(event.target.checked)}
+                />
+              </label>
+              <select
+                value={subtitleCleanupStrategy}
+                onChange={(event) => setSubtitleCleanupStrategy(event.target.value as "bottom_mask")}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+              >
+                <option value="bottom_mask">bottom_mask</option>
+              </select>
             </div>
 
             <div className="space-y-3">

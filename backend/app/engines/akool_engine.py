@@ -57,12 +57,17 @@ class AkoolEngine:
             raise EngineRunError("swap requires target_face_image_url")
 
         provider = str((record.metadata or {}).get("provider") or "akool_swap_face").strip().lower()
+        swap_type = str(run_cfg.get("swap_type") or run_cfg.get("subtype") or "face").strip().lower() or "face"
+        keep_original_audio = bool(run_cfg.get("keep_original_audio", True))
+        face_fidelity = str(run_cfg.get("face_fidelity") or "balanced").strip().lower() or "balanced"
         input_snapshot = build_input_snapshot(record, run_cfg)
         started = time.perf_counter()
         on_stage("running", 5)
         on_log(
             f"[swap][preflight] provider={provider} mode={record.mode} "
-            f"source_video_url={source_video_url} target_face_image_url={target_face_image_url}"
+            f"swap_type={swap_type} keep_original_audio={str(keep_original_audio).lower()} "
+            f"face_fidelity={face_fidelity} source_video_url={source_video_url} "
+            f"target_face_image_url={target_face_image_url}"
         )
 
         if self.dry_run:
@@ -99,6 +104,8 @@ class AkoolEngine:
                 qa_summary=qa_summary,
                 run_config_snapshot=run_cfg,
                 extra={
+                    "swap_type": swap_type,
+                    "keep_original_audio": keep_original_audio,
                     "remote_status": "dry_run_copied",
                     "metadata": {"dry_run": True},
                 },
@@ -124,6 +131,9 @@ class AkoolEngine:
                 output_url=output_url,
                 metadata={
                     "provider": provider,
+                    "swap_type": swap_type,
+                    "keep_original_audio": keep_original_audio,
+                    "face_fidelity": face_fidelity,
                     "remote_status": "dry_run_copied",
                     "elapsed_ms": elapsed_ms,
                     "request_id": None,
@@ -140,8 +150,11 @@ class AkoolEngine:
 
         endpoint = self._resolve_url(self.swap_endpoint)
         payload = {
-            "source_video_url": source_video_url,
-            "target_face_image_url": target_face_image_url,
+            "source_video": source_video_url,
+            "target_face_image": target_face_image_url,
+            "provider": provider,
+            "keep_original_audio": keep_original_audio,
+            "face_fidelity": face_fidelity,
         }
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         request_id = None
@@ -213,7 +226,12 @@ class AkoolEngine:
             metrics={"total_latency_ms": elapsed_ms},
             qa_summary={"remote_status": remote_status},
             run_config_snapshot=run_cfg,
-            extra={"request_id": request_id, "remote_status": remote_status},
+            extra={
+                "request_id": request_id,
+                "remote_status": remote_status,
+                "swap_type": swap_type,
+                "keep_original_audio": keep_original_audio,
+            },
         )
         self.r2.put_json(manifest_key, manifest)
         manifest_url = self.r2.public_url(manifest_key)
@@ -228,6 +246,9 @@ class AkoolEngine:
             output_url=output_url,
             metadata={
                 "provider": provider,
+                "swap_type": swap_type,
+                "keep_original_audio": keep_original_audio,
+                "face_fidelity": face_fidelity,
                 "request_id": request_id,
                 "remote_status": remote_status,
                 "elapsed_ms": elapsed_ms,

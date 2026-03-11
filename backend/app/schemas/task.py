@@ -85,12 +85,18 @@ class LegacySwapRequest(BaseModel):
 class SwapInputs(BaseModel):
     source_video: Optional[str] = None
     source_video_url: Optional[str] = None
+    target_face_image: Optional[str] = None
     target_face_image_url: Optional[str] = None
     target_image: Optional[str] = None
     target_image_url: Optional[str] = None
+    provider: Optional[str] = None
+    keep_original_audio: Optional[bool] = True
+    face_fidelity: Optional[Literal["balanced", "identity", "high"]] = "balanced"
 
     @model_validator(mode="after")
     def normalize_aliases(self) -> "SwapInputs":
+        if not self.target_image and self.target_face_image:
+            self.target_image = self.target_face_image
         if not self.source_video and self.source_video_url:
             self.source_video = self.source_video_url
         if not self.target_image and self.target_face_image_url:
@@ -106,9 +112,17 @@ class SwapInputs(BaseModel):
 
 class SwapRequest(BaseModel):
     service_type: Literal["swap", "face_swap"] = "swap"
-    subtype: Literal["scene", "face"] = "scene"
+    subtype: Literal["scene", "face"] = "face"
+    swap_type: Optional[Literal["scene", "face"]] = None
     mode: str
     inputs: SwapInputs
+
+    @model_validator(mode="after")
+    def normalize_swap_type(self) -> "SwapRequest":
+        if self.swap_type:
+            self.subtype = self.swap_type
+        self.swap_type = self.subtype
+        return self
 
 
 class AvatarInputs(BaseModel):
@@ -134,6 +148,7 @@ class AvatarInputs(BaseModel):
     preserve_motion: Optional[bool] = True
     preserve_timing: Optional[bool] = True
     preserve_background: Optional[bool] = True
+    audio_strategy: Optional[Literal["keep_original", "mute_original"]] = "keep_original"
     candidate_count: Optional[int] = None
     seed: Optional[int] = None
     seed_strategy: Optional[Literal["fixed", "sweep"]] = None

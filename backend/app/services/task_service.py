@@ -159,6 +159,9 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
     preserve_motion = _to_bool(data.get("preserve_motion"), True)
     preserve_timing = _to_bool(data.get("preserve_timing"), True)
     preserve_background = _to_bool(data.get("preserve_background"), True)
+    audio_strategy = str(data.get("audio_strategy") or "keep_original").strip().lower() or "keep_original"
+    if audio_strategy not in {"keep_original", "mute_original"}:
+        audio_strategy = "keep_original"
     expression_mode = str(data.get("expression_mode") or ("neutral" if resolved_mode == "intelligent" else "natural")).strip().lower()
     if expression_mode not in {"natural", "neutral", "vivid"}:
         expression_mode = "neutral" if resolved_mode == "intelligent" else "natural"
@@ -187,6 +190,9 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
         "preserve_motion": preserve_motion,
         "preserve_timing": preserve_timing,
         "preserve_background": preserve_background,
+        "audio_strategy": audio_strategy,
+        "original_audio_preserved": audio_strategy == "keep_original",
+        "keep_original_sound": audio_strategy == "keep_original",
         "provider_hint": provider_hint,
         "prompt": prompt,
         "user_prompt": prompt,
@@ -213,6 +219,11 @@ def _normalize_localization_inputs(payload: Dict[str, Any], mode: str) -> tuple[
     normalized.setdefault("target_lang", "my")
     normalized.setdefault("voice_id", "mm_female_1")
     normalized.setdefault("subtitle_mode", "burned")
+    normalized["subtitle_cleanup_enabled"] = bool(normalized.get("subtitle_cleanup_enabled", True))
+    cleanup_strategy = str(normalized.get("subtitle_cleanup_strategy") or "bottom_mask").strip().lower() or "bottom_mask"
+    if cleanup_strategy not in {"bottom_mask"}:
+        cleanup_strategy = "bottom_mask"
+    normalized["subtitle_cleanup_strategy"] = cleanup_strategy
     audio_strategy_raw = str(normalized.get("audio_strategy") or "").strip().lower()
     legacy_preserve_bgm = bool(normalized.get("preserve_bgm")) if "preserve_bgm" in normalized else None
     legacy_ducking = bool(normalized.get("ducking")) if "ducking" in normalized else None
@@ -407,7 +418,7 @@ class TaskService:
         if service == "swap":
             inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
             requested = str((inputs or {}).get("provider") or payload.get("provider") or "").strip().lower()
-            subtype = str(payload.get("subtype") or "scene").strip().lower()
+            subtype = str(payload.get("swap_type") or payload.get("subtype") or "face").strip().lower()
             if subtype == "scene":
                 if requested in {"fal_pixverse_swap", "pixverse_swap"}:
                     return "fal_pixverse_swap"
@@ -475,6 +486,7 @@ class TaskService:
                 input_key = parsed.input_key
             if isinstance(parsed, SwapRequest):
                 payload["subtype"] = parsed.subtype
+                payload["swap_type"] = parsed.swap_type or parsed.subtype
         else:
             legacy = LegacySwapRequest.model_validate(payload)
             service = legacy.service
@@ -496,8 +508,10 @@ class TaskService:
         localization_policy: Dict[str, Any] = {}
         localization_contract: Dict[str, Any] = {}
         swap_subtype = str(payload.get("subtype") or "scene").strip().lower()
+        if payload.get("swap_type"):
+            swap_subtype = str(payload.get("swap_type") or swap_subtype).strip().lower()
         if swap_subtype not in {"scene", "face"}:
-            swap_subtype = "scene"
+            swap_subtype = "face"
         if resolved_service == "localization":
             localization_inputs, localization_policy = _normalize_localization_inputs(payload, resolved_mode)
             localization_contract = _extract_localization_intelligence_contract(localization_inputs, resolved_mode)
@@ -569,6 +583,7 @@ class TaskService:
                 swap_inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
                 metadata_dict["run_config_snapshot"] = {
                     "service_type": "swap",
+                    "swap_type": swap_subtype,
                     "subtype": swap_subtype,
                     "mode": resolved_mode,
                     "source_video_url": (
@@ -577,11 +592,15 @@ class TaskService:
                         or input_video_url
                     ),
                     "target_face_image_url": (
-                        swap_inputs.get("target_face_image_url")
+                        swap_inputs.get("target_face_image")
+                        or swap_inputs.get("target_face_image_url")
                         or swap_inputs.get("target_image_url")
                         or swap_inputs.get("target_image")
                         or input_image_url
                     ),
+                    "provider": provider,
+                    "keep_original_audio": bool(swap_inputs.get("keep_original_audio", True)),
+                    "face_fidelity": str(swap_inputs.get("face_fidelity") or "balanced"),
                 }
             if face_enhancer is not None:
                 metadata_dict["face_enhancer"] = face_enhancer
@@ -691,6 +710,7 @@ class TaskService:
                     {
                         "run_config_snapshot": {
                             "service_type": "swap",
+                            "swap_type": swap_subtype,
                             "subtype": swap_subtype,
                             "mode": resolved_mode,
                             "source_video_url": (
@@ -700,6 +720,11 @@ class TaskService:
                             )
                             or input_video_url,
                             "target_face_image_url": (
+                                (payload.get("inputs") or {}).get("target_face_image")
+                                if isinstance(payload.get("inputs"), dict)
+                                else input_image_url
+                            )
+                            or (
                                 (payload.get("inputs") or {}).get("target_face_image_url")
                                 if isinstance(payload.get("inputs"), dict)
                                 else input_image_url
@@ -710,6 +735,17 @@ class TaskService:
                                 else input_image_url
                             )
                             or input_image_url,
+                            "provider": provider,
+                            "keep_original_audio": bool(
+                                ((payload.get("inputs") or {}).get("keep_original_audio", True))
+                                if isinstance(payload.get("inputs"), dict)
+                                else True
+                            ),
+                            "face_fidelity": str(
+                                ((payload.get("inputs") or {}).get("face_fidelity") or "balanced")
+                                if isinstance(payload.get("inputs"), dict)
+                                else "balanced"
+                            ),
                         }
                     }
                     if resolved_service == "swap"
@@ -955,6 +991,7 @@ class TaskService:
                     "prompt_source": run_cfg_dict.get("prompt_source"),
                     "prompt_profile": run_cfg_dict.get("prompt_profile"),
                     "prompt_strength": run_cfg_dict.get("prompt_strength", "medium"),
+                    "audio_strategy": run_cfg_dict.get("audio_strategy", "keep_original"),
                 },
                 run_config_snapshot=run_cfg_dict,
                 extra={
@@ -969,6 +1006,8 @@ class TaskService:
                     "prompt_strength": run_cfg_dict.get("prompt_strength", "medium"),
                     "expression_mode": run_cfg_dict.get("expression_mode", "natural"),
                     "fidelity_bias": run_cfg_dict.get("fidelity_bias", "balanced"),
+                    "audio_strategy": run_cfg_dict.get("audio_strategy", "keep_original"),
+                    "original_audio_preserved": bool(run_cfg_dict.get("original_audio_preserved", True)),
                     "priority_policy": run_cfg_dict.get("priority_policy") or resolve_priority_policy(record.mode),
                     "orientation_strategy": run_cfg_dict.get("orientation_strategy", "auto"),
                     "resolved_character_orientation": run_cfg_dict.get("resolved_character_orientation", "video"),

@@ -7,6 +7,8 @@
   - `inputs.target_lang`
   - `inputs.voice_id`
   - `inputs.subtitle_mode=burned`
+  - `inputs.subtitle_cleanup_enabled`
+  - `inputs.subtitle_cleanup_strategy=bottom_mask`
 - Output:
   - `outputs.localized_final_url`
   - `outputs.audio_url` as MP3 external delivery
@@ -38,8 +40,17 @@
   "run_config_snapshot": {
     "service_type": "localization",
     "subtitle_mode": "burned",
+    "subtitle_cleanup_enabled": true,
+    "subtitle_cleanup_strategy": "bottom_mask",
     "audio_strategy": "mute_original"
-  }
+  },
+  "source_subtitle_type": "burned_in",
+  "subtitle_processing": {
+    "cleanup_enabled": true,
+    "cleanup_strategy": "bottom_mask"
+  },
+  "original_subtitle_removed": false,
+  "original_subtitle_suppressed": true
 }
 ```
 
@@ -47,8 +58,8 @@
 1. Upload a longer demo video than previous 30-second trim baseline.
 2. Submit localization baseline.
 3. Verify burned subtitle output is primary result.
-4. Verify manifest and QA panel remain visible and readable.
-5. Verify external downloadable dub audio is MP3.
+4. Verify bottom mask suppression is enabled before subtitle burn render.
+5. Verify manifest shows `original_subtitle_removed=false` and `original_subtitle_suppressed=true`.
 
 ## Risks / Constraints
 - No new formal lipsync delivery path.

@@ -93,6 +93,8 @@ export default function LocalizationClient() {
   const [targetLang, setTargetLang] = useState("my");
   const [voiceId, setVoiceId] = useState("mm_female_1");
   const [subtitleMode, setSubtitleMode] = useState<"sidecar" | "burned">("burned");
+  const [subtitleCleanupEnabled, setSubtitleCleanupEnabled] = useState(true);
+  const [subtitleCleanupStrategy, setSubtitleCleanupStrategy] = useState<"bottom_mask">("bottom_mask");
   const [audioStrategy, setAudioStrategy] = useState<AudioStrategy>("mute_original");
   const [dubGain, setDubGain] = useState(1.0);
   const [bgmGain, setBgmGain] = useState(0.0);
@@ -250,6 +252,8 @@ export default function LocalizationClient() {
           target_lang: targetLang,
           voice_id: voiceId,
           subtitle_mode: subtitleMode,
+          subtitle_cleanup_enabled: subtitleCleanupEnabled,
+          subtitle_cleanup_strategy: subtitleCleanupStrategy,
           audio_strategy: audioStrategy,
           preserve_bgm: audioStrategy !== "mute_original",
           ducking: audioStrategy === "duck_original",
@@ -280,6 +284,8 @@ export default function LocalizationClient() {
       target_lang: targetLang,
       voice_id: voiceId,
       subtitle_mode: subtitleMode,
+      subtitle_cleanup_enabled: subtitleCleanupEnabled,
+      subtitle_cleanup_strategy: subtitleCleanupStrategy,
       audio_strategy: audioStrategy,
       preserve_bgm: audioStrategy !== "mute_original",
       ducking: audioStrategy === "duck_original",
@@ -357,9 +363,13 @@ export default function LocalizationClient() {
           setTargetLang={setTargetLang}
           voiceId={voiceId}
           setVoiceId={setVoiceId}
-          subtitleMode={subtitleMode}
-          setSubtitleMode={setSubtitleMode}
-          audioStrategy={audioStrategy}
+              subtitleMode={subtitleMode}
+              setSubtitleMode={setSubtitleMode}
+              subtitleCleanupEnabled={subtitleCleanupEnabled}
+              setSubtitleCleanupEnabled={setSubtitleCleanupEnabled}
+              subtitleCleanupStrategy={subtitleCleanupStrategy}
+              setSubtitleCleanupStrategy={setSubtitleCleanupStrategy}
+              audioStrategy={audioStrategy}
           setAudioStrategy={setAudioStrategy}
           dubGain={dubGain}
           setDubGain={setDubGain}

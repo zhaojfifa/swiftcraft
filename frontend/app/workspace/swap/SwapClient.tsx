@@ -41,7 +41,9 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [inputVideoUrl, setInputVideoUrl] = useState<string | null>(null);
   const [inputImageUrl, setInputImageUrl] = useState<string | null>(null);
-  const [faceEnhancer, setFaceEnhancer] = useState(true);
+  const [swapProvider, setSwapProvider] = useState<"akool_swap_face">("akool_swap_face");
+  const [keepOriginalAudio, setKeepOriginalAudio] = useState(true);
+  const [faceFidelity, setFaceFidelity] = useState<"balanced" | "identity" | "high">("balanced");
   const [orientation, setOrientation] = useState<"front" | "auto">("front");
   const [prompt, setPrompt] = useState<string>("");
   const [negativePrompt, setNegativePrompt] = useState<string>("");
@@ -53,6 +55,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [preserveMotion, setPreserveMotion] = useState(true);
   const [preserveTiming, setPreserveTiming] = useState(true);
   const [preserveBackground, setPreserveBackground] = useState(true);
+  const [actionReplicaAudioStrategy, setActionReplicaAudioStrategy] = useState<"keep_original" | "mute_original">("keep_original");
   const [actionReplicaProvider, setActionReplicaProvider] = useState<"wan26_r2v" | "kling_motioncontrol_v3_pro">(
     "wan26_r2v",
   );
@@ -374,6 +377,7 @@ export default function SwapClient({ service = "swap" }: Props) {
         preserve_motion: preserveMotion,
         preserve_timing: preserveTiming,
         preserve_background: preserveBackground,
+        audio_strategy: actionReplicaAudioStrategy,
         orientation_strategy: orientationStrategy,
         prompt_source: prompt.trim() ? "user" : "default",
         user_prompt: prompt.trim() ? prompt.trim() : undefined,
@@ -419,12 +423,15 @@ export default function SwapClient({ service = "swap" }: Props) {
         const targetFaceImageKey = await uploadFileToR2(imageFile as File);
         result = await createTask({
           service_type: "swap",
-          subtype: "face",
+          swap_type: "face",
           mode: "baseline",
           input_key: sourceVideoKey,
           inputs: {
-            source_video_url: sourceVideoKey,
-            target_face_image_url: targetFaceImageKey,
+            source_video: sourceVideoKey,
+            target_face_image: targetFaceImageKey,
+            provider: swapProvider,
+            keep_original_audio: keepOriginalAudio,
+            face_fidelity: faceFidelity,
           }
         });
       } else {
@@ -518,6 +525,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskPromptStrength = String(taskMetadata.prompt_strength || "");
   const taskExpressionMode = String(taskMetadata.expression_mode || "");
   const taskFidelityBias = String(taskMetadata.fidelity_bias || "");
+  const taskAudioStrategy = String(taskMetadata.audio_strategy || "");
   const taskOrientationStrategy = String(taskMetadata.orientation_strategy || "");
   const taskResolvedOrientation = String(taskMetadata.resolved_character_orientation || "");
   const taskPriorityPolicy = String(taskMetadata.priority_policy || "");
@@ -547,6 +555,7 @@ export default function SwapClient({ service = "swap" }: Props) {
           preserve_motion: preserveMotion,
           preserve_timing: preserveTiming,
           preserve_background: preserveBackground,
+          audio_strategy: actionReplicaAudioStrategy,
           orientation_strategy: orientationStrategy,
           prompt_source: prompt ? "user" : "default",
           user_prompt: prompt ? "(optional)" : "",
@@ -562,13 +571,16 @@ export default function SwapClient({ service = "swap" }: Props) {
       }
     : {
         service_type: "swap",
-        subtype: swapSubtype,
+        swap_type: swapSubtype,
         mode: swapSubtype === "face" ? "baseline" : modeApi,
         input_key: swapSubtype === "face" ? "(source video key)" : inputSource === "preset" ? presetKey : "(uploaded key)",
         inputs: swapSubtype === "face"
           ? {
-              source_video_url: "(source video key)",
-              target_face_image_url: "(target face image key)",
+              source_video: "(source video key)",
+              target_face_image: "(target face image key)",
+              provider: swapProvider,
+              keep_original_audio: keepOriginalAudio,
+              face_fidelity: faceFidelity,
             }
           : undefined,
         source: inputSource
@@ -582,14 +594,14 @@ export default function SwapClient({ service = "swap" }: Props) {
     ? [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"action_replica\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${actionReplicaMode}\",\"input_key\":\"<source_key>\",\"inputs\":{\"provider\":\"${actionReplicaProvider}\",\"character_image_url\":\"<character_key>\",\"source_video_url\":\"<source_key>\",\"preserve_camera\":${preserveCamera},\"preserve_motion\":${preserveMotion},\"preserve_timing\":${preserveTiming},\"preserve_background\":${preserveBackground},\"orientation_strategy\":\"${orientationStrategy}\",\"character_orientation\":\"${orientation}\",\"prompt_source\":\"${prompt ? "user" : "default"}\",\"user_prompt\":\"<optional>\",\"prompt_profile\":\"${promptProfile}\",\"prompt\":\"<optional>\",\"negative_prompt\":\"<optional>\",\"prompt_strength\":\"${promptStrength}\",\"expression_mode\":\"${expressionMode}\",\"fidelity_bias\":\"${fidelityBias}\",\"candidate_count\":1,\"seed_strategy\":\"fixed\"}}'`
+        `  -d '{\"service_type\":\"action_replica\",\"model_id\":\"kling-v2.6-std-motion\",\"mode\":\"${actionReplicaMode}\",\"input_key\":\"<source_key>\",\"inputs\":{\"provider\":\"${actionReplicaProvider}\",\"character_image_url\":\"<character_key>\",\"source_video_url\":\"<source_key>\",\"preserve_camera\":${preserveCamera},\"preserve_motion\":${preserveMotion},\"preserve_timing\":${preserveTiming},\"preserve_background\":${preserveBackground},\"audio_strategy\":\"${actionReplicaAudioStrategy}\",\"orientation_strategy\":\"${orientationStrategy}\",\"character_orientation\":\"${orientation}\",\"prompt_source\":\"${prompt ? "user" : "default"}\",\"user_prompt\":\"<optional>\",\"prompt_profile\":\"${promptProfile}\",\"prompt\":\"<optional>\",\"negative_prompt\":\"<optional>\",\"prompt_strength\":\"${promptStrength}\",\"expression_mode\":\"${expressionMode}\",\"fidelity_bias\":\"${fidelityBias}\",\"candidate_count\":1,\"seed_strategy\":\"fixed\"}}'`
       ].join(" \\\n")
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
         swapSubtype === "face"
-          ? "  -d '{\"service_type\":\"swap\",\"subtype\":\"face\",\"mode\":\"baseline\",\"input_key\":\"<source_video_key>\",\"inputs\":{\"source_video_url\":\"<source_video_key>\",\"target_face_image_url\":\"<target_face_image_key>\"}}'"
-          : `  -d '{\"service_type\":\"swap\",\"subtype\":\"${swapSubtype}\",\"mode\":\"${modeApi}\",\"input_key\":\"${presetKey}\"}'`
+          ? `  -d '{\"service_type\":\"swap\",\"swap_type\":\"face\",\"mode\":\"baseline\",\"input_key\":\"<source_video_key>\",\"inputs\":{\"source_video\":\"<source_video_key>\",\"target_face_image\":\"<target_face_image_key>\",\"provider\":\"${swapProvider}\",\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${faceFidelity}\"}}'`
+          : `  -d '{\"service_type\":\"swap\",\"swap_type\":\"${swapSubtype}\",\"mode\":\"${modeApi}\",\"input_key\":\"${presetKey}\"}'`
       ].join(" \\\n");
 
   const handleRetrySafeSlicing = async () => {
@@ -758,7 +770,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                         disabled
                         className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 text-slate-400 bg-slate-50 cursor-not-allowed"
                       >
-                        Scene Disabled
+                        Scene Coming Soon
                       </button>
                     </div>
                     <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
@@ -1094,6 +1106,20 @@ export default function SwapClient({ service = "swap" }: Props) {
 
                         <div className="space-y-3">
                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Audio Strategy
+                          </label>
+                          <select
+                            value={actionReplicaAudioStrategy}
+                            onChange={(event) => setActionReplicaAudioStrategy(event.target.value as "keep_original" | "mute_original")}
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <option value="keep_original">Keep Original</option>
+                            <option value="mute_original">Mute Original</option>
+                          </select>
+                        </div>
+
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                             Prompt Strength
                           </label>
                           <select
@@ -1197,20 +1223,46 @@ export default function SwapClient({ service = "swap" }: Props) {
                       </>
                     ) : null}
 
-                    {isSwap && inputSource === "upload" ? (
+                    {isSwap && swapSubtype === "face" ? (
                       <div className="pt-6 border-t border-slate-100">
-                        <div className="flex justify-between items-center py-2">
-                          <span className="text-sm font-medium text-slate-700">Face Enhancer</span>
+                        <div className="space-y-3">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Provider
+                          </label>
+                          <select
+                            value={swapProvider}
+                            onChange={(event) => setSwapProvider(event.target.value as "akool_swap_face")}
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <option value="akool_swap_face">akool_swap_face</option>
+                          </select>
+                        </div>
+                        <div className="space-y-3 mt-4">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Face Fidelity
+                          </label>
+                          <select
+                            value={faceFidelity}
+                            onChange={(event) => setFaceFidelity(event.target.value as "balanced" | "identity" | "high")}
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                          >
+                            <option value="balanced">balanced</option>
+                            <option value="identity">identity</option>
+                            <option value="high">high</option>
+                          </select>
+                        </div>
+                        <div className="flex justify-between items-center py-2 mt-4">
+                          <span className="text-sm font-medium text-slate-700">Keep Original Audio</span>
                           <button
                             type="button"
-                            onClick={() => setFaceEnhancer((prev) => !prev)}
+                            onClick={() => setKeepOriginalAudio((prev) => !prev)}
                             className={`w-10 h-6 rounded-full relative cursor-pointer shadow-inner ${
-                              faceEnhancer ? "bg-blue-600" : "bg-slate-300"
+                              keepOriginalAudio ? "bg-blue-600" : "bg-slate-300"
                             }`}
                           >
                             <div
                               className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${
-                                faceEnhancer ? "right-1" : "left-1"
+                                keepOriginalAudio ? "right-1" : "left-1"
                               }`}
                             ></div>
                           </button>
@@ -1300,6 +1352,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Prompt Source: {taskPromptSource || "-"}</div>
                         <div>Prompt Profile: {taskPromptProfile || "-"}</div>
                         <div>Prompt Strength: {taskPromptStrength || "-"}</div>
+                        <div>Audio Strategy: {taskAudioStrategy || "-"}</div>
                         <div>Expression Mode: {taskExpressionMode || "-"}</div>
                         <div>Fidelity Bias: {taskFidelityBias || "-"}</div>
                         <div>Orientation Strategy: {taskOrientationStrategy || "-"}</div>

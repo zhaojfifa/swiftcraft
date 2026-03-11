@@ -28,12 +28,14 @@ def test_swap_request_accepts_target_face_alias():
         "subtype": "face",
         "mode": "baseline",
         "inputs": {
-            "source_video_url": "uploads/source.mp4",
-            "target_face_image_url": "uploads/target-face.png",
+            "source_video": "uploads/source.mp4",
+            "target_face_image": "uploads/target-face.png",
         },
     }
     parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
     assert isinstance(parsed, SwapRequest)
+    assert parsed.swap_type == "face"
+    assert parsed.inputs.source_video == "uploads/source.mp4"
     assert parsed.inputs.target_image == "uploads/target-face.png"
 
 

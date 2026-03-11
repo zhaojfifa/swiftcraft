@@ -5,6 +5,7 @@
   - `service_type=action_replica`
   - `inputs.source_video_url`
   - `inputs.character_image_url`
+  - `inputs.audio_strategy`
   - `mode=baseline|intelligent`
 - Output:
   - `outputs.video_url`
@@ -33,22 +34,26 @@
     "fidelity_bias": "motion",
     "prompt_source": "user",
     "prompt_profile": "motion_priority",
-    "prompt_strength": "high"
+    "prompt_strength": "high",
+    "audio_strategy": "keep_original"
   },
   "run_config_snapshot": {
     "service_type": "action_replica",
     "provider": "kling_motioncontrol_v3_pro",
     "fidelity_bias": "motion",
-    "prompt_source": "user"
-  }
+    "prompt_source": "user",
+    "audio_strategy": "keep_original"
+  },
+  "audio_strategy": "keep_original",
+  "original_audio_preserved": true
 }
 ```
 
 ## Manual Acceptance
 1. Run one baseline task and confirm default provider is WAN.
 2. Run one intelligent task and confirm default provider is Kling motion-control.
-3. Verify UI clearly shows `mode`, `provider`, `prompt_source`, `prompt_profile`, `prompt_strength`, and preserve flags.
-4. Verify manifest includes fidelity and prompt fields.
+3. Verify UI exposes `Audio Strategy` and default is `keep_original`.
+4. Verify manifest includes `audio_strategy` and `original_audio_preserved=true`.
 
 ## Risks / Constraints
 - Baseline scope stays on WAN.
