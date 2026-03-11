@@ -4,11 +4,11 @@
 - Input:
   - `service_type=swap`
   - `swap_type=face`
-  - `inputs.source_video`
-  - `inputs.target_face_image`
-  - `inputs.provider`
-  - `inputs.keep_original_audio`
-  - `inputs.face_fidelity`
+  - `input_key`
+  - `source_face_image_key`
+  - `provider`
+  - `keep_original_audio`
+  - `face_fidelity`
 - Output:
   - `outputs.result_url` / `outputs.video_url`
   - `outputs.manifest_url`
@@ -20,10 +20,11 @@
   "task_id": "swap_demo_001",
   "service_type": "swap",
   "mode": "baseline",
+  "swap_type": "face",
   "provider": "akool_swap_face",
   "input_snapshot": {
     "source_video_url": "uploads/demo_source.mp4",
-    "target_face_image_url": "uploads/demo_face.png"
+    "source_face_image_key": "uploads/demo_face.png"
   },
   "outputs": {
     "video_url": "https://cdn.swiftcraft.ai/outputs/swap_demo_001/result.mp4",
@@ -43,15 +44,15 @@
     "keep_original_audio": true,
     "face_fidelity": "balanced"
   },
-  "swap_type": "face",
-  "keep_original_audio": true
+  "keep_original_audio": true,
+  "face_fidelity": "balanced"
 }
 ```
 
 ## Manual Acceptance
 1. Open Swap Playground.
-2. Upload one target face image and one 5-10 second single-person front-face video.
-3. Submit `swap/face/baseline`.
+2. Upload one source face image and one source video.
+3. Submit `swap face baseline` with provider `akool_swap_face`.
 4. Verify result video keeps original audio by default.
 5. Verify manifest contains `swap_type`, `keep_original_audio`, `provider`, `outputs.video_url`.
 

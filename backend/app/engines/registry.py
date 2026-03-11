@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Callable, Dict
 
 from app.engines.akool_engine import AkoolEngine
+from app.engines.akool_swap_face_engine import AkoolSwapFaceEngine
 from app.engines.localization_engine import LocalizationEngine
 from app.engines.mock_engine import MockEngine
 from app.engines.real_engine import RealEngine
@@ -44,8 +45,8 @@ PROVIDER_ADAPTERS: Dict[str, Callable[[], object]] = {
     "fal_pixverse_swap": MockEngine,
     "pixverse_swap": MockEngine,
     "akool": AkoolEngine,
-    "akool_swap_face": AkoolEngine,
-    "akool_face_swap": AkoolEngine,
+    "akool_swap_face": AkoolSwapFaceEngine,
+    "akool_face_swap": AkoolSwapFaceEngine,
     "real": RealEngine,
     "mock": MockEngine,
 }

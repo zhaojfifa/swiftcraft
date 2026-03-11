@@ -17,6 +17,8 @@ def build_input_snapshot(record: Any, run_config_snapshot: Dict[str, Any] | None
         "input_key": getattr(record, "input_key", None),
         "input_image_key": getattr(record, "input_image_key", None),
         "source_video_url": getattr(record, "input_video_url", None),
+        "source_face_image_url": getattr(record, "input_image_url", None),
+        "source_face_image_key": getattr(record, "input_image_key", None),
         "target_image_url": getattr(record, "input_image_url", None),
         "character_image_url": getattr(record, "input_image_url", None),
     }
@@ -24,11 +26,12 @@ def build_input_snapshot(record: Any, run_config_snapshot: Dict[str, Any] | None
         service_type = str(run_config_snapshot.get("service_type") or public_service_type(getattr(record, "service", "")))
         if service_type == "swap":
             snapshot["source_video_url"] = run_config_snapshot.get("source_video_url") or snapshot["source_video_url"]
-            snapshot["target_face_image_url"] = (
-                run_config_snapshot.get("target_face_image_url")
-                or run_config_snapshot.get("target_image_url")
-                or snapshot["target_image_url"]
+            snapshot["source_face_image_url"] = (
+                run_config_snapshot.get("source_face_image_url")
+                or run_config_snapshot.get("source_face_image_key")
+                or snapshot["source_face_image_url"]
             )
+            snapshot["source_face_image_key"] = run_config_snapshot.get("source_face_image_key") or snapshot["source_face_image_key"]
         elif service_type == "action_replica":
             snapshot["source_video_url"] = run_config_snapshot.get("source_video_url") or snapshot["source_video_url"]
             snapshot["character_image_url"] = run_config_snapshot.get("character_image_url") or snapshot["character_image_url"]

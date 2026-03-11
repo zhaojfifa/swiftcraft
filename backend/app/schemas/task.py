@@ -85,16 +85,23 @@ class LegacySwapRequest(BaseModel):
 class SwapInputs(BaseModel):
     source_video: Optional[str] = None
     source_video_url: Optional[str] = None
+    source_face_image: Optional[str] = None
+    source_face_image_url: Optional[str] = None
+    source_face_image_key: Optional[str] = None
     target_face_image: Optional[str] = None
     target_face_image_url: Optional[str] = None
     target_image: Optional[str] = None
     target_image_url: Optional[str] = None
     provider: Optional[str] = None
     keep_original_audio: Optional[bool] = True
-    face_fidelity: Optional[Literal["balanced", "identity", "high"]] = "balanced"
+    face_fidelity: Optional[Literal["high", "balanced", "stable"]] = "balanced"
 
     @model_validator(mode="after")
     def normalize_aliases(self) -> "SwapInputs":
+        if not self.source_face_image and self.source_face_image_url:
+            self.source_face_image = self.source_face_image_url
+        if not self.source_face_image and self.source_face_image_key:
+            self.source_face_image = self.source_face_image_key
         if not self.target_image and self.target_face_image:
             self.target_image = self.target_face_image
         if not self.source_video and self.source_video_url:
@@ -105,8 +112,8 @@ class SwapInputs(BaseModel):
             self.target_image = self.target_image_url
         if not self.source_video:
             raise ValueError("inputs.source_video (or source_video_url) is required for swap.")
-        if not self.target_image:
-            raise ValueError("inputs.target_image (or target_image_url) is required for swap.")
+        if not self.source_face_image:
+            raise ValueError("inputs.source_face_image (or source_face_image_url/source_face_image_key) is required for swap.")
         return self
 
 
@@ -115,13 +122,41 @@ class SwapRequest(BaseModel):
     subtype: Literal["scene", "face"] = "face"
     swap_type: Optional[Literal["scene", "face"]] = None
     mode: str
-    inputs: SwapInputs
+    input_key: Optional[str] = None
+    provider: Optional[str] = None
+    source_face_image_url: Optional[str] = None
+    source_face_image_key: Optional[str] = None
+    keep_original_audio: Optional[bool] = None
+    face_fidelity: Optional[Literal["high", "balanced", "stable"]] = None
+    inputs: Optional[SwapInputs] = None
 
     @model_validator(mode="after")
     def normalize_swap_type(self) -> "SwapRequest":
+        merged_inputs = self.inputs.model_copy(deep=True) if self.inputs is not None else SwapInputs.model_construct()
+        if self.provider and not merged_inputs.provider:
+            merged_inputs.provider = self.provider
+        if self.input_key and not merged_inputs.source_video:
+            merged_inputs.source_video = self.input_key
+        if self.source_face_image_url and not merged_inputs.source_face_image_url:
+            merged_inputs.source_face_image_url = self.source_face_image_url
+        if self.source_face_image_key and not merged_inputs.source_face_image_key:
+            merged_inputs.source_face_image_key = self.source_face_image_key
+        if self.keep_original_audio is not None:
+            merged_inputs.keep_original_audio = self.keep_original_audio
+        if self.face_fidelity and not merged_inputs.face_fidelity:
+            merged_inputs.face_fidelity = self.face_fidelity
+        merged_inputs = SwapInputs.model_validate(merged_inputs.model_dump())
+        self.inputs = merged_inputs
         if self.swap_type:
             self.subtype = self.swap_type
         self.swap_type = self.subtype
+        if not self.input_key:
+            self.input_key = _strip_cdn_prefix(self.inputs.source_video or "")
+        self.provider = self.inputs.provider
+        self.source_face_image_url = self.inputs.source_face_image_url or self.inputs.source_face_image
+        self.source_face_image_key = self.inputs.source_face_image_key
+        self.keep_original_audio = self.inputs.keep_original_audio
+        self.face_fidelity = self.inputs.face_fidelity
         return self
 
 

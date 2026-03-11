@@ -37,7 +37,7 @@ def test_swap_scene_provider_defaults_to_pixverse(monkeypatch):
 
 def test_swap_face_provider_defaults_to_akool(monkeypatch):
     svc = _svc()
-    monkeypatch.delenv("SWIFT_SWAP_FACE_PROVIDER", raising=False)
+    monkeypatch.delenv("SWIFT_SWAP_DEFAULT_PROVIDER", raising=False)
     provider = svc._resolve_provider("swap", {"subtype": "face", "inputs": {}}, "baseline")
     assert provider == "akool_swap_face"
 
@@ -56,7 +56,7 @@ def test_swap_scene_provider_from_record(monkeypatch):
 
 def test_swap_face_provider_from_record_defaults_to_akool(monkeypatch):
     svc = _svc()
-    monkeypatch.delenv("SWIFT_SWAP_FACE_PROVIDER", raising=False)
+    monkeypatch.delenv("SWIFT_SWAP_DEFAULT_PROVIDER", raising=False)
     record = TaskRecord(
         task_id="swap-face-1",
         service="swap",

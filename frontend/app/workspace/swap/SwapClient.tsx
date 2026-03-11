@@ -43,7 +43,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [inputImageUrl, setInputImageUrl] = useState<string | null>(null);
   const [swapProvider, setSwapProvider] = useState<"akool_swap_face">("akool_swap_face");
   const [keepOriginalAudio, setKeepOriginalAudio] = useState(true);
-  const [faceFidelity, setFaceFidelity] = useState<"balanced" | "identity" | "high">("balanced");
+  const [faceFidelity, setFaceFidelity] = useState<"high" | "balanced" | "stable">("balanced");
   const [orientation, setOrientation] = useState<"front" | "auto">("front");
   const [prompt, setPrompt] = useState<string>("");
   const [negativePrompt, setNegativePrompt] = useState<string>("");
@@ -68,6 +68,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [uiLogs, setUiLogs] = useState<string[]>([]);
   const [isPollingPaused, setIsPollingPaused] = useState(false);
   const [activeTab, setActiveTab] = useState<"playground" | "json" | "api">("playground");
+  const [swapResultTab, setSwapResultTab] = useState<"preview" | "manifest">("preview");
   const pollRef = useRef<number | null>(null);
   const pollTokenRef = useRef(0);
   const cancelPolling = () => {
@@ -89,6 +90,7 @@ export default function SwapClient({ service = "swap" }: Props) {
       setInputSource("upload");
       return;
     }
+    setMode("baseline");
     setSwapSubtype("face");
     setInputSource("upload");
   }, [isSwap]);
@@ -423,16 +425,13 @@ export default function SwapClient({ service = "swap" }: Props) {
         const targetFaceImageKey = await uploadFileToR2(imageFile as File);
         result = await createTask({
           service_type: "swap",
-          swap_type: "face",
           mode: "baseline",
+          swap_type: "face",
+          provider: swapProvider,
           input_key: sourceVideoKey,
-          inputs: {
-            source_video: sourceVideoKey,
-            target_face_image: targetFaceImageKey,
-            provider: swapProvider,
-            keep_original_audio: keepOriginalAudio,
-            face_fidelity: faceFidelity,
-          }
+          source_face_image_key: targetFaceImageKey,
+          keep_original_audio: keepOriginalAudio,
+          face_fidelity: faceFidelity,
         });
       } else {
         const input_key =
@@ -571,19 +570,13 @@ export default function SwapClient({ service = "swap" }: Props) {
       }
     : {
         service_type: "swap",
+        mode: "baseline",
         swap_type: swapSubtype,
-        mode: swapSubtype === "face" ? "baseline" : modeApi,
+        provider: swapProvider,
         input_key: swapSubtype === "face" ? "(source video key)" : inputSource === "preset" ? presetKey : "(uploaded key)",
-        inputs: swapSubtype === "face"
-          ? {
-              source_video: "(source video key)",
-              target_face_image: "(target face image key)",
-              provider: swapProvider,
-              keep_original_audio: keepOriginalAudio,
-              face_fidelity: faceFidelity,
-            }
-          : undefined,
-        source: inputSource
+        source_face_image_key: "(source face image key)",
+        keep_original_audio: keepOriginalAudio,
+        face_fidelity: faceFidelity,
       };
   const jsonPreview = {
     request: payloadPreview,
@@ -600,7 +593,7 @@ export default function SwapClient({ service = "swap" }: Props) {
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
         swapSubtype === "face"
-          ? `  -d '{\"service_type\":\"swap\",\"swap_type\":\"face\",\"mode\":\"baseline\",\"input_key\":\"<source_video_key>\",\"inputs\":{\"source_video\":\"<source_video_key>\",\"target_face_image\":\"<target_face_image_key>\",\"provider\":\"${swapProvider}\",\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${faceFidelity}\"}}'`
+          ? `  -d '{\"service_type\":\"swap\",\"mode\":\"baseline\",\"swap_type\":\"face\",\"provider\":\"${swapProvider}\",\"input_key\":\"<source_video_key>\",\"source_face_image_key\":\"<source_face_key>\",\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${faceFidelity}\"}'`
           : `  -d '{\"service_type\":\"swap\",\"swap_type\":\"${swapSubtype}\",\"mode\":\"${modeApi}\",\"input_key\":\"${presetKey}\"}'`
       ].join(" \\\n");
 
@@ -674,14 +667,17 @@ export default function SwapClient({ service = "swap" }: Props) {
             Baseline
           </button>
           <button
-            onClick={() => setMode("intelligent")}
+            onClick={() => !isSwap && setMode("intelligent")}
+            disabled={isSwap}
             className={`px-6 py-1.5 rounded-md text-sm font-medium transition-all duration-200 z-10 ${
               mode === "intelligent"
                 ? "bg-white text-blue-600 shadow-sm border border-slate-200 ring-1 ring-black/5"
-                : "text-slate-500 hover:text-slate-700"
+                : isSwap
+                  ? "text-slate-300 cursor-not-allowed"
+                  : "text-slate-500 hover:text-slate-700"
             }`}
           >
-            Intelligent
+            {isSwap ? "Coming Soon" : "Intelligent"}
           </button>
         </div>
 
@@ -784,7 +780,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                       <>
                         <div className="space-y-3">
                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                            {isAvatar ? "Character Image" : "Target Face Image"}
+                            {isAvatar ? "Character Image" : "Source Face Image"}
                           </label>
                           <div className="flex items-center justify-between text-[11px] text-slate-400">
                             <span>{imageFile ? imageFile.name : "No file selected"}</span>
@@ -820,7 +816,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                                     className="h-10 w-10 rounded-md object-cover"
                                   />
                                   <span className="text-[11px] text-slate-500">
-                                    {isAvatar ? "Character preview ready" : "Target face preview ready"}
+                                    {isAvatar ? "Character preview ready" : "Source face preview ready"}
                                   </span>
                                 </div>
                               ) : (
@@ -1243,12 +1239,12 @@ export default function SwapClient({ service = "swap" }: Props) {
                           </label>
                           <select
                             value={faceFidelity}
-                            onChange={(event) => setFaceFidelity(event.target.value as "balanced" | "identity" | "high")}
+                            onChange={(event) => setFaceFidelity(event.target.value as "high" | "balanced" | "stable")}
                             className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
                           >
-                            <option value="balanced">balanced</option>
-                            <option value="identity">identity</option>
                             <option value="high">high</option>
+                            <option value="balanced">balanced</option>
+                            <option value="stable">stable</option>
                           </select>
                         </div>
                         <div className="flex justify-between items-center py-2 mt-4">
@@ -1388,7 +1384,7 @@ export default function SwapClient({ service = "swap" }: Props) {
               } ${!canRun ? "opacity-60 cursor-not-allowed" : ""}`}
             >
               <Play className="w-4 h-4" />
-              {isRunning ? "Running..." : `Run ${mode === "intelligent" ? "Intelligent" : "Basic"}`}
+              {isRunning ? "Running..." : isSwap ? "Run Basic" : `Run ${mode === "intelligent" ? "Intelligent" : "Basic"}`}
             </button>
             <div className="text-center mt-3 text-[10px] text-slate-400 font-medium">
               Estimated Cost: {mode === "intelligent" ? "$0.15" : "$0.05"}
@@ -1425,20 +1421,42 @@ export default function SwapClient({ service = "swap" }: Props) {
           <div className="w-full max-w-4xl mt-6 animate-in slide-in-from-bottom-4 fade-in duration-500">
             {isSwap && (outputUrl || manifestUrl) ? (
               <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm text-sm text-slate-700">
-                <div className="font-semibold text-slate-900 mb-2">Result Artifacts</div>
-                {outputUrl ? (
-                  <div>
-                    Video: <a href={outputUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline">Open result.mp4</a>
+                <div className="mb-3 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setSwapResultTab("preview")}
+                    className={`rounded-md px-3 py-1.5 text-xs font-semibold ${swapResultTab === "preview" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}
+                  >
+                    Result
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSwapResultTab("manifest")}
+                    className={`rounded-md px-3 py-1.5 text-xs font-semibold ${swapResultTab === "manifest" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}
+                  >
+                    Manifest
+                  </button>
+                </div>
+                {swapResultTab === "preview" ? (
+                  <div className="space-y-2">
+                    {outputUrl ? (
+                      <div>
+                        Video: <a href={outputUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline">Open result.mp4</a>
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
-                {manifestUrl ? (
-                  <div>
-                    Manifest: <a href={manifestUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline">Open manifest.json</a>
+                ) : (
+                  <div className="space-y-2">
+                    {manifestUrl ? (
+                      <div>
+                        Manifest: <a href={manifestUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline">Open manifest.json</a>
+                      </div>
+                    ) : null}
+                    {manifestPreview ? (
+                      <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-slate-50 p-3 text-xs">{manifestPreview}</pre>
+                    ) : null}
                   </div>
-                ) : null}
-                {manifestPreview ? (
-                  <pre className="mt-3 max-h-40 overflow-auto rounded-lg bg-slate-50 p-3 text-xs">{manifestPreview}</pre>
-                ) : null}
+                )}
               </div>
             ) : null}
             <div className="flex items-center gap-2 mb-2 ml-1">
