@@ -35,8 +35,8 @@ export default function SwapClient({ service = "swap" }: Props) {
   const isAvatar = serviceType === "action_replica" || serviceType === "avatar";
 
   const [mode, setMode] = useState<SwapMode>("baseline");
-  const [swapSubtype, setSwapSubtype] = useState<"scene" | "face">("scene");
-  const [inputSource, setInputSource] = useState<"preset" | "upload">("preset");
+  const [swapSubtype, setSwapSubtype] = useState<"scene" | "face">("face");
+  const [inputSource, setInputSource] = useState<"preset" | "upload">("upload");
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [inputVideoUrl, setInputVideoUrl] = useState<string | null>(null);
@@ -84,7 +84,10 @@ export default function SwapClient({ service = "swap" }: Props) {
   useEffect(() => {
     if (!isSwap) {
       setInputSource("upload");
+      return;
     }
+    setSwapSubtype("face");
+    setInputSource("upload");
   }, [isSwap]);
 
   useEffect(() => {
@@ -388,11 +391,11 @@ export default function SwapClient({ service = "swap" }: Props) {
 
   const handleRun = async () => {
     cancelPolling();
-    if (isSwap && swapSubtype === "face") {
-      setError("Swap Face is reserved / coming soon. Please switch to Scene.");
+    if (isSwap && swapSubtype === "face" && (!videoFile || !imageFile)) {
+      setError("Please upload a source video and target face image for swap.");
       return;
     }
-    if (inputSource === "upload" && !videoFile) {
+    if (isSwap && swapSubtype === "scene" && inputSource === "upload" && !videoFile) {
       setError("Please upload a source video for upload mode.");
       return;
     }
@@ -411,6 +414,19 @@ export default function SwapClient({ service = "swap" }: Props) {
       let result;
       if (isAvatar) {
         result = await runAvatarTask();
+      } else if (isSwap && swapSubtype === "face") {
+        const sourceVideoKey = await uploadFileToR2(videoFile as File);
+        const targetFaceImageKey = await uploadFileToR2(imageFile as File);
+        result = await createTask({
+          service_type: "swap",
+          subtype: "face",
+          mode: "baseline",
+          input_key: sourceVideoKey,
+          inputs: {
+            source_video_url: sourceVideoKey,
+            target_face_image_url: targetFaceImageKey,
+          }
+        });
       } else {
         const input_key =
           inputSource === "preset" ? presetKey : await uploadFileToR2(videoFile as File);
@@ -427,9 +443,43 @@ export default function SwapClient({ service = "swap" }: Props) {
     }
   };
 
+  const taskOutputs = task?.outputs && typeof task.outputs === "object"
+    ? (task.outputs as Record<string, unknown>)
+    : {};
+  const metadataOutputs = task?.metadata?.outputs && typeof task.metadata.outputs === "object"
+    ? (task.metadata.outputs as Record<string, unknown>)
+    : {};
+  const manifestPreviewOutputs = task?.metadata?.manifest_preview
+    && typeof task.metadata.manifest_preview === "object"
+    && (task.metadata.manifest_preview as Record<string, unknown>).outputs
+    && typeof (task.metadata.manifest_preview as Record<string, unknown>).outputs === "object"
+      ? ((task.metadata.manifest_preview as Record<string, unknown>).outputs as Record<string, unknown>)
+      : {};
   const outputUrl =
-    resolveAssetUrl(task?.output_url ?? null) ??
+    resolveAssetUrl(
+      String(
+        taskOutputs.video_url ||
+        taskOutputs.result_url ||
+        metadataOutputs.video_url ||
+        metadataOutputs.result_url ||
+        manifestPreviewOutputs.video_url ||
+        manifestPreviewOutputs.result_url ||
+        task?.output_url ||
+        "",
+      ) || null,
+    ) ??
     (task?.output_key && cdnBase ? `${cdnBase}/${task.output_key}` : null);
+  const manifestUrl = resolveAssetUrl(
+    String(
+      taskOutputs.manifest_url ||
+      metadataOutputs.manifest_url ||
+      manifestPreviewOutputs.manifest_url ||
+      "",
+    ) || null,
+  );
+  const manifestPreview = task?.metadata?.manifest_preview
+    ? JSON.stringify(task.metadata.manifest_preview, null, 2)
+    : "";
   // Preview priority: output -> local upload (upload mode) -> empty placeholder.
   const previewUrl = outputUrl ?? (inputSource === "upload" ? inputVideoUrl : null);
   const logs = [...uiLogs, ...(task?.logs ?? [])];
@@ -442,7 +492,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     return "";
   })();
   const taskId = task?.task_id ?? task?.id ?? "";
-  const showUploadBlocks = (isSwap && inputSource === "upload") || isAvatar;
+  const showUploadBlocks = (isSwap && (swapSubtype === "face" || inputSource === "upload")) || isAvatar;
   const lowerError = (task?.error || "").toLowerCase();
   const hasPolicyViolation =
     lowerError.includes("content_policy_violation") ||
@@ -472,10 +522,14 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskResolvedOrientation = String(taskMetadata.resolved_character_orientation || "");
   const taskPriorityPolicy = String(taskMetadata.priority_policy || "");
   const taskCandidateCount = String(taskMetadata.candidate_count || "");
+  const taskRemoteStatus = String(taskMetadata.remote_status || latestRemoteStatus || "");
+  const taskElapsedMs = String(taskMetadata.elapsed_ms || "");
   const canUseSafeDemo = Boolean(safeDemoMotionKey && safeDemoCharacterKey) && !isRunning;
   const canRun = isAvatar
     ? Boolean(videoFile && imageFile) && !isRunning
-    : swapSubtype === "scene" && (inputSource === "preset" || Boolean(videoFile)) && !isRunning;
+    : swapSubtype === "face"
+      ? Boolean(videoFile && imageFile) && !isRunning
+      : (inputSource === "preset" || Boolean(videoFile)) && !isRunning;
   const payloadPreview = isAvatar
     ? {
         service_type: "action_replica",
@@ -509,8 +563,14 @@ export default function SwapClient({ service = "swap" }: Props) {
     : {
         service_type: "swap",
         subtype: swapSubtype,
-        mode: modeApi,
-        input_key: inputSource === "preset" ? presetKey : "(uploaded key)",
+        mode: swapSubtype === "face" ? "baseline" : modeApi,
+        input_key: swapSubtype === "face" ? "(source video key)" : inputSource === "preset" ? presetKey : "(uploaded key)",
+        inputs: swapSubtype === "face"
+          ? {
+              source_video_url: "(source video key)",
+              target_face_image_url: "(target face image key)",
+            }
+          : undefined,
         source: inputSource
       };
   const jsonPreview = {
@@ -527,7 +587,9 @@ export default function SwapClient({ service = "swap" }: Props) {
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"swap\",\"subtype\":\"${swapSubtype}\",\"mode\":\"${modeApi}\",\"input_key\":\"${presetKey}\"}'`
+        swapSubtype === "face"
+          ? "  -d '{\"service_type\":\"swap\",\"subtype\":\"face\",\"mode\":\"baseline\",\"input_key\":\"<source_video_key>\",\"inputs\":{\"source_video_url\":\"<source_video_key>\",\"target_face_image_url\":\"<target_face_image_key>\"}}'"
+          : `  -d '{\"service_type\":\"swap\",\"subtype\":\"${swapSubtype}\",\"mode\":\"${modeApi}\",\"input_key\":\"${presetKey}\"}'`
       ].join(" \\\n");
 
   const handleRetrySafeSlicing = async () => {
@@ -682,75 +744,35 @@ export default function SwapClient({ service = "swap" }: Props) {
                     <div className="flex gap-2">
                       <button
                         type="button"
-                        onClick={() => setSwapSubtype("scene")}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
-                          swapSubtype === "scene"
-                            ? "border-blue-600 text-blue-600 bg-blue-50"
-                            : "border-slate-200 text-slate-500 bg-white"
-                        }`}
-                      >
-                        Scene
-                      </button>
-                      <button
-                        type="button"
                         onClick={() => setSwapSubtype("face")}
                         className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
                           swapSubtype === "face"
-                            ? "border-amber-500 text-amber-700 bg-amber-50"
-                            : "border-slate-200 text-slate-500 bg-white"
-                        }`}
-                      >
-                        Face (Reserved)
-                      </button>
-                    </div>
-                    {swapSubtype === "face" ? (
-                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                        Swap Face contract is reserved / coming soon. Scene flow remains available.
-                      </div>
-                    ) : null}
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                      Input Source
-                    </label>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setInputSource("preset")}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
-                          inputSource === "preset"
                             ? "border-blue-600 text-blue-600 bg-blue-50"
                             : "border-slate-200 text-slate-500 bg-white"
                         }`}
                       >
-                        Preset
+                        Face Basic
                       </button>
                       <button
                         type="button"
-                        onClick={() => setInputSource("upload")}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
-                          inputSource === "upload"
-                            ? "border-blue-600 text-blue-600 bg-blue-50"
-                            : "border-slate-200 text-slate-500 bg-white"
-                        }`}
+                        disabled
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-200 text-slate-400 bg-slate-50 cursor-not-allowed"
                       >
-                        Upload
+                        Scene Disabled
                       </button>
                     </div>
-                    {inputSource === "preset" ? (
-                      <div className="text-xs text-slate-500">
-                        Using preset input_key: <span className="font-mono">{presetKey}</span>
-                      </div>
-                    ) : (
-                      <div className="text-xs text-slate-500">Upload a source video to generate input_key.</div>
-                    )}
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                      P1 constraints: single person, front face, 5-10 seconds. No scenes, no intelligent path.
+                    </div>
                   </div>
                 ) : null}
                 {showUploadBlocks ? (
                   <>
-                    {isAvatar ? (
+                    {isAvatar || (isSwap && swapSubtype === "face") ? (
                       <>
                         <div className="space-y-3">
                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                            Character Image
+                            {isAvatar ? "Character Image" : "Target Face Image"}
                           </label>
                           <div className="flex items-center justify-between text-[11px] text-slate-400">
                             <span>{imageFile ? imageFile.name : "No file selected"}</span>
@@ -785,7 +807,9 @@ export default function SwapClient({ service = "swap" }: Props) {
                                     alt="Character preview"
                                     className="h-10 w-10 rounded-md object-cover"
                                   />
-                                  <span className="text-[11px] text-slate-500">Character preview ready</span>
+                                  <span className="text-[11px] text-slate-500">
+                                    {isAvatar ? "Character preview ready" : "Target face preview ready"}
+                                  </span>
                                 </div>
                               ) : (
                                 <div className="flex items-center justify-center text-[11px] text-slate-400">
@@ -799,7 +823,9 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div className="space-y-3">
                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex justify-between">
                             Source Video
-                            <span className="text-[10px] font-normal text-slate-400">MP4, 4-8s</span>
+                            <span className="text-[10px] font-normal text-slate-400">
+                              {isAvatar ? "MP4, 4-8s" : "MP4, 5-10s"}
+                            </span>
                           </label>
                           <div className="flex items-center justify-between text-[11px] text-slate-400">
                             <span>{videoFile ? videoFile.name : "No file selected"}</span>
@@ -1283,6 +1309,15 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Remote Status: {latestRemoteStatus || "-"}</div>
                       </div>
                     ) : null}
+                    {isSwap ? (
+                      <div className="mt-1 space-y-0.5 text-[11px] text-slate-600">
+                        <div>Mode: {taskModeSummary || task?.mode || "-"}</div>
+                        <div>Provider: {taskProviderSummary || "-"}</div>
+                        <div>Request ID: {taskRequestId || "-"}</div>
+                        <div>Remote Status: {taskRemoteStatus || "-"}</div>
+                        <div>Elapsed: {taskElapsedMs ? `${taskElapsedMs} ms` : "-"}</div>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -1335,6 +1370,24 @@ export default function SwapClient({ service = "swap" }: Props) {
           </div>
 
           <div className="w-full max-w-4xl mt-6 animate-in slide-in-from-bottom-4 fade-in duration-500">
+            {isSwap && (outputUrl || manifestUrl) ? (
+              <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm text-sm text-slate-700">
+                <div className="font-semibold text-slate-900 mb-2">Result Artifacts</div>
+                {outputUrl ? (
+                  <div>
+                    Video: <a href={outputUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline">Open result.mp4</a>
+                  </div>
+                ) : null}
+                {manifestUrl ? (
+                  <div>
+                    Manifest: <a href={manifestUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline">Open manifest.json</a>
+                  </div>
+                ) : null}
+                {manifestPreview ? (
+                  <pre className="mt-3 max-h-40 overflow-auto rounded-lg bg-slate-50 p-3 text-xs">{manifestPreview}</pre>
+                ) : null}
+              </div>
+            ) : null}
             <div className="flex items-center gap-2 mb-2 ml-1">
               <Terminal className="w-3 h-3 text-slate-400" />
               <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">

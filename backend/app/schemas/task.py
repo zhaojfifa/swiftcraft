@@ -85,6 +85,7 @@ class LegacySwapRequest(BaseModel):
 class SwapInputs(BaseModel):
     source_video: Optional[str] = None
     source_video_url: Optional[str] = None
+    target_face_image_url: Optional[str] = None
     target_image: Optional[str] = None
     target_image_url: Optional[str] = None
 
@@ -92,6 +93,8 @@ class SwapInputs(BaseModel):
     def normalize_aliases(self) -> "SwapInputs":
         if not self.source_video and self.source_video_url:
             self.source_video = self.source_video_url
+        if not self.target_image and self.target_face_image_url:
+            self.target_image = self.target_face_image_url
         if not self.target_image and self.target_image_url:
             self.target_image = self.target_image_url
         if not self.source_video:

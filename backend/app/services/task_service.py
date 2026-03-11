@@ -30,6 +30,7 @@ from app.schemas.task import (
     TaskStatus,
 )
 from app.services.presets import resolve_input_key
+from app.services.task_contract import build_input_snapshot, build_manifest, public_service_type
 from app.services.r2_client import R2Client
 from app.services.task_manager import TaskManager
 from app.services.task_store import TaskStore
@@ -411,9 +412,11 @@ class TaskService:
                 if requested in {"fal_pixverse_swap", "pixverse_swap"}:
                     return "fal_pixverse_swap"
                 return (os.getenv("SWIFT_SWAP_SCENE_PROVIDER", "fal_pixverse_swap").strip() or "fal_pixverse_swap")
+            if requested in {"akool", "akool_swap_face", "akool_face_swap"}:
+                return "akool_swap_face"
             if requested:
                 return requested
-            return (os.getenv("SWIFT_SWAP_FACE_PROVIDER", "mock").strip() or "mock")
+            return (os.getenv("SWIFT_SWAP_FACE_PROVIDER", "akool_swap_face").strip() or "akool_swap_face")
         return str(payload.get("provider") or self._default_provider()).strip().lower()
 
     def _public_url_from_key(self, key: str) -> str:
@@ -563,10 +566,22 @@ class TaskService:
                 if resolved_mode == "intelligent":
                     metadata_dict["intelligence_contract"] = localization_contract
             if resolved_service == "swap":
+                swap_inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
                 metadata_dict["run_config_snapshot"] = {
                     "service_type": "swap",
                     "subtype": swap_subtype,
                     "mode": resolved_mode,
+                    "source_video_url": (
+                        swap_inputs.get("source_video_url")
+                        or swap_inputs.get("source_video")
+                        or input_video_url
+                    ),
+                    "target_face_image_url": (
+                        swap_inputs.get("target_face_image_url")
+                        or swap_inputs.get("target_image_url")
+                        or swap_inputs.get("target_image")
+                        or input_image_url
+                    ),
                 }
             if face_enhancer is not None:
                 metadata_dict["face_enhancer"] = face_enhancer
@@ -678,6 +693,23 @@ class TaskService:
                             "service_type": "swap",
                             "subtype": swap_subtype,
                             "mode": resolved_mode,
+                            "source_video_url": (
+                                (payload.get("inputs") or {}).get("source_video_url")
+                                if isinstance(payload.get("inputs"), dict)
+                                else input_video_url
+                            )
+                            or input_video_url,
+                            "target_face_image_url": (
+                                (payload.get("inputs") or {}).get("target_face_image_url")
+                                if isinstance(payload.get("inputs"), dict)
+                                else input_image_url
+                            )
+                            or (
+                                (payload.get("inputs") or {}).get("target_image_url")
+                                if isinstance(payload.get("inputs"), dict)
+                                else input_image_url
+                            )
+                            or input_image_url,
                         }
                     }
                     if resolved_service == "swap"
@@ -748,7 +780,7 @@ class TaskService:
                 subtype = str(snapshot.get("subtype") or "").strip().lower()
             if subtype == "scene":
                 return (os.getenv("SWIFT_SWAP_SCENE_PROVIDER", "fal_pixverse_swap").strip() or "fal_pixverse_swap")
-            return (os.getenv("SWIFT_SWAP_FACE_PROVIDER", "mock").strip() or "mock")
+            return (os.getenv("SWIFT_SWAP_FACE_PROVIDER", "akool_swap_face").strip() or "akool_swap_face")
         return self._default_provider()
 
     def _engine_watchdog_timeout_sec(self, engine: Any | None = None) -> int:
@@ -898,56 +930,56 @@ class TaskService:
             download_ms = metadata.get("download_elapsed_ms")
             upload_ms = metadata.get("upload_elapsed_ms")
             risk_hints = metadata.get("risk_hints") if isinstance(metadata.get("risk_hints"), dict) else {}
-            manifest = {
-                "task_id": task_id,
-                "service": "action_replica",
-                "mode": record.mode,
-                "provider": metadata.get("provider"),
-                "provider_resolved": metadata.get("provider_resolved") or metadata.get("provider"),
-                "engine": metadata.get("engine"),
-                "model_id": metadata.get("model_id"),
-                "output_url": output_url_resolved,
-                "preserve_camera": run_cfg_dict.get("preserve_camera", True),
-                "preserve_motion": run_cfg_dict.get("preserve_motion", True),
-                "preserve_timing": run_cfg_dict.get("preserve_timing", True),
-                "preserve_background": run_cfg_dict.get("preserve_background", True),
-                "prompt_used": bool(run_cfg_dict.get("prompt")),
-                "prompt_source": run_cfg_dict.get("prompt_source"),
-                "prompt_profile": run_cfg_dict.get("prompt_profile"),
-                "prompt_profile_id": run_cfg_dict.get("prompt_profile_id"),
-                "prompt_strength": run_cfg_dict.get("prompt_strength", "medium"),
-                "expression_mode": run_cfg_dict.get("expression_mode", "natural"),
-                "fidelity_bias": run_cfg_dict.get("fidelity_bias", "balanced"),
-                "priority_policy": run_cfg_dict.get("priority_policy") or resolve_priority_policy(record.mode),
-                "orientation_strategy": run_cfg_dict.get("orientation_strategy", "auto"),
-                "resolved_character_orientation": run_cfg_dict.get("resolved_character_orientation", "video"),
-                "candidate_count": run_cfg_dict.get("candidate_count", 1),
-                "seed": run_cfg_dict.get("seed"),
-                "seed_strategy": run_cfg_dict.get("seed_strategy", "fixed"),
-                "retry_count": metadata.get("policy_retry_count", 0),
-                "final_prompt": run_cfg_dict.get("final_prompt") or metadata.get("final_prompt_preview"),
-                "final_negative_prompt": run_cfg_dict.get("final_negative_prompt") or metadata.get("final_negative_prompt_preview"),
-                "inputs": {
-                    "source_video_url": run_cfg_dict.get("source_video_url") or record.input_video_url,
-                    "character_image_url": run_cfg_dict.get("character_image_url") or record.input_image_url,
-                    "duration": run_cfg_dict.get("duration"),
-                    "aspect_ratio": run_cfg_dict.get("aspect_ratio"),
-                },
-                "outputs": {
+            manifest = build_manifest(
+                task_id=task_id,
+                service_type="action_replica",
+                mode=record.mode,
+                provider=str(metadata.get("provider") or ""),
+                input_snapshot=build_input_snapshot(record, run_cfg_dict),
+                outputs={
                     "video_key": output_key_resolved,
                     "video_url": output_url_resolved,
                     "manifest_key": manifest_key,
                 },
-                "metrics": {
+                metrics={
                     "total_latency_ms": total_latency_ms,
                     "submit_ms": submit_ms,
                     "poll_ms": poll_ms,
                     "download_ms": download_ms,
                     "upload_ms": upload_ms,
                 },
-                "warnings": metadata.get("warnings") if isinstance(metadata.get("warnings"), list) else [],
-                "risk_hints": risk_hints,
-            }
+                qa_summary={
+                    "warnings": metadata.get("warnings") if isinstance(metadata.get("warnings"), list) else [],
+                    "risk_hints": risk_hints,
+                    "fidelity_bias": run_cfg_dict.get("fidelity_bias", "balanced"),
+                    "prompt_source": run_cfg_dict.get("prompt_source"),
+                    "prompt_profile": run_cfg_dict.get("prompt_profile"),
+                    "prompt_strength": run_cfg_dict.get("prompt_strength", "medium"),
+                },
+                run_config_snapshot=run_cfg_dict,
+                extra={
+                    "provider_resolved": metadata.get("provider_resolved") or metadata.get("provider"),
+                    "engine": metadata.get("engine"),
+                    "model_id": metadata.get("model_id"),
+                    "output_url": output_url_resolved,
+                    "prompt_used": bool(run_cfg_dict.get("prompt")),
+                    "prompt_source": run_cfg_dict.get("prompt_source"),
+                    "prompt_profile": run_cfg_dict.get("prompt_profile"),
+                    "prompt_profile_id": run_cfg_dict.get("prompt_profile_id"),
+                    "prompt_strength": run_cfg_dict.get("prompt_strength", "medium"),
+                    "expression_mode": run_cfg_dict.get("expression_mode", "natural"),
+                    "fidelity_bias": run_cfg_dict.get("fidelity_bias", "balanced"),
+                    "priority_policy": run_cfg_dict.get("priority_policy") or resolve_priority_policy(record.mode),
+                    "orientation_strategy": run_cfg_dict.get("orientation_strategy", "auto"),
+                    "resolved_character_orientation": run_cfg_dict.get("resolved_character_orientation", "video"),
+                    "candidate_count": run_cfg_dict.get("candidate_count", 1),
+                    "seed": run_cfg_dict.get("seed"),
+                    "seed_strategy": run_cfg_dict.get("seed_strategy", "fixed"),
+                    "retry_count": metadata.get("policy_retry_count", 0),
+                    "final_prompt": run_cfg_dict.get("final_prompt") or metadata.get("final_prompt_preview"),
+                    "final_negative_prompt": run_cfg_dict.get("final_negative_prompt") or metadata.get("final_negative_prompt_preview"),
+                },
+            )
             try:
                 r2 = R2Client()
                 r2.put_json(manifest_key, manifest)
@@ -958,7 +990,7 @@ class TaskService:
                 merged_outputs["manifest_key"] = manifest_key
                 merged_outputs["manifest_url"] = manifest_url
                 metadata["outputs"] = merged_outputs
-                metadata.setdefault("manifest_preview", manifest)
+                metadata["manifest_preview"] = {**manifest, "outputs": {**manifest["outputs"], "manifest_url": manifest_url}}
             except Exception as manifest_exc:
                 logger.warning(
                     "[action_replica] manifest upload skipped: %s: %s",
@@ -1207,6 +1239,7 @@ class TaskService:
 
     def _to_response(self, record: TaskRecord, service_type: ServiceType) -> TaskResponseOut:
         metadata = dict(record.metadata or {})
+        metadata.setdefault("service_type", public_service_type(record.service))
         return TaskResponseOut(
             task_id=record.task_id,
             service_type=service_type,

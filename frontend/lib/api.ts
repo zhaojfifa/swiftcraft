@@ -15,6 +15,7 @@ export type TaskStatus = 'queued' | 'running' | 'done' | 'failed';
 export type TaskRecord = {
   task_id: string;
   id?: string;
+  service_type?: string;
   service?: string;
   mode?: string;
   status?: TaskStatus | string;
@@ -25,14 +26,30 @@ export type TaskRecord = {
   output_url?: string | null;
   error?: string | null;
   logs?: string[] | null;
+  outputs?: {
+    video_url?: string;
+    subtitle_url?: string;
+    subtitle_ass_url?: string;
+    audio_url?: string;
+    manifest_url?: string;
+    result_url?: string;
+    localized_audio_only_url?: string;
+    localized_final_url?: string;
+  };
   metadata?: {
     provider?: string;
+    service_type?: string;
+    request_id?: string;
+    remote_status?: string;
+    elapsed_ms?: number;
+    qa_summary?: unknown;
     outputs?: {
       video_url?: string;
       subtitle_url?: string;
       subtitle_ass_url?: string;
       audio_url?: string;
       manifest_url?: string;
+      result_url?: string;
       localized_audio_only_url?: string;
       localized_final_url?: string;
       manifest_json?: unknown;
@@ -44,6 +61,7 @@ export type TaskRecord = {
         subtitle_ass_url?: string;
         audio_url?: string;
         manifest_url?: string;
+        result_url?: string;
         localized_audio_only_url?: string;
         localized_final_url?: string;
         manifest_json?: unknown;

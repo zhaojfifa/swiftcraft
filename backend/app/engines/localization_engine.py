@@ -11,6 +11,7 @@ import httpx
 from app.engines.base import EngineResult, EngineRunError
 from app.models.task import TaskRecord
 from app.services.r2_client import R2Client
+from app.services.task_contract import build_input_snapshot, build_manifest
 from app.utils.dubbing_service import get_last_tts_status, srt_to_text, synthesize_mp3
 from app.utils.fastwhisper_asr import (
     ASRSegment,
@@ -308,7 +309,7 @@ class LocalizationEngine:
             if speech_ratio is not None and speech_ratio < speech_ratio_min:
                 raise EngineRunError("NO_SPEECH_DETECTED: speech_ratio below threshold")
 
-            asr_max_audio_sec = _env_float("ASR_MAX_AUDIO_SEC", 30.0)
+            asr_max_audio_sec = _env_float("ASR_MAX_AUDIO_SEC", 180.0)
             asr_wav = normalized_wav
             asr_wav_duration_sec = normalized_wav_duration_sec
             if (
@@ -1250,56 +1251,60 @@ class LocalizationEngine:
                 for seg_row in tts_segment_alignment:
                     if isinstance(seg_row, dict) and seg_row.get("warning_flags"):
                         tts_warning_segments += 1
-            manifest = {
-                "task_id": task_id,
-                "service": "localization",
-                "mode": record.mode,
-                "source_url": source_url,
-                "subtitle_burned": True,
-                "subtitle_format": "ass",
-                "subtitle_mode": subtitle_mode,
-                "audio_strategy": audio_strategy,
-                "original_audio_muted": original_audio_muted,
-                "dub_gain": dub_gain,
-                "bgm_gain": bgm_gain,
-                "voice_speed": voice_speed,
-                "dub_rms_db": dub_aligned_rms_db,
-                "dub_peak_db": dub_aligned_peak_db,
-                "mixed_rms_db": mixed_rms_db,
-                "mixed_peak_db": mixed_peak_db,
-                "localized_rms_db": localized_rms_db,
-                "localized_peak_db": localized_peak_db,
-                "audio_qa": {
+            manifest = build_manifest(
+                task_id=task_id,
+                service_type="localization",
+                mode=record.mode,
+                provider="localization_basic",
+                input_snapshot=build_input_snapshot(record, run_config_snapshot),
+                outputs=outputs,
+                metrics={
+                    "elapsed_ms_by_step": metrics,
+                    "total_latency_ms": total_latency_ms,
+                },
+                qa_summary={
+                    "translation_length_ratio_avg": translation_meta.get("length_ratio_avg"),
+                    "translation_length_ratio_max": translation_meta.get("length_ratio_max"),
+                    "tts_warning_segments": tts_warning_segments,
+                },
+                run_config_snapshot=run_config_snapshot,
+                extra={
+                    "source_url": source_url,
+                    "subtitle_burned": True,
+                    "subtitle_format": "ass",
+                    "subtitle_mode": subtitle_mode,
+                    "audio_strategy": audio_strategy,
+                    "original_audio_muted": original_audio_muted,
+                    "dub_gain": dub_gain,
+                    "bgm_gain": bgm_gain,
+                    "voice_speed": voice_speed,
                     "dub_rms_db": dub_aligned_rms_db,
                     "dub_peak_db": dub_aligned_peak_db,
                     "mixed_rms_db": mixed_rms_db,
                     "mixed_peak_db": mixed_peak_db,
                     "localized_rms_db": localized_rms_db,
                     "localized_peak_db": localized_peak_db,
+                    "audio_qa": {
+                        "dub_rms_db": dub_aligned_rms_db,
+                        "dub_peak_db": dub_aligned_peak_db,
+                        "mixed_rms_db": mixed_rms_db,
+                        "mixed_peak_db": mixed_peak_db,
+                        "localized_rms_db": localized_rms_db,
+                        "localized_peak_db": localized_peak_db,
+                    },
+                    "localized_audio_only_url": localized_audio_only_url,
+                    "localized_final_url": output_url,
+                    "translation": translation_meta,
+                    "transcription": transcription_meta,
+                    "tts": tts_meta,
+                    "metadata": {
+                        "source_probe": source_probe,
+                        "policy": {
+                            "enforced": policy_flags,
+                        },
+                    },
                 },
-                "localized_audio_only_url": localized_audio_only_url,
-                "localized_final_url": output_url,
-                "outputs": outputs,
-                "metrics": {
-                    "elapsed_ms_by_step": metrics,
-                    "total_latency_ms": total_latency_ms,
-                },
-                "qa_summary": {
-                    "translation_length_ratio_avg": translation_meta.get("length_ratio_avg"),
-                    "translation_length_ratio_max": translation_meta.get("length_ratio_max"),
-                    "tts_warning_segments": tts_warning_segments,
-                },
-                "run_config_snapshot": run_config_snapshot,
-                "translation": translation_meta,
-                "transcription": transcription_meta,
-                "tts": tts_meta,
-                "metadata": {
-                    "source_probe": source_probe,
-                    "policy": {
-                        "enforced": policy_flags,
-                    }
-                },
-            }
+            )
             on_log(
                 "[loc] MANIFEST_QA "
                 f"translation_ratio_avg={translation_meta.get('length_ratio_avg')} "

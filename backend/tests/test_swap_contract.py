@@ -22,5 +22,20 @@ def test_swap_request_accepts_swap_service_with_subtype():
     assert parsed.inputs.target_image == "uploads/target.png"
 
 
+def test_swap_request_accepts_target_face_alias():
+    payload = {
+        "service_type": "swap",
+        "subtype": "face",
+        "mode": "baseline",
+        "inputs": {
+            "source_video_url": "uploads/source.mp4",
+            "target_face_image_url": "uploads/target-face.png",
+        },
+    }
+    parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
+    assert isinstance(parsed, SwapRequest)
+    assert parsed.inputs.target_image == "uploads/target-face.png"
+
+
 def test_service_type_from_legacy_swap_is_swap():
     assert _service_type_from_legacy("swap") == ServiceType.swap
