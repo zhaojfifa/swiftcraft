@@ -79,38 +79,39 @@ class AkoolClient:
         }
 
     @staticmethod
-    def _unwrap_payload(payload: Dict[str, Any]) -> Any:
-        if isinstance(payload.get("data"), (dict, list)):
-            return payload["data"]
-        return payload
-
-    @staticmethod
-    def _normalize_face_items(data: Any) -> List[Dict[str, Any]]:
-        if isinstance(data, list):
-            return [item for item in data if isinstance(item, dict)]
-        if isinstance(data, dict):
-            for key in ("faces", "faceList", "items", "records", "list"):
-                value = data.get(key)
-                if isinstance(value, list):
-                    return [item for item in value if isinstance(item, dict)]
-            return [data]
-        return []
-
-    @staticmethod
-    def _extract_face_selection(data: Any) -> AkoolFaceSelection | None:
-        faces = AkoolClient._normalize_face_items(data)
-        for item in faces:
-            path = str(item.get("path") or item.get("image") or "").strip()
-            opts = item.get("opts")
-            if not path or opts is None:
-                continue
-            return AkoolFaceSelection(
-                path=path,
-                opts=str(opts),
-                face_count=len(faces),
-                raw=item,
+    def _extract_faces_obj(body: Dict[str, Any]) -> Dict[str, Any]:
+        if int(body.get("error_code") or -1) != 0:
+            raise RuntimeError(
+                f"akool face_detect stage failed: error_code={body.get('error_code')} message={body.get('error_msg') or body.get('message') or 'unknown'}"
             )
-        return None
+        faces_obj = body.get("faces_obj")
+        if not isinstance(faces_obj, dict):
+            return {}
+        return faces_obj
+
+    @staticmethod
+    def _selection_from_faces_obj(faces_obj: Dict[str, Any]) -> AkoolFaceSelection | None:
+        first = faces_obj.get("0")
+        if not isinstance(first, dict):
+            return None
+        face_urls = first.get("face_urls")
+        if not isinstance(face_urls, list) or not face_urls or not str(face_urls[0]).strip():
+            raise RuntimeError("detect_faces returned no face_urls")
+        crop_landmarks = first.get("crop_landmarks")
+        landmarks_str = first.get("landmarks_str")
+        opts = None
+        if isinstance(crop_landmarks, list) and crop_landmarks and str(crop_landmarks[0]).strip():
+            opts = str(crop_landmarks[0]).strip()
+        elif isinstance(landmarks_str, list) and landmarks_str and str(landmarks_str[0]).strip():
+            opts = str(landmarks_str[0]).strip()
+        else:
+            raise RuntimeError("detect_faces returned no crop_landmarks")
+        return AkoolFaceSelection(
+            path=str(face_urls[0]).strip(),
+            opts=opts,
+            face_count=len([key for key, value in faces_obj.items() if isinstance(value, dict)]),
+            raw=first,
+        )
 
     @staticmethod
     def _ensure_ok(body: Dict[str, Any], stage: str) -> Any:
@@ -120,11 +121,14 @@ class AkoolClient:
             raise RuntimeError(f"akool {stage} stage failed: code={code} msg={msg or 'unknown'}")
         return body.get("data")
 
-    async def detect_face(self, image_url: str) -> AkoolFaceSelection | None:
+    async def detect_face(self, media_url: str, *, is_video: bool = False) -> AkoolFaceSelection | None:
         payload = {
+            "url": ensure_http_url("media_url", media_url),
             "single_face": True,
-            "image": [ensure_http_url("image_url", image_url)],
+            "return_face_url": True,
         }
+        if is_video:
+            payload["num_frames"] = 8
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 self.build_face_detect_url(),
@@ -133,8 +137,8 @@ class AkoolClient:
             )
             response.raise_for_status()
             body = response.json()
-        data = self._ensure_ok(body, "face_detect")
-        return self._extract_face_selection(self._unwrap_payload({"data": data}))
+        faces_obj = self._extract_faces_obj(body)
+        return self._selection_from_faces_obj(faces_obj)
 
     async def submit_video_faceswap(
         self,

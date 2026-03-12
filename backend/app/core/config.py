@@ -28,7 +28,7 @@ class Settings:
     AKOOL_BASE_URL: str = os.getenv("AKOOL_BASE_URL", os.getenv("AKOOL_API_BASE_URL", "https://openapi.akool.com"))
     AKOOL_AUTH_URL: str = os.getenv("AKOOL_AUTH_URL", "https://openapi.akool.com/oauth/token")
     AKOOL_TOKEN_URL: str = os.getenv("AKOOL_TOKEN_URL", os.getenv("AKOOL_AUTH_URL", "https://openapi.akool.com/oauth/token"))
-    AKOOL_FACE_DETECT_ENDPOINT: str = os.getenv("AKOOL_FACE_DETECT_ENDPOINT", "/api/open/v3/facedetect/detect")
+    AKOOL_FACE_DETECT_ENDPOINT: str = os.getenv("AKOOL_FACE_DETECT_ENDPOINT", "https://openapi.akool.com/interface/detect-api/detect_faces")
     AKOOL_SWAP_ENDPOINT: str = os.getenv("AKOOL_SWAP_ENDPOINT", "/api/open/v3/faceswap/highquality/specifyvideo")
     AKOOL_SWAP_RESULT_ENDPOINT: str = os.getenv("AKOOL_SWAP_RESULT_ENDPOINT", "/api/open/v3/faceswap/result/listbyids")
     AKOOL_AVATAR_ENDPOINT: str = os.getenv("AKOOL_AVATAR_ENDPOINT", "")

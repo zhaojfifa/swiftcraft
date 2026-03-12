@@ -31,10 +31,10 @@ def test_ensure_http_url_rejects_relative_path():
 def test_akool_client_builds_official_swap_urls():
     client = AkoolClient.__new__(AkoolClient)
     client.base_url = "https://openapi.akool.com"
-    client.face_detect_endpoint = "/api/open/v3/facedetect/detect"
+    client.face_detect_endpoint = "https://openapi.akool.com/interface/detect-api/detect_faces"
     client.swap_submit_endpoint = "/api/open/v3/faceswap/highquality/specifyvideo"
     client.swap_result_endpoint = "/api/open/v3/faceswap/result/listbyids"
-    assert client.build_face_detect_url() == "https://openapi.akool.com/api/open/v3/facedetect/detect"
+    assert client.build_face_detect_url() == "https://openapi.akool.com/interface/detect-api/detect_faces"
     assert client.build_submit_url() == "https://openapi.akool.com/api/open/v3/faceswap/highquality/specifyvideo"
     assert client.build_result_url("abc123") == "https://openapi.akool.com/api/open/v3/faceswap/result/listbyids?_ids=abc123"
 
@@ -42,3 +42,30 @@ def test_akool_client_builds_official_swap_urls():
 def test_extract_remote_status_prefers_payload_state():
     payload = {"status": "PROCESSING"}
     assert AkoolClient.extract_remote_status(payload) == "processing"
+
+
+def test_detect_faces_parser_prefers_crop_landmarks():
+    faces_obj = {
+        "0": {
+            "face_urls": ["https://cdn.example/source-face.png"],
+            "crop_landmarks": ["1,2,3,4"],
+            "landmarks_str": ["fallback"],
+        }
+    }
+    selection = AkoolClient._selection_from_faces_obj(faces_obj)
+    assert selection is not None
+    assert selection.path == "https://cdn.example/source-face.png"
+    assert selection.opts == "1,2,3,4"
+
+
+def test_detect_faces_parser_falls_back_to_landmarks_str():
+    faces_obj = {
+        "0": {
+            "face_urls": ["https://cdn.example/source-face.png"],
+            "crop_landmarks": [],
+            "landmarks_str": ["fallback"],
+        }
+    }
+    selection = AkoolClient._selection_from_faces_obj(faces_obj)
+    assert selection is not None
+    assert selection.opts == "fallback"

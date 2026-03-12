@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import subprocess
-import tempfile
 import time
-from pathlib import Path
 from typing import Any, Callable, Dict
 
 import httpx
@@ -12,7 +9,7 @@ import httpx
 from app.core.config import settings
 from app.engines.base import EngineResult, EngineRunError
 from app.models.task import TaskRecord
-from app.services.akool_client import AkoolClient, AkoolFaceSelection
+from app.services.akool_client import AkoolClient
 from app.services.r2_client import R2Client
 from app.services.task_contract import build_input_snapshot, build_manifest
 
@@ -39,46 +36,13 @@ class AkoolSwapFaceEngine:
             base = settings.PUBLIC_CDN_BASE_URL.rstrip("/")
             return f"{base}/{raw.lstrip('/')}"
 
-    async def _download_to_file(self, url: str, destination: Path) -> None:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            destination.write_bytes(response.content)
-
-    async def _prepare_target_face(self, task_id: str, source_video_url: str) -> tuple[AkoolFaceSelection | None, int]:
-        with tempfile.TemporaryDirectory(prefix=f"swap-{task_id[:8]}-") as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            video_path = tmp_path / "source.mp4"
-            frame_path = tmp_path / "target-frame.jpg"
-            await self._download_to_file(source_video_url, video_path)
-            cmd = [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(video_path),
-                "-ss",
-                "00:00:01",
-                "-frames:v",
-                "1",
-                str(frame_path),
-            ]
-            try:
-                subprocess.run(cmd, check=True, capture_output=True)
-            except FileNotFoundError as exc:
-                raise EngineRunError("ffmpeg is not installed on runtime image") from exc
-            except subprocess.CalledProcessError as exc:
-                stderr = (exc.stderr or b"").decode("utf-8", errors="ignore")
-                raise EngineRunError(f"swap target face frame extraction failed: {stderr[-400:]}") from exc
-            detect_key = f"outputs/{task_id}/detect/target-frame.jpg"
-            detect_url = self.r2.upload_bytes(detect_key, frame_path.read_bytes(), content_type="image/jpeg")
-        selection = await self.client.detect_face(detect_url)
-        if selection is None:
-            return None, 0
-        return selection, max(1, int(selection.face_count or 1))
-
     def _apply_audio_strategy(self, content: bytes, keep_original_audio: bool) -> bytes:
         if keep_original_audio:
             return content
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
         with tempfile.TemporaryDirectory(prefix="swap-audio-") as tmp_dir:
             tmp_path = Path(tmp_dir)
             input_path = tmp_path / "result.mp4"
@@ -161,6 +125,7 @@ class AkoolSwapFaceEngine:
         on_log(f"[swap][input] source_face_image_key={source_face_image_key or 'n/a'}")
         on_log(f"[swap][resolved] source_video_url={source_video_url}")
         on_log(f"[swap][resolved] source_face_image_url={source_face_image_url}")
+        on_log(f"[swap][detect] endpoint={provider_debug.get('face_detect_endpoint')}")
         on_log(f"[swap][akool] base_url={provider_debug.get('api_base_url')}")
         on_log(f"[swap][akool] auth_url=api_key_header")
         on_log(f"[swap][akool] submit_url={provider_debug.get('submit_endpoint')}")
@@ -172,15 +137,18 @@ class AkoolSwapFaceEngine:
             if source_face is None:
                 on_log("[swap][detect] source_face fail")
                 raise EngineRunError("source face not detected")
-            on_log(f"[swap][detect] source_face ok count={source_face.face_count}")
+            on_log(f"[swap][detect] source_face faces={source_face.face_count}")
+            on_log(f"[swap][detect] source_face_url={source_face.path}")
             on_stage("running", 20)
 
             on_log("[swap][detect] target_face start")
-            target_face, target_face_count = await self._prepare_target_face(task_id, source_video_url)
+            target_face = await self.client.detect_face(source_video_url, is_video=True)
             if target_face is None:
                 on_log("[swap][detect] target_face fail")
                 raise EngineRunError("target face not detected in video")
-            on_log(f"[swap][detect] target_face ok count={target_face_count}")
+            target_face_count = max(1, int(target_face.face_count or 1))
+            on_log(f"[swap][detect] target_face faces={target_face_count}")
+            on_log(f"[swap][detect] target_face_url={target_face.path}")
             on_stage("running", 35)
 
             submit_payload = {
