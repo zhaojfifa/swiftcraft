@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import httpx
+from PIL import Image
 
 from app.engines.base import EngineRunError
 from app.services.akool_client import AkoolClient
@@ -50,22 +51,53 @@ class VideoFaceExtractor:
 
     async def detect_faces_from_frames(self, frame_paths: List[Path], service: str = "swap") -> List[Dict[str, Any]]:
         detections: List[Dict[str, Any]] = []
+        used_bbox_fallback = False
         for frame_path in frame_paths:
             bridged = await self.bridge.bridge_asset(source_path=str(frame_path), service=service, asset_kind="target-frame")
-            detected = await self.client.detect_faces(
-                bridged.public_url,
-                single_face=True,
-                return_face_url=True,
-            )
-            for face in list(detected.get("faces") or []):
+            try:
+                detected = await self.client.detect_faces(
+                    bridged.public_url,
+                    single_face=True,
+                    return_face_url=True,
+                )
+                for face in list(detected.get("faces") or []):
+                    detections.append(
+                        {
+                            "frame_path": str(frame_path),
+                            "frame_vendor_url": bridged.public_url,
+                            "used_bbox_fallback": False,
+                            **face,
+                        }
+                    )
+            except RuntimeError as exc:
+                text = str(exc)
+                if "returned no crop_landmarks" not in text:
+                    continue
+                used_bbox_fallback = True
+                width, height = self._image_size(frame_path)
                 detections.append(
                     {
                         "frame_path": str(frame_path),
                         "frame_vendor_url": bridged.public_url,
-                        **face,
+                        "face_id": f"bbox-{frame_path.stem}",
+                        "path": bridged.public_url,
+                        "opts": self._full_frame_bbox_opts(width, height),
+                        "region": [0, 0, width, height],
+                        "frame_time": None,
+                        "raw": {"fallback": "bbox", "reason": text},
+                        "used_bbox_fallback": True,
                     }
                 )
         return detections
+
+    @staticmethod
+    def _image_size(path: Path) -> tuple[int, int]:
+        with Image.open(path) as image:
+            return image.size
+
+    @staticmethod
+    def _full_frame_bbox_opts(width: int, height: int) -> str:
+        return f"0,0,{width},{height}"
 
     @staticmethod
     def _face_area(candidate: Dict[str, Any]) -> float:
@@ -111,6 +143,8 @@ class VideoFaceExtractor:
         await self._download_video(source_video_url, video_path)
         frames = self.extract_candidate_frames(video_path, max_frames=max_frames)
         detected_faces = await self.detect_faces_from_frames(frames, service=service)
+        if not detected_faces:
+            raise EngineRunError("target_face_extraction failed: no face detected in sampled frames")
         selected_faces = self.select_primary_face(detected_faces)
         exported_paths = self.export_target_face_images(selected_faces, work_dir / "target_faces")
         bridged_target_images = [
@@ -118,16 +152,19 @@ class VideoFaceExtractor:
             for path in exported_paths
         ]
         target_faces: List[Dict[str, Any]] = []
-        for bridged in bridged_target_images:
-            detected = await self.client.detect_faces(
-                bridged.public_url,
-                single_face=True,
-                return_face_url=True,
+        for index, bridged in enumerate(bridged_target_images):
+            selected_face = selected_faces[index]
+            target_faces.append(
+                {
+                    "face_id": selected_face.get("face_id") or f"target-{index+1}",
+                    "path": bridged.public_url,
+                    "opts": selected_face.get("opts"),
+                    "region": selected_face.get("region"),
+                    "frame_time": selected_face.get("frame_time"),
+                    "bridged_target_image_url": bridged.public_url,
+                    "used_bbox_fallback": bool(selected_face.get("used_bbox_fallback")),
+                }
             )
-            faces = list(detected.get("faces") or [])
-            if not faces:
-                continue
-            target_faces.append({**faces[0], "bridged_target_image_url": bridged.public_url})
         return {
             "frames": frames,
             "detected_faces": detected_faces,
@@ -135,4 +172,6 @@ class VideoFaceExtractor:
             "exported_paths": exported_paths,
             "target_faces": target_faces,
             "bridged_target_images": bridged_target_images,
+            "used_bbox_fallback": any(bool(face.get("used_bbox_fallback")) for face in detected_faces),
+            "require_landmarks": False,
         }

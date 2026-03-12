@@ -117,6 +117,13 @@ class AkoolSwapFaceEngine:
         vendor_runtime = {
             "source_face_detect": {"ok": False, "face_count": 0},
             "source_video_detect": {"attempted": False, "ok": False, "non_blocking": True, "reason": None},
+            "target_face_extraction": {
+                "attempted": False,
+                "frames_sampled": 0,
+                "faces_detected": 0,
+                "require_landmarks": False,
+                "used_bbox_fallback": False,
+            },
             "submit_validation": {"sourceImage_count": 0, "targetImage_count": 0, "ok": False, "reason": None},
             "poll": {"last_remote_status": None, "vendor_result_url": None},
             "result_fetch": {"attempted": False, "reason": "remote status not completed yet"},
@@ -186,15 +193,25 @@ class AkoolSwapFaceEngine:
                 "selected_count": len(target_faces),
                 "target_image_payload": target_faces,
                 "bridged_target_images": bridged_target_images,
+                "used_bbox_fallback": bool(extraction.get("used_bbox_fallback")),
+                "require_landmarks": bool(extraction.get("require_landmarks")),
+            }
+            vendor_runtime["target_face_extraction"] = {
+                "attempted": True,
+                "frames_sampled": target_face_runtime["frames_sampled"],
+                "faces_detected": target_face_runtime["faces_detected"],
+                "require_landmarks": target_face_runtime["require_landmarks"],
+                "used_bbox_fallback": target_face_runtime["used_bbox_fallback"],
             }
             vendor_runtime["source_video_detect"] = {
                 "attempted": True,
                 "ok": bool(target_faces),
                 "non_blocking": False,
-                "reason": None if target_faces else "targetImage is empty after local target-face extraction",
+                "reason": None if target_faces else "no face detected in sampled frames",
             }
             on_log(f"[swap][target-face] frames_sampled={target_face_runtime['frames_sampled']}")
             on_log(f"[swap][target-face] faces_detected={target_face_runtime['faces_detected']}")
+            on_log(f"[swap][target-face] used_bbox_fallback={str(target_face_runtime['used_bbox_fallback']).lower()}")
             on_log(f"[swap][target-face] selected_count={target_face_runtime['selected_count']}")
             if bridged_target_images:
                 on_log(f"[swap][target-face] bridged_target_image_url={bridged_target_images[0].public_url}")
