@@ -1,7 +1,6 @@
 import asyncio
 import pytest
 from pathlib import Path
-
 from app.engines.akool_swap_face_engine import AkoolSwapFaceEngine
 from app.models.task import TaskRecord
 from app.services.akool_client import AkoolClient, ensure_http_url
@@ -106,6 +105,49 @@ def test_detect_faces_parser_raises_when_missing_opts():
     }
     with pytest.raises(RuntimeError, match="returned no crop_landmarks"):
         AkoolClient.normalize_detect_result(payload, stage="source_face_detect", input_url="https://cdn.example/original.png")
+
+
+def test_submit_video_faceswap_soft_accepted_returns_pending(monkeypatch):
+    client = AkoolClient.__new__(AkoolClient)
+    client.timeout = None
+    client.build_submit_url = lambda: "https://openapi.akool.com/api/open/v3/faceswap/highquality/specifyvideo"
+    client._headers = lambda: {"x-api-key": "test", "Content-Type": "application/json", "Accept": "application/json"}
+    client.safe_json = lambda payload: str(payload)
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "code": 1000,
+                "msg": "Please be patient! If your results are not generated in three hours, please check your input video.",
+                "_id": "req-soft-1",
+            }
+
+    class _AsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return _Response()
+
+    monkeypatch.setattr("app.services.akool_client.httpx.AsyncClient", lambda *args, **kwargs: _AsyncClient())
+
+    job = asyncio.run(
+        client.submit_video_faceswap(
+            source_face={"path": "https://vendor.example/source-face.jpg", "opts": "1,2,3,4"},
+            target_faces=[{"path": "https://vendor.example/target-face.jpg", "opts": "1,2,3,4"}],
+            modify_video="https://vendor.example/source-video.mp4",
+            face_enhance=1,
+        )
+    )
+
+    assert job.request_id == "req-soft-1"
+    assert job.remote_status == "submitted_pending"
 
 
 def test_swap_engine_no_legacy_selected_target_faces_reference():

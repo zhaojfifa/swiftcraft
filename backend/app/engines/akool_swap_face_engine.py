@@ -236,11 +236,15 @@ class AkoolSwapFaceEngine:
                 face_enhance=face_enhance,
             )
             submit_stage = "submit_ok"
+            vendor_runtime["submit"] = {
+                "soft_accepted": job.remote_status == "submitted_pending",
+                "remote_status": job.remote_status,
+            }
             on_log(f"[swap][provider] request_id={job.request_id or 'n/a'} remote_status={job.remote_status or 'submitted'}")
             on_stage("rendering", 55)
 
             remote_payload = dict(job.raw)
-            remote_status = self.client.extract_remote_status(remote_payload)
+            remote_status = str(job.remote_status or self.client.extract_remote_status(remote_payload)).strip().lower()
             poll_started = time.perf_counter()
             while True:
                 result_url = self.client.extract_result_url(remote_payload) or job.result_url

@@ -234,6 +234,27 @@ class AkoolClient:
             )
             response.raise_for_status()
             body = response.json()
+        logger.info("[swap][submit] raw_response=%s", self.safe_json(body))
+        code = body.get("code") if isinstance(body, dict) else None
+        msg = str(body.get("msg") or "") if isinstance(body, dict) else ""
+        soft_accepted = code == 1000 and "please be patient" in msg.lower()
+        if soft_accepted:
+            data_dict = body if isinstance(body, dict) else {}
+            request_id = str(data_dict.get("_id") or data_dict.get("id") or "").strip()
+            job_id = str(data_dict.get("job_id") or data_dict.get("jobId") or "").strip()
+            result_url = str(data_dict.get("url") or "").strip() or None
+            logger.info("[swap][submit] soft_accepted code=%s msg=%s", code, msg)
+            if request_id or job_id:
+                return AkoolSwapJob(
+                    request_id=request_id or job_id,
+                    job_id=job_id or request_id,
+                    remote_status="submitted_pending",
+                    result_url=result_url,
+                    raw=body,
+                )
+            raise RuntimeError(
+                f"akool submit soft-accepted but missing _id/job_id: body={self.safe_json(body)}"
+            )
         data = self._ensure_ok(body, "submit")
         data_dict = data if isinstance(data, dict) else {}
         request_id = str(data_dict.get("_id") or data_dict.get("id") or "").strip()
