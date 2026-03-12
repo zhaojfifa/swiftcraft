@@ -239,11 +239,18 @@ class AkoolClient:
         msg = str(body.get("msg") or "") if isinstance(body, dict) else ""
         soft_accepted = code == 1000 and "please be patient" in msg.lower()
         if soft_accepted:
-            data_dict = body if isinstance(body, dict) else {}
+            root = body if isinstance(body, dict) else {}
+            data_dict = root.get("data") if isinstance(root.get("data"), dict) else root
             request_id = str(data_dict.get("_id") or data_dict.get("id") or "").strip()
             job_id = str(data_dict.get("job_id") or data_dict.get("jobId") or "").strip()
             result_url = str(data_dict.get("url") or "").strip() or None
-            logger.info("[swap][submit] soft_accepted code=%s msg=%s", code, msg)
+            logger.info(
+                "[swap][submit] soft_accepted code=%s msg=%s request_id=%s job_id=%s",
+                code,
+                msg,
+                request_id or "",
+                job_id or "",
+            )
             if request_id or job_id:
                 return AkoolSwapJob(
                     request_id=request_id or job_id,

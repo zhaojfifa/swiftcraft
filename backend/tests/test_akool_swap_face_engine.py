@@ -122,7 +122,11 @@ def test_submit_video_faceswap_soft_accepted_returns_pending(monkeypatch):
             return {
                 "code": 1000,
                 "msg": "Please be patient! If your results are not generated in three hours, please check your input video.",
-                "_id": "req-soft-1",
+                "data": {
+                    "_id": "req-soft-1",
+                    "job_id": "job-soft-1",
+                    "url": "https://vendor.example/result.mp4",
+                },
             }
 
     class _AsyncClient:
@@ -147,6 +151,7 @@ def test_submit_video_faceswap_soft_accepted_returns_pending(monkeypatch):
     )
 
     assert job.request_id == "req-soft-1"
+    assert job.job_id == "job-soft-1"
     assert job.remote_status == "submitted_pending"
 
 
