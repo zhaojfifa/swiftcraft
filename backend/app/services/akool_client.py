@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from dataclasses import dataclass
@@ -17,14 +18,6 @@ def ensure_http_url(name: str, value: str) -> str:
     if not raw or not (raw.startswith("http://") or raw.startswith("https://")):
         raise ValueError(f"akool config invalid: {name} must be absolute http(s) url, got: {value}")
     return raw
-
-
-@dataclass(frozen=True)
-class AkoolFaceSelection:
-    path: str
-    opts: str
-    face_count: int
-    raw: Dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -80,6 +73,13 @@ class AkoolClient:
         except Exception:
             return str(payload)
 
+    def _masked_headers(self) -> Dict[str, str]:
+        headers = self._headers()
+        masked = dict(headers)
+        if masked.get("x-api-key"):
+            masked["x-api-key"] = "***"
+        return masked
+
     def _headers(self) -> Dict[str, str]:
         if not self.api_key:
             raise RuntimeError("akool auth stage failed: missing AKOOL_API_KEY")
@@ -97,9 +97,7 @@ class AkoolClient:
         except Exception:
             normalized_error_code = -1
         if normalized_error_code != 0:
-            raise RuntimeError(
-                f"akool face_detect stage failed: error_code={body.get('error_code')} message={body.get('error_msg') or body.get('message') or 'unknown'}"
-            )
+            raise RuntimeError(f"akool detect failed: error_code={body.get('error_code')} error_msg={body.get('error_msg') or 'unknown'}")
         faces_obj = body.get("faces_obj")
         if not isinstance(faces_obj, dict):
             return {}
@@ -119,16 +117,20 @@ class AkoolClient:
         return None
 
     @classmethod
-    def normalize_detect_result(cls, result: Dict[str, Any], *, stage: str) -> List[Dict[str, Any]]:
+    def normalize_detect_result(cls, result: Dict[str, Any], *, stage: str, input_url: str) -> Dict[str, Any]:
         faces_obj = cls._extract_faces_obj(result)
         normalized: List[Dict[str, Any]] = []
-        for _, value in sorted(faces_obj.items(), key=lambda item: item[0]):
+        for face_id, value in sorted(faces_obj.items(), key=lambda item: item[0]):
             if not isinstance(value, dict):
                 continue
             face_urls = value.get("face_urls")
-            if not isinstance(face_urls, list) or not face_urls or not str(face_urls[0]).strip():
+            path = None
+            if isinstance(face_urls, list) and face_urls and str(face_urls[0]).strip():
+                path = str(face_urls[0]).strip()
+            elif str(input_url or "").strip():
+                path = str(input_url).strip()
+            if not path:
                 raise RuntimeError("detect_faces returned no face_urls")
-            path = str(face_urls[0]).strip()
             crop_landmarks = value.get("crop_landmarks")
             landmarks_str = value.get("landmarks_str")
             opts = None
@@ -140,10 +142,19 @@ class AkoolClient:
                 opts = cls._landmarks_to_string(value.get("landmarks"))
             if not opts:
                 raise RuntimeError("detect_faces returned no crop_landmarks")
-            normalized.append({"path": path, "opts": opts, "raw": value})
+            normalized.append(
+                {
+                    "face_id": str(face_id),
+                    "path": path,
+                    "opts": opts,
+                    "region": value.get("region") or value.get("box") or value.get("bbox"),
+                    "frame_time": value.get("frame_time") or value.get("timestamp"),
+                    "raw": value,
+                }
+            )
         if not normalized:
-            raise RuntimeError(f"akool {stage} returned no face candidates")
-        return normalized
+            raise RuntimeError("akool detect returned no faces")
+        return {"faces": normalized}
 
     @staticmethod
     def _ensure_ok(body: Dict[str, Any], stage: str) -> Any:
@@ -153,46 +164,43 @@ class AkoolClient:
             raise RuntimeError(f"akool {stage} stage failed: code={code} msg={msg or 'unknown'}")
         return body.get("data")
 
-    async def detect_face_from_image(self, image_url: str) -> List[Dict[str, Any]]:
-        payload = {
-            "url": ensure_http_url("image_url", image_url),
-            "single_face": True,
-            "return_face_url": True,
+    async def detect_faces(
+        self,
+        url: str,
+        *,
+        single_face: bool,
+        return_face_url: bool = True,
+        num_frames: int | None = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "url": ensure_http_url("detect_url", url),
+            "single_face": bool(single_face),
+            "return_face_url": bool(return_face_url),
         }
+        if num_frames is not None:
+            payload["num_frames"] = int(num_frames)
         endpoint = self.build_face_detect_url()
-        logger.info("[swap][detect] kind=image payload=%s", self.safe_json(payload))
+        kind = "image" if single_face and num_frames is None else "video"
+        logger.info("[swap][detect] kind=%s endpoint=%s", kind, endpoint)
+        logger.info("[swap][detect] payload=%s", self.safe_json(payload))
+        logger.info("[swap][detect] headers=%s", self.safe_json(self._masked_headers()))
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 endpoint,
                 json=payload,
                 headers=self._headers(),
             )
-            logger.info("[swap][detect] kind=image status_code=%s", response.status_code)
-            logger.info("[swap][detect] kind=image response_text=%s", response.text[:2000])
+            logger.info("[swap][detect] response_status=%s", response.status_code)
+            logger.info("[swap][detect] response_body=%s", response.text[:2000])
             response.raise_for_status()
             body = response.json()
-        return self.normalize_detect_result(body, stage="source_face_detect")
-
-    async def detect_face_from_video(self, video_url: str, num_frames: int = 8) -> List[Dict[str, Any]]:
-        payload = {
-            "url": ensure_http_url("video_url", video_url),
-            "single_face": False,
-            "return_face_url": True,
-            "num_frames": int(num_frames),
-        }
-        endpoint = self.build_face_detect_url()
-        logger.info("[swap][detect] kind=video payload=%s", self.safe_json(payload))
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                endpoint,
-                json=payload,
-                headers=self._headers(),
-            )
-            logger.info("[swap][detect] kind=video status_code=%s", response.status_code)
-            logger.info("[swap][detect] kind=video response_text=%s", response.text[:2000])
-            response.raise_for_status()
-            body = response.json()
-        return self.normalize_detect_result(body, stage="source_video_detect")
+        normalized = self.normalize_detect_result(
+            body,
+            stage="source_face_detect" if kind == "image" else "source_video_detect",
+            input_url=url,
+        )
+        logger.info("[swap][detect] parsed_face_count=%s", len(normalized.get("faces") or []))
+        return normalized
 
     async def submit_video_faceswap(
         self,
@@ -211,6 +219,7 @@ class AkoolClient:
         }
         if webhook_url:
             payload["webhookUrl"] = ensure_http_url("webhook_url", webhook_url)
+        logger.info("[swap][submit] body_preview=%s", self.safe_json(payload))
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(

@@ -49,6 +49,7 @@ def test_extract_remote_status_prefers_payload_state():
 def test_detect_faces_parser_prefers_crop_landmarks():
     payload = {
         "error_code": 0,
+        "error_msg": "SUCCESS",
         "faces_obj": {
             "0": {
                 "face_urls": ["https://cdn.example/source-face.png"],
@@ -57,26 +58,48 @@ def test_detect_faces_parser_prefers_crop_landmarks():
             }
         },
     }
-    faces = AkoolClient.normalize_detect_result(payload, stage="source_face_detect")
-    assert faces[0]["path"] == "https://cdn.example/source-face.png"
-    assert faces[0]["opts"] == "1,2,3,4"
+    faces = AkoolClient.normalize_detect_result(payload, stage="source_face_detect", input_url="https://cdn.example/original.png")
+    assert len(faces["faces"]) == 1
+    assert faces["faces"][0]["face_id"] == "0"
+    assert faces["faces"][0]["path"] == "https://cdn.example/source-face.png"
+    assert faces["faces"][0]["opts"] == "1,2,3,4"
+    assert faces["faces"][0]["region"] is None
+    assert faces["faces"][0]["frame_time"] is None
 
 
 def test_detect_faces_parser_falls_back_to_landmarks_str():
     payload = {
         "error_code": 0,
+        "error_msg": "SUCCESS",
         "faces_obj": {
             "0": {
-                "face_urls": ["https://cdn.example/source-face.png"],
+                "face_urls": [],
                 "crop_landmarks": [],
                 "landmarks_str": ["fallback"],
             }
         },
     }
-    faces = AkoolClient.normalize_detect_result(payload, stage="source_face_detect")
-    assert faces[0]["opts"] == "fallback"
+    faces = AkoolClient.normalize_detect_result(payload, stage="source_face_detect", input_url="https://cdn.example/source-face.png")
+    assert faces["faces"][0]["path"] == "https://cdn.example/source-face.png"
+    assert faces["faces"][0]["opts"] == "fallback"
 
 
 def test_detect_faces_parser_raises_when_empty():
-    with pytest.raises(RuntimeError, match="returned no face candidates"):
-        AkoolClient.normalize_detect_result({"error_code": 0, "faces_obj": {}}, stage="source_video_detect")
+    with pytest.raises(RuntimeError, match="akool detect returned no faces"):
+        AkoolClient.normalize_detect_result({"error_code": 0, "error_msg": "SUCCESS", "faces_obj": {}}, stage="source_video_detect", input_url="https://cdn.example/video.mp4")
+
+
+def test_detect_faces_parser_raises_when_missing_opts():
+    payload = {
+        "error_code": 0,
+        "error_msg": "SUCCESS",
+        "faces_obj": {
+            "0": {
+                "face_urls": ["https://cdn.example/source-face.png"],
+                "crop_landmarks": [],
+                "landmarks_str": [],
+            }
+        },
+    }
+    with pytest.raises(RuntimeError, match="returned no crop_landmarks"):
+        AkoolClient.normalize_detect_result(payload, stage="source_face_detect", input_url="https://cdn.example/original.png")

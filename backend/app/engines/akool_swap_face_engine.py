@@ -151,34 +151,44 @@ class AkoolSwapFaceEngine:
         on_log(f"[swap][input] source_face_image_key={source_face_image_key or 'n/a'}")
         on_log(f"[swap][resolved] source_video_url={source_video_url}")
         on_log(f"[swap][resolved] source_face_image_url={source_face_image_url}")
-        on_log(f"[swap][detect] endpoint={provider_debug.get('face_detect_endpoint')}")
         on_log(f"[swap][akool] base_url={provider_debug.get('api_base_url')}")
         on_log(f"[swap][akool] auth_url=api_key_header")
         on_log(f"[swap][akool] submit_url={provider_debug.get('submit_endpoint')}")
         on_log(f"[swap][akool] status_url={provider_debug.get('result_endpoint')}")
 
         try:
-            on_log("[swap][detect] source_face start")
-            on_log(f"[swap][detect] endpoint={provider_debug.get('face_detect_endpoint')}")
+            on_log(f"[swap][detect] kind=image start")
+            on_log(f"[swap][detect] kind=image endpoint={provider_debug.get('face_detect_endpoint')}")
             detect_stage = "source_face_detect"
-            source_faces = await self.client.detect_face_from_image(source_face_image_url)
+            source_detect = await self.client.detect_faces(
+                source_face_image_url,
+                single_face=True,
+                return_face_url=True,
+            )
+            source_faces = list(source_detect.get("faces") or [])
             if not source_faces:
                 on_log("[swap][detect] source_face fail")
                 raise EngineRunError("source face not detected")
             source_face = source_faces[0]
-            on_log("[swap][detect] kind=image status_code=200")
+            on_log(f"[swap][detect] parsed_face_count={len(source_faces)}")
             on_log(f"[swap][detect] source_face faces={len(source_faces)}")
             on_log(f"[swap][detect] source_face_url={source_face['path']}")
             on_stage("running", 20)
 
-            on_log("[swap][detect] target_face start")
-            on_log(f"[swap][detect] endpoint={provider_debug.get('face_detect_endpoint')}")
+            on_log(f"[swap][detect] kind=video start")
+            on_log(f"[swap][detect] kind=video endpoint={provider_debug.get('face_detect_endpoint')}")
             detect_stage = "source_video_detect"
-            target_faces = await self.client.detect_face_from_video(source_video_url, num_frames=8)
+            target_detect = await self.client.detect_faces(
+                source_video_url,
+                single_face=False,
+                return_face_url=True,
+                num_frames=8,
+            )
+            target_faces = list(target_detect.get("faces") or [])
             if not target_faces:
                 on_log("[swap][detect] target_face fail")
                 raise EngineRunError("target face not detected in video")
-            on_log("[swap][detect] kind=video status_code=200")
+            on_log(f"[swap][detect] parsed_face_count={len(target_faces)}")
             on_log(f"[swap][detect] target_faces_count={len(target_faces)}")
             selected_target_faces = self._select_baseline_target_faces(target_faces)
             target_face = selected_target_faces[0]
@@ -207,6 +217,9 @@ class AkoolSwapFaceEngine:
             submit_stage = "submit_ok"
             on_log("[swap][akool] submit_ok code=1000")
             on_log(f"[swap][submit] request_id={job.request_id or 'n/a'} job_id={job.job_id or 'n/a'}")
+            on_log(
+                f"[swap][provider] request_id={job.request_id or 'n/a'} remote_status={job.remote_status or 'submitted'}"
+            )
             on_stage("rendering", 55)
 
             remote_payload = dict(job.raw)
@@ -286,6 +299,10 @@ class AkoolSwapFaceEngine:
                         "source_face_count": len(source_faces),
                         "target_face_count": len(target_faces),
                     },
+                    "detect_summary": {
+                        "source_face": source_detect,
+                        "target_face": target_detect,
+                    },
                     "provider_debug": {
                         **provider_debug,
                         "job_id": job.job_id,
@@ -319,6 +336,10 @@ class AkoolSwapFaceEngine:
                     "metrics": {"total_latency_ms": elapsed_ms},
                     "run_config_snapshot": manifest["run_config_snapshot"],
                     "manifest_preview": manifest,
+                    "detect_summary": {
+                        "source_face": source_detect,
+                        "target_face": target_detect,
+                    },
                     "submit_response": job.raw,
                     "provider_request_id": job.request_id or None,
                     "output_video_url": output_url,
