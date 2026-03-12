@@ -137,6 +137,7 @@ class AkoolSwapFaceEngine:
         vendor_runtime = {
             "source_face_detect": {"ok": False, "face_count": 0},
             "source_video_detect": {"attempted": False, "ok": False, "non_blocking": True, "reason": None},
+            "submit_validation": {"sourceImage_count": 0, "targetImage_count": 0, "ok": False, "reason": None},
         }
         on_log(
             f"[swap][preflight] provider={self.provider} mode={record.mode} swap_type={swap_type} "
@@ -235,6 +236,22 @@ class AkoolSwapFaceEngine:
                 "modifyVideo": source_video_vendor_url,
                 "face_enhance": face_enhance,
             }
+            vendor_runtime["submit_validation"] = {
+                "sourceImage_count": len(submit_payload["sourceImage"]),
+                "targetImage_count": len(submit_payload["targetImage"]),
+                "ok": bool(submit_payload["sourceImage"]) and bool(submit_payload["targetImage"]),
+                "reason": None,
+            }
+            if not submit_payload["targetImage"]:
+                vendor_runtime["submit_validation"]["ok"] = False
+                vendor_runtime["submit_validation"]["reason"] = "targetImage is empty"
+                on_log(f"[swap][submit][validate] sourceImage_count={len(submit_payload['sourceImage'])}")
+                on_log(f"[swap][submit][validate] targetImage_count={len(submit_payload['targetImage'])}")
+                on_log("[swap][submit][validate] ok=false reason=targetImage is empty")
+                raise EngineRunError("submit blocked: targetImage is empty; video target-face mapping not available yet")
+            on_log(f"[swap][submit][validate] sourceImage_count={len(submit_payload['sourceImage'])}")
+            on_log(f"[swap][submit][validate] targetImage_count={len(submit_payload['targetImage'])}")
+            on_log("[swap][submit][validate] ok=true reason=")
             on_log(f"[swap][submit] endpoint={provider_debug.get('submit_endpoint')}")
             on_log(
                 f"[swap][submit] payload_summary="
