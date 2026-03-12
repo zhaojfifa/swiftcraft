@@ -134,6 +134,10 @@ class AkoolSwapFaceEngine:
         provider_debug = self.client.debug_snapshot()
         detect_stage = "pending"
         submit_stage = "pending"
+        vendor_runtime = {
+            "source_face_detect": {"ok": False, "face_count": 0},
+            "source_video_detect": {"attempted": False, "ok": False, "non_blocking": True, "reason": None},
+        }
         on_log(
             f"[swap][preflight] provider={self.provider} mode={record.mode} swap_type={swap_type} "
             f"timeout_sec={self.timeout_sec} poll_interval_sec={self.poll_interval_sec}"
@@ -176,6 +180,7 @@ class AkoolSwapFaceEngine:
             if not source_faces:
                 raise EngineRunError("source face not detected")
             source_face = source_faces[0]
+            vendor_runtime["source_face_detect"] = {"ok": True, "face_count": len(source_faces)}
             on_log(f"[swap][detect] parsed_face_count={len(source_faces)}")
             on_stage("running", 20)
 
@@ -188,16 +193,39 @@ class AkoolSwapFaceEngine:
             }
             on_log(f"[swap][detect] endpoint={provider_debug.get('face_detect_endpoint')}")
             on_log(f"[swap][detect] payload={video_detect_payload}")
-            target_detect = await self.client.detect_faces(
-                source_video_vendor_url,
-                single_face=False,
-                return_face_url=True,
-                num_frames=8,
-            )
-            target_faces = list(target_detect.get("faces") or [])
-            if not target_faces:
-                raise EngineRunError("target face not detected in video")
-            on_log(f"[swap][detect] parsed_face_count={len(target_faces)}")
+            vendor_runtime["source_video_detect"]["attempted"] = True
+            target_detect = {"faces": []}
+            target_faces: list[Dict[str, Any]] = []
+            try:
+                target_detect = await self.client.detect_faces(
+                    source_video_vendor_url,
+                    single_face=False,
+                    return_face_url=True,
+                    num_frames=8,
+                )
+                target_faces = list(target_detect.get("faces") or [])
+                if not target_faces:
+                    raise RuntimeError("akool detect returned no faces")
+                vendor_runtime["source_video_detect"] = {
+                    "attempted": True,
+                    "ok": True,
+                    "non_blocking": True,
+                    "reason": None,
+                }
+                on_log(f"[swap][detect] parsed_face_count={len(target_faces)}")
+            except RuntimeError as exc:
+                reason = str(exc)
+                if "no crop_landmarks" not in reason:
+                    raise
+                vendor_runtime["source_video_detect"] = {
+                    "attempted": True,
+                    "ok": False,
+                    "non_blocking": True,
+                    "reason": reason,
+                }
+                on_log("[swap][detect] source_video_detect returned no crop_landmarks; continue without video detect")
+                target_faces = []
+                target_detect = {"faces": [], "warning": reason}
             selected_target_faces = self._select_baseline_target_faces(target_faces)
             on_stage("running", 35)
 
@@ -207,6 +235,13 @@ class AkoolSwapFaceEngine:
                 "modifyVideo": source_video_vendor_url,
                 "face_enhance": face_enhance,
             }
+            on_log(f"[swap][submit] endpoint={provider_debug.get('submit_endpoint')}")
+            on_log(
+                f"[swap][submit] payload_summary="
+                f"{{'sourceImage_count': {len(submit_payload['sourceImage'])}, "
+                f"'targetImage_count': {len(submit_payload['targetImage'])}, "
+                f"'modifyVideo': '{source_video_vendor_url}', 'face_enhance': {face_enhance}}}"
+            )
             on_log(f"[swap][submit] payload={submit_payload}")
             submit_stage = "submit_start"
             job = await self.client.submit_video_faceswap(
@@ -225,12 +260,14 @@ class AkoolSwapFaceEngine:
             while True:
                 result_url = self.client.extract_result_url(remote_payload) or job.result_url
                 if result_url:
+                    on_log(f"[swap][poll] remote_status={remote_status}")
                     on_log(f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status}")
                     break
                 await asyncio.sleep(self.poll_interval_sec)
                 remote_payload = await self.client.poll_video_faceswap(job)
                 remote_status = self.client.extract_remote_status(remote_payload)
                 elapsed_ms = int((time.perf_counter() - poll_started) * 1000)
+                on_log(f"[swap][poll] remote_status={remote_status}")
                 on_log(
                     f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status} elapsed_ms={elapsed_ms}"
                 )
@@ -289,6 +326,7 @@ class AkoolSwapFaceEngine:
                         "source_face": source_detect,
                         "target_face": target_detect,
                     },
+                    "vendor_runtime": vendor_runtime,
                     "provider_debug": {
                         **provider_debug,
                         "job_id": job.job_id,
@@ -327,6 +365,7 @@ class AkoolSwapFaceEngine:
                     "run_config_snapshot": manifest["run_config_snapshot"],
                     "manifest_preview": manifest,
                     "detect_summary": manifest["detect_summary"],
+                    "vendor_runtime": vendor_runtime,
                     "submit_response": job.raw,
                     "provider_request_id": job.request_id or None,
                     "output_video_url": output_url,
