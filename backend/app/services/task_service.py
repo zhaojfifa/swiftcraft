@@ -74,7 +74,15 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         or settings.SWIFT_SWAP_DEFAULT_PROVIDER
         or "akool_swap_face"
     ).strip().lower() or "akool_swap_face"
-    source_video = str(data.get("source_video") or data.get("source_video_url") or payload.get("input_key") or "").strip() or None
+    source_video = str(
+        data.get("source_video")
+        or data.get("source_video_key")
+        or data.get("source_video_url")
+        or payload.get("source_video_key")
+        or payload.get("source_video_url")
+        or payload.get("input_key")
+        or ""
+    ).strip() or None
     source_face_image = str(
         data.get("source_face_image")
         or data.get("source_face_image_url")
@@ -99,12 +107,20 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
     ).strip().lower() or "balanced"
     if face_fidelity not in {"high", "balanced", "stable"}:
         face_fidelity = "balanced"
+    face_enhance = data.get("face_enhance")
+    if face_enhance is None:
+        face_enhance = payload.get("face_enhance")
+    if face_enhance is None:
+        face_enhance = True
+    else:
+        face_enhance = str(face_enhance).strip().lower() in {"1", "true", "yes", "on"}
     return {
         "service_type": "swap",
         "swap_type": swap_type,
         "subtype": swap_type,
         "mode": "baseline" if str(mode or "").strip().lower() != "intelligent" else "intelligent",
         "provider": provider,
+        "source_video_key": source_video,
         "source_video_url": source_video,
         "source_face_image_url": source_face_image,
         "source_face_image_key": (
@@ -112,6 +128,7 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         ),
         "keep_original_audio": bool(keep_original_audio),
         "face_fidelity": face_fidelity,
+        "face_enhance": bool(face_enhance),
     }
 
 
@@ -507,8 +524,11 @@ class TaskService:
             except ValidationError as exc:
                 service_type_raw = str(payload.get("service_type") or "").strip().lower()
                 swap_source_video = str(
-                    payload.get("input_key")
+                    payload.get("source_video_key")
+                    or payload.get("source_video_url")
+                    or payload.get("input_key")
                     or payload.get("source_video")
+                    or ((payload.get("inputs") or {}).get("source_video_key") if isinstance(payload.get("inputs"), dict) else "")
                     or ((payload.get("inputs") or {}).get("source_video") if isinstance(payload.get("inputs"), dict) else "")
                     or ""
                 ).strip()
@@ -541,12 +561,12 @@ class TaskService:
                     if not swap_source_video:
                         raise HTTPException(
                             status_code=400,
-                            detail="swap requires source video via input_key or inputs.source_video",
+                            detail="swap face requires source video via source_video_key/source_video_url",
                         ) from exc
                     if not swap_source_face:
                         raise HTTPException(
                             status_code=400,
-                            detail="swap requires source face image via source_face_image_key or inputs.source_face_image",
+                            detail="swap face requires source face image via source_face_image_key/source_face_image_url",
                         ) from exc
                 raise HTTPException(status_code=400, detail=f"Invalid task payload: {exc.errors()}") from exc
             service_type = parsed.service_type
@@ -565,10 +585,14 @@ class TaskService:
                 payload["subtype"] = parsed.subtype
                 payload["swap_type"] = parsed.swap_type or parsed.subtype
                 payload["provider"] = parsed.provider
+                payload["source_video_key"] = parsed.source_video_key
+                payload["source_video_url"] = parsed.source_video_url
+                payload["input_key"] = parsed.input_key
                 payload["source_face_image_key"] = parsed.source_face_image_key
                 payload["source_face_image_url"] = parsed.source_face_image_url
                 payload["keep_original_audio"] = parsed.keep_original_audio
                 payload["face_fidelity"] = parsed.face_fidelity
+                payload["face_enhance"] = parsed.face_enhance
         else:
             legacy = LegacySwapRequest.model_validate(payload)
             service = legacy.service
@@ -602,11 +626,11 @@ class TaskService:
             if swap_subtype == "scene" or not settings.SWIFT_SWAP_ENABLE_SCENE and swap_subtype != "face":
                 raise HTTPException(status_code=400, detail="swap scene is not enabled")
             if not swap_cfg.get("source_video_url"):
-                raise HTTPException(status_code=400, detail="swap requires source video via input_key or inputs.source_video")
+                raise HTTPException(status_code=400, detail="swap face requires source video via source_video_key/source_video_url")
             if not swap_cfg.get("source_face_image_url"):
                 raise HTTPException(
                     status_code=400,
-                    detail="swap requires source face image via source_face_image_key or inputs.source_face_image",
+                    detail="swap face requires source face image via source_face_image_key/source_face_image_url",
                 )
             payload["swap_type"] = "face"
             payload["subtype"] = "face"
@@ -675,6 +699,7 @@ class TaskService:
                     metadata_dict["intelligence_contract"] = localization_contract
             if resolved_service == "swap":
                 swap_cfg["provider"] = provider
+                swap_cfg["source_video_key"] = input_key or swap_cfg.get("source_video_key")
                 if swap_face_image_key:
                     swap_cfg["source_face_image_key"] = swap_face_image_key
                 metadata_dict["run_config_snapshot"] = swap_cfg
@@ -729,13 +754,13 @@ class TaskService:
 
         if not input_key:
             if resolved_service == "swap":
-                input_key = str(swap_cfg.get("source_video_url") or "").strip() or None
+                input_key = str(swap_cfg.get("source_video_key") or swap_cfg.get("source_video_url") or "").strip() or None
             else:
                 input_key = resolve_input_key(resolved_service, resolved_mode)
 
         if not input_key:
             if resolved_service == "swap":
-                raise HTTPException(status_code=400, detail="swap requires source video via input_key or inputs.source_video")
+                raise HTTPException(status_code=400, detail="swap face requires source video via source_video_key/source_video_url")
             raise HTTPException(status_code=400, detail="input_key is required.")
 
         task_id = uuid.uuid4().hex
@@ -760,6 +785,7 @@ class TaskService:
                 input_video_url = self._public_url_from_key(input_key)
             if not input_image_url and swap_face_image_key:
                 input_image_url = self._public_url_from_key(swap_face_image_key)
+            swap_cfg["source_video_key"] = input_key
             if input_video_url:
                 swap_cfg["source_video_url"] = input_video_url
             if input_image_url:
@@ -804,6 +830,7 @@ class TaskService:
                         "run_config_snapshot": {
                             **swap_cfg,
                             "provider": provider,
+                            "source_video_key": input_key,
                             "source_video_url": input_video_url or swap_cfg.get("source_video_url"),
                             "source_face_image_url": input_image_url or swap_cfg.get("source_face_image_url"),
                         }

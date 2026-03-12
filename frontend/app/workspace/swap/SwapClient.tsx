@@ -43,7 +43,8 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [inputImageUrl, setInputImageUrl] = useState<string | null>(null);
   const [swapProvider, setSwapProvider] = useState<"akool_swap_face">("akool_swap_face");
   const [keepOriginalAudio, setKeepOriginalAudio] = useState(true);
-  const [faceFidelity, setFaceFidelity] = useState<"high" | "balanced" | "stable">("balanced");
+  const [faceFidelity, setFaceFidelity] = useState<"high" | "balanced">("balanced");
+  const [faceEnhance, setFaceEnhance] = useState(true);
   const [orientation, setOrientation] = useState<"front" | "auto">("front");
   const [prompt, setPrompt] = useState<string>("");
   const [negativePrompt, setNegativePrompt] = useState<string>("");
@@ -397,12 +398,8 @@ export default function SwapClient({ service = "swap" }: Props) {
 
   const handleRun = async () => {
     cancelPolling();
-    if (isSwap && swapSubtype === "face" && (!videoFile || !imageFile)) {
-      setError("Please upload a source video and target face image for swap.");
-      return;
-    }
-    if (isSwap && swapSubtype === "scene" && inputSource === "upload" && !videoFile) {
-      setError("Please upload a source video for upload mode.");
+    if (isSwap && (!videoFile || !imageFile)) {
+      setError("Please upload a source face image and source video for swap.");
       return;
     }
     if (isAvatar && (!imageFile || !videoFile)) {
@@ -420,18 +417,19 @@ export default function SwapClient({ service = "swap" }: Props) {
       let result;
       if (isAvatar) {
         result = await runAvatarTask();
-      } else if (isSwap && swapSubtype === "face") {
+      } else if (isSwap) {
         const sourceVideoKey = await uploadFileToR2(videoFile as File);
-        const targetFaceImageKey = await uploadFileToR2(imageFile as File);
+        const sourceFaceImageKey = await uploadFileToR2(imageFile as File);
         result = await createTask({
           service_type: "swap",
           mode: "baseline",
           swap_type: "face",
           provider: swapProvider,
-          input_key: sourceVideoKey,
-          source_face_image_key: targetFaceImageKey,
+          source_video_key: sourceVideoKey,
+          source_face_image_key: sourceFaceImageKey,
           keep_original_audio: keepOriginalAudio,
           face_fidelity: faceFidelity,
+          face_enhance: faceEnhance,
         });
       } else {
         const input_key =
@@ -534,9 +532,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const canUseSafeDemo = Boolean(safeDemoMotionKey && safeDemoCharacterKey) && !isRunning;
   const canRun = isAvatar
     ? Boolean(videoFile && imageFile) && !isRunning
-    : swapSubtype === "face"
-      ? Boolean(videoFile && imageFile) && !isRunning
-      : (inputSource === "preset" || Boolean(videoFile)) && !isRunning;
+    : Boolean(videoFile && imageFile) && !isRunning;
   const payloadPreview = isAvatar
     ? {
         service_type: "action_replica",
@@ -571,12 +567,13 @@ export default function SwapClient({ service = "swap" }: Props) {
     : {
         service_type: "swap",
         mode: "baseline",
-        swap_type: swapSubtype,
+        swap_type: "face",
         provider: swapProvider,
-        input_key: swapSubtype === "face" ? "(source video key)" : inputSource === "preset" ? presetKey : "(uploaded key)",
+        source_video_key: "(source video key)",
         source_face_image_key: "(source face image key)",
         keep_original_audio: keepOriginalAudio,
         face_fidelity: faceFidelity,
+        face_enhance: faceEnhance,
       };
   const jsonPreview = {
     request: payloadPreview,
@@ -592,9 +589,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        swapSubtype === "face"
-          ? `  -d '{\"service_type\":\"swap\",\"mode\":\"baseline\",\"swap_type\":\"face\",\"provider\":\"${swapProvider}\",\"input_key\":\"<source_video_key>\",\"source_face_image_key\":\"<source_face_key>\",\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${faceFidelity}\"}'`
-          : `  -d '{\"service_type\":\"swap\",\"swap_type\":\"${swapSubtype}\",\"mode\":\"${modeApi}\",\"input_key\":\"${presetKey}\"}'`
+        `  -d '{\"service_type\":\"swap\",\"mode\":\"baseline\",\"swap_type\":\"face\",\"provider\":\"${swapProvider}\",\"source_video_key\":\"<source_video_key>\",\"source_face_image_key\":\"<source_face_key>\",\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${faceFidelity}\",\"face_enhance\":${faceEnhance}}'`
       ].join(" \\\n");
 
   const handleRetrySafeSlicing = async () => {
@@ -677,7 +672,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                   : "text-slate-500 hover:text-slate-700"
             }`}
           >
-            {isSwap ? "Coming Soon" : "Intelligent"}
+            {isSwap ? "Intelligent Coming Soon" : "Intelligent"}
           </button>
         </div>
 
@@ -759,7 +754,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                             : "border-slate-200 text-slate-500 bg-white"
                         }`}
                       >
-                        Face Basic
+                        Face
                       </button>
                       <button
                         type="button"
@@ -770,7 +765,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                       </button>
                     </div>
                     <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-                      P1 constraints: single person, front face, 5-10 seconds. No scenes, no intelligent path.
+                      Baseline only: single person, front face, under 60 seconds. Scene swap and intelligent path stay disabled.
                     </div>
                   </div>
                 ) : null}
@@ -1239,13 +1234,28 @@ export default function SwapClient({ service = "swap" }: Props) {
                           </label>
                           <select
                             value={faceFidelity}
-                            onChange={(event) => setFaceFidelity(event.target.value as "high" | "balanced" | "stable")}
+                            onChange={(event) => setFaceFidelity(event.target.value as "high" | "balanced")}
                             className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
                           >
-                            <option value="high">high</option>
                             <option value="balanced">balanced</option>
-                            <option value="stable">stable</option>
+                            <option value="high">high</option>
                           </select>
+                        </div>
+                        <div className="flex justify-between items-center py-2 mt-4">
+                          <span className="text-sm font-medium text-slate-700">Face Enhance</span>
+                          <button
+                            type="button"
+                            onClick={() => setFaceEnhance((prev) => !prev)}
+                            className={`w-10 h-6 rounded-full relative cursor-pointer shadow-inner ${
+                              faceEnhance ? "bg-blue-600" : "bg-slate-300"
+                            }`}
+                          >
+                            <div
+                              className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${
+                                faceEnhance ? "right-1" : "left-1"
+                              }`}
+                            ></div>
+                          </button>
                         </div>
                         <div className="flex justify-between items-center py-2 mt-4">
                           <span className="text-sm font-medium text-slate-700">Keep Original Audio</span>
@@ -1262,6 +1272,9 @@ export default function SwapClient({ service = "swap" }: Props) {
                               }`}
                             ></div>
                           </button>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                          Provider is fixed to <span className="font-semibold">akool_swap_face</span> for the baseline demo.
                         </div>
                       </div>
                     ) : null}

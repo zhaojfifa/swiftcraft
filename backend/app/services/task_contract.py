@@ -15,6 +15,7 @@ def public_service_type(runtime_service: str) -> str:
 def build_input_snapshot(record: Any, run_config_snapshot: Dict[str, Any] | None = None) -> Dict[str, Any]:
     snapshot: Dict[str, Any] = {
         "input_key": getattr(record, "input_key", None),
+        "source_video_key": getattr(record, "input_key", None),
         "input_image_key": getattr(record, "input_image_key", None),
         "source_video_url": getattr(record, "input_video_url", None),
         "source_face_image_url": getattr(record, "input_image_url", None),
@@ -25,6 +26,7 @@ def build_input_snapshot(record: Any, run_config_snapshot: Dict[str, Any] | None
     if isinstance(run_config_snapshot, dict):
         service_type = str(run_config_snapshot.get("service_type") or public_service_type(getattr(record, "service", "")))
         if service_type == "swap":
+            snapshot["source_video_key"] = run_config_snapshot.get("source_video_key") or snapshot["source_video_key"]
             snapshot["source_video_url"] = run_config_snapshot.get("source_video_url") or snapshot["source_video_url"]
             snapshot["source_face_image_url"] = (
                 run_config_snapshot.get("source_face_image_url")

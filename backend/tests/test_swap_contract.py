@@ -9,11 +9,12 @@ def test_swap_request_accepts_swap_service_with_subtype():
         "service_type": "swap",
         "swap_type": "face",
         "mode": "baseline",
-        "input_key": "uploads/source.mp4",
+        "source_video_key": "uploads/source.mp4",
         "source_face_image_key": "uploads/source-face.png",
         "provider": "akool_swap_face",
         "keep_original_audio": True,
         "face_fidelity": "balanced",
+        "face_enhance": True,
     }
     parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
     assert isinstance(parsed, SwapRequest)
@@ -21,7 +22,9 @@ def test_swap_request_accepts_swap_service_with_subtype():
     assert parsed.subtype == "face"
     assert parsed.inputs.source_video == "uploads/source.mp4"
     assert parsed.inputs.source_face_image == "uploads/source-face.png"
+    assert parsed.source_video_key == "uploads/source.mp4"
     assert parsed.provider == "akool_swap_face"
+    assert parsed.face_enhance is True
 
 
 def test_swap_request_accepts_target_face_alias():
@@ -30,7 +33,7 @@ def test_swap_request_accepts_target_face_alias():
         "subtype": "face",
         "mode": "baseline",
         "inputs": {
-            "source_video": "uploads/source.mp4",
+            "source_video_key": "uploads/source.mp4",
             "source_face_image": "uploads/source-face.png",
         },
     }
