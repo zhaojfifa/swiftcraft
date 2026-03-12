@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import httpx
-from PIL import Image
 
 from app.engines.base import EngineRunError
 from app.services.akool_client import AkoolClient
@@ -92,6 +91,8 @@ class VideoFaceExtractor:
 
     @staticmethod
     def _image_size(path: Path) -> tuple[int, int]:
+        from PIL import Image
+
         with Image.open(path) as image:
             return image.size
 

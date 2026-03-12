@@ -15,7 +15,6 @@ from app.models.task import TaskRecord
 from app.services.akool_client import AkoolClient
 from app.services.r2_client import R2Client
 from app.services.task_contract import build_input_snapshot, build_manifest
-from app.services.video_face_extractor import VideoFaceExtractor
 from app.services.vendor_asset_bridge import VendorAssetBridge, VendorAssetBridgeError
 
 
@@ -29,7 +28,7 @@ class AkoolSwapFaceEngine:
         self.client = AkoolClient()
         self.r2 = R2Client()
         self.vendor_bridge = VendorAssetBridge()
-        self.video_face_extractor = VideoFaceExtractor(client=self.client, bridge=self.vendor_bridge)
+        self.video_face_extractor = None
 
     def resolve_public_url(self, value: str | None) -> str | None:
         raw = str(value or "").strip()
@@ -175,6 +174,11 @@ class AkoolSwapFaceEngine:
             on_stage("running", 20)
 
             detect_stage = "target_face_extraction"
+            # Lazy import avoids startup-time hard dependency failure if optional imaging deps are missing.
+            if self.video_face_extractor is None:
+                from app.services.video_face_extractor import VideoFaceExtractor
+
+                self.video_face_extractor = VideoFaceExtractor(client=self.client, bridge=self.vendor_bridge)
             with tempfile.TemporaryDirectory(prefix=f"swap-target-{task_id[:8]}-") as tmp_dir:
                 extraction = await self.video_face_extractor.build_target_faces(
                     source_video_url=source_video_vendor_url,
