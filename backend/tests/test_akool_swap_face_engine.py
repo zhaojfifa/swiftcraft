@@ -174,6 +174,7 @@ class _FakeBridge:
 class _FakeClient:
     def __init__(self):
         self.submit_calls = 0
+        self.poll_calls = 0
 
     def debug_snapshot(self):
         return {
@@ -191,11 +192,15 @@ class _FakeClient:
         class _Job:
             request_id = "req-1"
             job_id = "job-1"
-            remote_status = "submitted"
+            remote_status = "submitted_pending"
             result_url = "https://vendor.example/result.mp4"
-            raw = {"status": "submitted", "url": "https://vendor.example/result.mp4"}
+            raw = {"status": "submitted_pending", "url": "https://vendor.example/result.mp4"}
 
         return _Job()
+
+    async def poll_video_faceswap(self, _job):
+        self.poll_calls += 1
+        return {"status": "completed", "url": "https://vendor.example/result.mp4"}
 
     def extract_remote_status(self, payload):
         return str(payload.get("status") or "submitted")
@@ -265,4 +270,5 @@ def test_swap_engine_run_submits_once_without_legacy_target_variable():
     )
 
     assert engine.client.submit_calls == 1
+    assert engine.client.poll_calls == 1
     assert result.output_url == "https://cdn.example/outputs/task-1/result.mp4"

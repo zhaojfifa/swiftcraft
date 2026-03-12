@@ -113,10 +113,13 @@ class AkoolSwapFaceEngine:
         provider_debug = self.client.debug_snapshot()
         detect_stage = "pending"
         submit_stage = "pending"
+        result_stage = "pending"
         vendor_runtime = {
             "source_face_detect": {"ok": False, "face_count": 0},
             "source_video_detect": {"attempted": False, "ok": False, "non_blocking": True, "reason": None},
             "submit_validation": {"sourceImage_count": 0, "targetImage_count": 0, "ok": False, "reason": None},
+            "poll": {"last_remote_status": None, "vendor_result_url": None},
+            "result_fetch": {"attempted": False, "reason": "remote status not completed yet"},
         }
         on_log(
             f"[swap][preflight] provider={self.provider} mode={record.mode} swap_type={swap_type} "
@@ -245,31 +248,56 @@ class AkoolSwapFaceEngine:
 
             remote_payload = dict(job.raw)
             remote_status = str(job.remote_status or self.client.extract_remote_status(remote_payload)).strip().lower()
+            success_statuses = {"completed", "succeeded", "done", "finished", "success"}
+            pending_statuses = {"submitted_pending", "pending", "processing", "queued", "submitted", ""}
             poll_started = time.perf_counter()
             while True:
                 result_url = self.client.extract_result_url(remote_payload) or job.result_url
-                if result_url:
-                    on_log(f"[swap][poll] remote_status={remote_status}")
+                vendor_runtime["poll"] = {
+                    "last_remote_status": remote_status or None,
+                    "vendor_result_url": result_url,
+                }
+                if remote_status in success_statuses:
+                    on_log(f"[swap][poll] remote_status={remote_status} result_ready=true")
                     on_log(f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status}")
                     break
-                await asyncio.sleep(self.poll_interval_sec)
-                remote_payload = await self.client.poll_video_faceswap(job)
-                remote_status = self.client.extract_remote_status(remote_payload)
-                elapsed_ms = int((time.perf_counter() - poll_started) * 1000)
-                on_log(f"[swap][poll] remote_status={remote_status}")
-                on_log(
-                    f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status} elapsed_ms={elapsed_ms}"
-                )
+                on_log(f"[swap][poll] remote_status={remote_status} result_ready=false")
+                on_log(f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status}")
+                vendor_runtime["result_fetch"] = {
+                    "attempted": False,
+                    "reason": "remote status not completed yet",
+                }
                 if remote_status in {"failed", "error", "cancelled"}:
                     raise EngineRunError(f"poll failed: request_id={job.request_id or 'n/a'} status={remote_status}")
+                if remote_status not in pending_statuses:
+                    raise EngineRunError(f"poll failed: request_id={job.request_id or 'n/a'} unexpected status={remote_status}")
+                await asyncio.sleep(self.poll_interval_sec)
+                remote_payload = await self.client.poll_video_faceswap(job)
+                remote_status = str(self.client.extract_remote_status(remote_payload) or "").strip().lower()
+                elapsed_ms = int((time.perf_counter() - poll_started) * 1000)
                 if elapsed_ms > self.timeout_sec * 1000:
                     raise EngineRunError(f"poll failed: timeout after {self.timeout_sec}s")
 
             result_url = self.client.extract_result_url(remote_payload) or job.result_url
+            vendor_runtime["poll"] = {
+                "last_remote_status": remote_status or None,
+                "vendor_result_url": result_url,
+            }
             if not result_url:
                 raise EngineRunError("poll failed: swap provider returned no result url")
 
-            content = await self.client.download_result(result_url)
+            result_stage = "download_start"
+            vendor_runtime["result_fetch"] = {"attempted": True, "reason": None}
+            on_log(f"[swap][result] downloading vendor_result_url={result_url}")
+            try:
+                content = await self.client.download_result(result_url)
+            except Exception as exc:
+                vendor_runtime["result_fetch"] = {
+                    "attempted": True,
+                    "reason": str(exc),
+                }
+                raise EngineRunError(f"result fetch failed: {exc}") from exc
+            result_stage = "download_ok"
             content = self._apply_audio_strategy(content, keep_original_audio)
             output_key = f"outputs/{task_id}/result.mp4"
             output_url = self.r2.upload_bytes(output_key, content, content_type="video/mp4")
@@ -381,6 +409,8 @@ class AkoolSwapFaceEngine:
                 raise EngineRunError(f"source_face_detect failed: {text}") from exc
             if detect_stage == "target_face_extraction" and submit_stage == "pending":
                 raise EngineRunError(f"target_face_extraction failed: {text}") from exc
+            if result_stage in {"download_start", "download_ok"} or text.startswith("result fetch failed:"):
+                raise EngineRunError(text if text.startswith("result fetch failed:") else f"result fetch failed: {text}") from exc
             if submit_stage in {"submit_start", "pending"}:
                 raise EngineRunError(f"submit failed: {text}") from exc
             raise EngineRunError(f"poll failed: {text}") from exc
