@@ -15,6 +15,7 @@ from app.models.task import TaskRecord
 from app.services.akool_client import AkoolClient
 from app.services.r2_client import R2Client
 from app.services.task_contract import build_input_snapshot, build_manifest
+from app.services.video_face_extractor import VideoFaceExtractor
 from app.services.vendor_asset_bridge import VendorAssetBridge, VendorAssetBridgeError
 
 
@@ -28,6 +29,7 @@ class AkoolSwapFaceEngine:
         self.client = AkoolClient()
         self.r2 = R2Client()
         self.vendor_bridge = VendorAssetBridge()
+        self.video_face_extractor = VideoFaceExtractor(client=self.client, bridge=self.vendor_bridge)
 
     def resolve_public_url(self, value: str | None) -> str | None:
         raw = str(value or "").strip()
@@ -67,29 +69,6 @@ class AkoolSwapFaceEngine:
                 stderr = (exc.stderr or b"").decode("utf-8", errors="ignore")
                 raise EngineRunError(f"swap audio processing failed: {stderr[-400:]}") from exc
             return output_path.read_bytes()
-
-    @staticmethod
-    def _face_area(candidate: Dict[str, Any]) -> float:
-        raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else {}
-        box = raw.get("box") or raw.get("bbox") or raw.get("face_box") or candidate.get("region")
-        if isinstance(box, dict):
-            width = box.get("width") or box.get("w")
-            height = box.get("height") or box.get("h")
-            try:
-                return float(width or 0) * float(height or 0)
-            except Exception:
-                return 0.0
-        if isinstance(box, list) and len(box) >= 4:
-            try:
-                return abs(float(box[2]) - float(box[0])) * abs(float(box[3]) - float(box[1]))
-            except Exception:
-                return 0.0
-        return 0.0
-
-    def _select_baseline_target_faces(self, target_faces: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
-        if not target_faces:
-            return []
-        return [max(target_faces, key=self._face_area)]
 
     async def run(
         self,
@@ -185,54 +164,35 @@ class AkoolSwapFaceEngine:
             on_log(f"[swap][detect] parsed_face_count={len(source_faces)}")
             on_stage("running", 20)
 
-            detect_stage = "source_video_detect"
-            video_detect_payload = {
-                "url": source_video_vendor_url,
-                "single_face": False,
-                "return_face_url": True,
-                "num_frames": 8,
-            }
-            on_log(f"[swap][detect] endpoint={provider_debug.get('face_detect_endpoint')}")
-            on_log(f"[swap][detect] payload={video_detect_payload}")
-            vendor_runtime["source_video_detect"]["attempted"] = True
-            target_detect = {"faces": []}
-            target_faces: list[Dict[str, Any]] = []
-            try:
-                target_detect = await self.client.detect_faces(
-                    source_video_vendor_url,
-                    single_face=False,
-                    return_face_url=True,
-                    num_frames=8,
+            detect_stage = "target_face_extraction"
+            with tempfile.TemporaryDirectory(prefix=f"swap-target-{task_id[:8]}-") as tmp_dir:
+                extraction = await self.video_face_extractor.build_target_faces(
+                    source_video_url=source_video_vendor_url,
+                    work_dir=Path(tmp_dir),
+                    service="swap",
+                    max_frames=8,
                 )
-                target_faces = list(target_detect.get("faces") or [])
-                if not target_faces:
-                    raise RuntimeError("akool detect returned no faces")
-                vendor_runtime["source_video_detect"] = {
-                    "attempted": True,
-                    "ok": True,
-                    "non_blocking": True,
-                    "reason": None,
-                }
-                on_log(f"[swap][detect] parsed_face_count={len(target_faces)}")
-            except RuntimeError as exc:
-                reason = str(exc)
-                if "no crop_landmarks" not in reason:
-                    raise
-                vendor_runtime["source_video_detect"] = {
-                    "attempted": True,
-                    "ok": False,
-                    "non_blocking": True,
-                    "reason": reason,
-                }
-                on_log("[swap][detect] source_video_detect returned no crop_landmarks; continue without video detect")
-                target_faces = []
-                target_detect = {"faces": [], "warning": reason}
-            selected_target_faces = self._select_baseline_target_faces(target_faces)
+            frame_paths = extraction["frames"]
+            detected_faces = extraction["detected_faces"]
+            selected_faces = extraction["selected_faces"]
+            target_faces = extraction["target_faces"]
+            bridged_target_images = extraction["bridged_target_images"]
+            vendor_runtime["source_video_detect"] = {
+                "attempted": True,
+                "ok": bool(target_faces),
+                "non_blocking": False,
+                "reason": None if target_faces else "targetImage is empty after local target-face extraction",
+            }
+            on_log(f"[swap][target-face] frames_sampled={len(frame_paths)}")
+            on_log(f"[swap][target-face] faces_detected={len(detected_faces)}")
+            on_log(f"[swap][target-face] selected_count={len(selected_faces)}")
+            if bridged_target_images:
+                on_log(f"[swap][target-face] bridged_target_image_url={bridged_target_images[0].public_url}")
             on_stage("running", 35)
 
             submit_payload = {
                 "sourceImage": [{"path": source_face["path"], "opts": source_face["opts"]}],
-                "targetImage": [{"path": face["path"], "opts": face["opts"]} for face in selected_target_faces],
+                "targetImage": [{"path": face["path"], "opts": face["opts"]} for face in target_faces],
                 "modifyVideo": source_video_vendor_url,
                 "face_enhance": face_enhance,
             }
@@ -244,14 +204,15 @@ class AkoolSwapFaceEngine:
             }
             if not submit_payload["targetImage"]:
                 vendor_runtime["submit_validation"]["ok"] = False
-                vendor_runtime["submit_validation"]["reason"] = "targetImage is empty"
+                vendor_runtime["submit_validation"]["reason"] = "targetImage is empty after local target-face extraction"
                 on_log(f"[swap][submit][validate] sourceImage_count={len(submit_payload['sourceImage'])}")
                 on_log(f"[swap][submit][validate] targetImage_count={len(submit_payload['targetImage'])}")
-                on_log("[swap][submit][validate] ok=false reason=targetImage is empty")
-                raise EngineRunError("submit blocked: targetImage is empty; video target-face mapping not available yet")
-            on_log(f"[swap][submit][validate] sourceImage_count={len(submit_payload['sourceImage'])}")
-            on_log(f"[swap][submit][validate] targetImage_count={len(submit_payload['targetImage'])}")
-            on_log("[swap][submit][validate] ok=true reason=")
+                on_log("[swap][submit][validate] ok=false reason=targetImage is empty after local target-face extraction")
+                raise EngineRunError("submit validation failed: targetImage is empty after local target-face extraction")
+            on_log(
+                f"[swap][submit][validate] sourceImage_count={len(submit_payload['sourceImage'])} "
+                f"targetImage_count={len(submit_payload['targetImage'])} ok=true"
+            )
             on_log(f"[swap][submit] endpoint={provider_debug.get('submit_endpoint')}")
             on_log(
                 f"[swap][submit] payload_summary="
@@ -341,7 +302,12 @@ class AkoolSwapFaceEngine:
                     },
                     "detect_summary": {
                         "source_face": source_detect,
-                        "target_face": target_detect,
+                        "target_face": {
+                            "frames_sampled": len(frame_paths),
+                            "faces_detected": len(detected_faces),
+                            "selected_count": len(selected_faces),
+                            "target_faces": target_faces,
+                        },
                     },
                     "vendor_runtime": vendor_runtime,
                     "provider_debug": {
@@ -407,8 +373,8 @@ class AkoolSwapFaceEngine:
             text = str(exc)
             if detect_stage == "source_face_detect" and submit_stage == "pending":
                 raise EngineRunError(f"source_face_detect failed: {text}") from exc
-            if detect_stage == "source_video_detect" and submit_stage == "pending":
-                raise EngineRunError(f"source_video_detect failed: {text}") from exc
+            if detect_stage == "target_face_extraction" and submit_stage == "pending":
+                raise EngineRunError(f"target_face_extraction failed: {text}") from exc
             if submit_stage in {"submit_start", "pending"}:
                 raise EngineRunError(f"submit failed: {text}") from exc
             raise EngineRunError(f"poll failed: {text}") from exc

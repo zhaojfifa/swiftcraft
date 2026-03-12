@@ -68,7 +68,14 @@ class VendorAssetBridge:
             response.raise_for_status()
             return response.content, str(response.headers.get("content-type") or "").strip()
 
-    async def _load_source(self, *, source_key: str | None, source_url: str | None) -> tuple[bytes, str, str]:
+    async def _load_source(self, *, source_key: str | None, source_url: str | None, source_path: str | None) -> tuple[bytes, str, str]:
+        if source_path:
+            path = Path(source_path)
+            if not path.exists():
+                raise VendorAssetBridgeError(f"vendor bridge source path missing: {source_path}")
+            body = path.read_bytes()
+            content_type = self._guess_content_type(path.name)
+            return body, content_type, path.name
         if source_key:
             body = self.r2.get_bytes(source_key)
             if body is None:
@@ -86,10 +93,15 @@ class VendorAssetBridge:
         *,
         source_key: str | None = None,
         source_url: str | None = None,
+        source_path: str | None = None,
         service: str,
         asset_kind: str,
     ) -> BridgedVendorAsset:
-        body, content_type, source_name = await self._load_source(source_key=source_key, source_url=source_url)
+        body, content_type, source_name = await self._load_source(
+            source_key=source_key,
+            source_url=source_url,
+            source_path=source_path,
+        )
         sha256 = hashlib.sha256(body).hexdigest()
         ext = self._guess_ext(source_name, content_type)
         object_key = f"{self.prefix}/{service.strip().lower()}/{asset_kind.strip().lower()}/{sha256}{ext}"
