@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
 import httpx
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def ensure_http_url(name: str, value: str) -> str:
@@ -69,6 +73,13 @@ class AkoolClient:
             "result_endpoint": self._endpoint_url("result_url", self.swap_result_endpoint),
         }
 
+    @staticmethod
+    def safe_json(payload: Dict[str, Any]) -> str:
+        try:
+            return json.dumps(payload, ensure_ascii=False, default=str)
+        except Exception:
+            return str(payload)
+
     def _headers(self) -> Dict[str, str]:
         if not self.api_key:
             raise RuntimeError("akool auth stage failed: missing AKOOL_API_KEY")
@@ -80,7 +91,12 @@ class AkoolClient:
 
     @staticmethod
     def _extract_faces_obj(body: Dict[str, Any]) -> Dict[str, Any]:
-        if int(body.get("error_code") or -1) != 0:
+        error_code = body.get("error_code")
+        try:
+            normalized_error_code = int(error_code) if error_code is not None else -1
+        except Exception:
+            normalized_error_code = -1
+        if normalized_error_code != 0:
             raise RuntimeError(
                 f"akool face_detect stage failed: error_code={body.get('error_code')} message={body.get('error_msg') or body.get('message') or 'unknown'}"
             )
@@ -90,28 +106,44 @@ class AkoolClient:
         return faces_obj
 
     @staticmethod
-    def _selection_from_faces_obj(faces_obj: Dict[str, Any]) -> AkoolFaceSelection | None:
-        first = faces_obj.get("0")
-        if not isinstance(first, dict):
-            return None
-        face_urls = first.get("face_urls")
-        if not isinstance(face_urls, list) or not face_urls or not str(face_urls[0]).strip():
-            raise RuntimeError("detect_faces returned no face_urls")
-        crop_landmarks = first.get("crop_landmarks")
-        landmarks_str = first.get("landmarks_str")
-        opts = None
-        if isinstance(crop_landmarks, list) and crop_landmarks and str(crop_landmarks[0]).strip():
-            opts = str(crop_landmarks[0]).strip()
-        elif isinstance(landmarks_str, list) and landmarks_str and str(landmarks_str[0]).strip():
-            opts = str(landmarks_str[0]).strip()
-        else:
-            raise RuntimeError("detect_faces returned no crop_landmarks")
-        return AkoolFaceSelection(
-            path=str(face_urls[0]).strip(),
-            opts=opts,
-            face_count=len([key for key, value in faces_obj.items() if isinstance(value, dict)]),
-            raw=first,
-        )
+    def _landmarks_to_string(value: Any) -> str | None:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, list) and value:
+            if all(isinstance(item, (int, float, str)) for item in value):
+                return ",".join(str(item) for item in value)
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        return None
+
+    @classmethod
+    def normalize_detect_result(cls, result: Dict[str, Any], *, stage: str) -> List[Dict[str, Any]]:
+        faces_obj = cls._extract_faces_obj(result)
+        normalized: List[Dict[str, Any]] = []
+        for _, value in sorted(faces_obj.items(), key=lambda item: item[0]):
+            if not isinstance(value, dict):
+                continue
+            face_urls = value.get("face_urls")
+            if not isinstance(face_urls, list) or not face_urls or not str(face_urls[0]).strip():
+                raise RuntimeError("detect_faces returned no face_urls")
+            path = str(face_urls[0]).strip()
+            crop_landmarks = value.get("crop_landmarks")
+            landmarks_str = value.get("landmarks_str")
+            opts = None
+            if isinstance(crop_landmarks, list) and crop_landmarks and cls._landmarks_to_string(crop_landmarks[0]):
+                opts = cls._landmarks_to_string(crop_landmarks[0])
+            elif isinstance(landmarks_str, list) and landmarks_str and cls._landmarks_to_string(landmarks_str[0]):
+                opts = cls._landmarks_to_string(landmarks_str[0])
+            elif cls._landmarks_to_string(value.get("landmarks")):
+                opts = cls._landmarks_to_string(value.get("landmarks"))
+            if not opts:
+                raise RuntimeError("detect_faces returned no crop_landmarks")
+            normalized.append({"path": path, "opts": opts, "raw": value})
+        if not normalized:
+            raise RuntimeError(f"akool {stage} returned no face candidates")
+        return normalized
 
     @staticmethod
     def _ensure_ok(body: Dict[str, Any], stage: str) -> Any:
@@ -121,37 +153,59 @@ class AkoolClient:
             raise RuntimeError(f"akool {stage} stage failed: code={code} msg={msg or 'unknown'}")
         return body.get("data")
 
-    async def detect_face(self, media_url: str, *, is_video: bool = False) -> AkoolFaceSelection | None:
+    async def detect_face_from_image(self, image_url: str) -> List[Dict[str, Any]]:
         payload = {
-            "url": ensure_http_url("media_url", media_url),
+            "url": ensure_http_url("image_url", image_url),
             "single_face": True,
             "return_face_url": True,
         }
-        if is_video:
-            payload["num_frames"] = 8
+        endpoint = self.build_face_detect_url()
+        logger.info("[swap][detect] kind=image payload=%s", self.safe_json(payload))
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
-                self.build_face_detect_url(),
+                endpoint,
                 json=payload,
                 headers=self._headers(),
             )
+            logger.info("[swap][detect] kind=image status_code=%s", response.status_code)
+            logger.info("[swap][detect] kind=image response_text=%s", response.text[:2000])
             response.raise_for_status()
             body = response.json()
-        faces_obj = self._extract_faces_obj(body)
-        return self._selection_from_faces_obj(faces_obj)
+        return self.normalize_detect_result(body, stage="source_face_detect")
+
+    async def detect_face_from_video(self, video_url: str, num_frames: int = 8) -> List[Dict[str, Any]]:
+        payload = {
+            "url": ensure_http_url("video_url", video_url),
+            "single_face": False,
+            "return_face_url": True,
+            "num_frames": int(num_frames),
+        }
+        endpoint = self.build_face_detect_url()
+        logger.info("[swap][detect] kind=video payload=%s", self.safe_json(payload))
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                endpoint,
+                json=payload,
+                headers=self._headers(),
+            )
+            logger.info("[swap][detect] kind=video status_code=%s", response.status_code)
+            logger.info("[swap][detect] kind=video response_text=%s", response.text[:2000])
+            response.raise_for_status()
+            body = response.json()
+        return self.normalize_detect_result(body, stage="source_video_detect")
 
     async def submit_video_faceswap(
         self,
         *,
-        source_face: AkoolFaceSelection,
-        target_face: AkoolFaceSelection,
+        source_face: Dict[str, Any],
+        target_faces: List[Dict[str, Any]],
         modify_video: str,
         face_enhance: int,
         webhook_url: str | None = None,
     ) -> AkoolSwapJob:
         payload: Dict[str, Any] = {
-            "sourceImage": [{"path": source_face.path, "opts": source_face.opts}],
-            "targetImage": [{"path": target_face.path, "opts": target_face.opts}],
+            "sourceImage": [{"path": source_face["path"], "opts": source_face["opts"]}],
+            "targetImage": [{"path": face["path"], "opts": face["opts"]} for face in target_faces],
             "modifyVideo": ensure_http_url("modify_video", modify_video),
             "face_enhance": 1 if int(face_enhance) else 0,
         }
@@ -190,9 +244,18 @@ class AkoolClient:
             response.raise_for_status()
             body = response.json()
         data = self._ensure_ok(body, "poll")
-        items = self._normalize_face_items(data)
-        if not items and isinstance(data, dict):
-            items = [data]
+        if isinstance(data, list):
+            items = [item for item in data if isinstance(item, dict)]
+        elif isinstance(data, dict):
+            for key in ("list", "records", "items", "data"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    items = [item for item in value if isinstance(item, dict)]
+                    break
+            else:
+                items = [data]
+        else:
+            items = []
         return items[0] if items else {}
 
     @staticmethod

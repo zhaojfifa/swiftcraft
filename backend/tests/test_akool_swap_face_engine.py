@@ -1,3 +1,5 @@
+import pytest
+
 from app.engines.akool_swap_face_engine import AkoolSwapFaceEngine
 from app.services.akool_client import AkoolClient, ensure_http_url
 
@@ -45,27 +47,36 @@ def test_extract_remote_status_prefers_payload_state():
 
 
 def test_detect_faces_parser_prefers_crop_landmarks():
-    faces_obj = {
-        "0": {
-            "face_urls": ["https://cdn.example/source-face.png"],
-            "crop_landmarks": ["1,2,3,4"],
-            "landmarks_str": ["fallback"],
-        }
+    payload = {
+        "error_code": 0,
+        "faces_obj": {
+            "0": {
+                "face_urls": ["https://cdn.example/source-face.png"],
+                "crop_landmarks": ["1,2,3,4"],
+                "landmarks_str": ["fallback"],
+            }
+        },
     }
-    selection = AkoolClient._selection_from_faces_obj(faces_obj)
-    assert selection is not None
-    assert selection.path == "https://cdn.example/source-face.png"
-    assert selection.opts == "1,2,3,4"
+    faces = AkoolClient.normalize_detect_result(payload, stage="source_face_detect")
+    assert faces[0]["path"] == "https://cdn.example/source-face.png"
+    assert faces[0]["opts"] == "1,2,3,4"
 
 
 def test_detect_faces_parser_falls_back_to_landmarks_str():
-    faces_obj = {
-        "0": {
-            "face_urls": ["https://cdn.example/source-face.png"],
-            "crop_landmarks": [],
-            "landmarks_str": ["fallback"],
-        }
+    payload = {
+        "error_code": 0,
+        "faces_obj": {
+            "0": {
+                "face_urls": ["https://cdn.example/source-face.png"],
+                "crop_landmarks": [],
+                "landmarks_str": ["fallback"],
+            }
+        },
     }
-    selection = AkoolClient._selection_from_faces_obj(faces_obj)
-    assert selection is not None
-    assert selection.opts == "fallback"
+    faces = AkoolClient.normalize_detect_result(payload, stage="source_face_detect")
+    assert faces[0]["opts"] == "fallback"
+
+
+def test_detect_faces_parser_raises_when_empty():
+    with pytest.raises(RuntimeError, match="returned no face candidates"):
+        AkoolClient.normalize_detect_result({"error_code": 0, "faces_obj": {}}, stage="source_video_detect")

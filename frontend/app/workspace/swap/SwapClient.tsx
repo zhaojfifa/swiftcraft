@@ -529,6 +529,10 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskCandidateCount = String(taskMetadata.candidate_count || "");
   const taskRemoteStatus = String(taskMetadata.remote_status || latestRemoteStatus || "");
   const taskElapsedMs = String(taskMetadata.elapsed_ms || "");
+  const taskDetectStage = String(taskMetadata.detect_stage || "");
+  const taskSubmitStage = String(taskMetadata.submit_stage || "");
+  const taskKeepOriginalAudio = String(taskMetadata.keep_original_audio ?? "");
+  const taskFaceEnhance = String(taskMetadata.face_enhance ?? "");
   const canUseSafeDemo = Boolean(safeDemoMotionKey && safeDemoCharacterKey) && !isRunning;
   const canRun = isAvatar
     ? Boolean(videoFile && imageFile) && !isRunning
@@ -1376,6 +1380,10 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Mode: {taskModeSummary || task?.mode || "-"}</div>
                         <div>Provider: {taskProviderSummary || "-"}</div>
                         <div>Request ID: {taskRequestId || "-"}</div>
+                        <div>Face Enhance: {taskFaceEnhance ? taskFaceEnhance : "-"}</div>
+                        <div>Keep Original Audio: {taskKeepOriginalAudio ? taskKeepOriginalAudio : "-"}</div>
+                        <div>Detect Stage: {taskDetectStage || "-"}</div>
+                        <div>Submit Stage: {taskSubmitStage || "-"}</div>
                         <div>Remote Status: {taskRemoteStatus || "-"}</div>
                         <div>Elapsed: {taskElapsedMs ? `${taskElapsedMs} ms` : "-"}</div>
                       </div>
