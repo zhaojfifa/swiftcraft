@@ -173,26 +173,33 @@ class AkoolSwapFaceEngine:
                     max_frames=8,
                 )
             frame_paths = extraction["frames"]
-            detected_faces = extraction["detected_faces"]
-            selected_faces = extraction["selected_faces"]
-            target_faces = extraction["target_faces"]
+            detected_target_faces = extraction["detected_faces"]
+            target_faces = list(extraction["target_faces"])
             bridged_target_images = extraction["bridged_target_images"]
+            source_image_payload = [{"path": source_face["path"], "opts": source_face["opts"]}]
+            target_face_runtime = {
+                "frames_sampled": len(frame_paths),
+                "faces_detected": len(detected_target_faces),
+                "selected_count": len(target_faces),
+                "target_image_payload": target_faces,
+                "bridged_target_images": bridged_target_images,
+            }
             vendor_runtime["source_video_detect"] = {
                 "attempted": True,
                 "ok": bool(target_faces),
                 "non_blocking": False,
                 "reason": None if target_faces else "targetImage is empty after local target-face extraction",
             }
-            on_log(f"[swap][target-face] frames_sampled={len(frame_paths)}")
-            on_log(f"[swap][target-face] faces_detected={len(detected_faces)}")
-            on_log(f"[swap][target-face] selected_count={len(selected_faces)}")
+            on_log(f"[swap][target-face] frames_sampled={target_face_runtime['frames_sampled']}")
+            on_log(f"[swap][target-face] faces_detected={target_face_runtime['faces_detected']}")
+            on_log(f"[swap][target-face] selected_count={target_face_runtime['selected_count']}")
             if bridged_target_images:
                 on_log(f"[swap][target-face] bridged_target_image_url={bridged_target_images[0].public_url}")
             on_stage("running", 35)
 
             submit_payload = {
-                "sourceImage": [{"path": source_face["path"], "opts": source_face["opts"]}],
-                "targetImage": [{"path": face["path"], "opts": face["opts"]} for face in target_faces],
+                "sourceImage": source_image_payload,
+                "targetImage": [{"path": face["path"], "opts": face["opts"]} for face in target_face_runtime["target_image_payload"]],
                 "modifyVideo": source_video_vendor_url,
                 "face_enhance": face_enhance,
             }
@@ -224,7 +231,7 @@ class AkoolSwapFaceEngine:
             submit_stage = "submit_start"
             job = await self.client.submit_video_faceswap(
                 source_face=source_face,
-                target_faces=selected_target_faces,
+                target_faces=target_face_runtime["target_image_payload"],
                 modify_video=source_video_vendor_url,
                 face_enhance=face_enhance,
             )
@@ -298,16 +305,11 @@ class AkoolSwapFaceEngine:
                     "swap_type": swap_type,
                     "face_detect": {
                         "source_face_count": len(source_faces),
-                        "target_face_count": len(target_faces),
+                        "target_face_count": len(target_face_runtime["target_image_payload"]),
                     },
                     "detect_summary": {
                         "source_face": source_detect,
-                        "target_face": {
-                            "frames_sampled": len(frame_paths),
-                            "faces_detected": len(detected_faces),
-                            "selected_count": len(selected_faces),
-                            "target_faces": target_faces,
-                        },
+                        "target_face": target_face_runtime,
                     },
                     "vendor_runtime": vendor_runtime,
                     "provider_debug": {
