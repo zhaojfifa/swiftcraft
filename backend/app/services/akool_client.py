@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 import logging
 from dataclasses import dataclass
@@ -77,7 +76,11 @@ class AkoolClient:
         headers = self._headers()
         masked = dict(headers)
         if masked.get("x-api-key"):
-            masked["x-api-key"] = "***"
+            api_key = str(masked["x-api-key"])
+            if len(api_key) > 8:
+                masked["x-api-key"] = f"{api_key[:4]}***{api_key[-4:]}"
+            else:
+                masked["x-api-key"] = "***"
         return masked
 
     def _headers(self) -> Dict[str, str]:
@@ -185,14 +188,16 @@ class AkoolClient:
         logger.info("[swap][detect] payload=%s", self.safe_json(payload))
         logger.info("[swap][detect] headers=%s", self.safe_json(self._masked_headers()))
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                endpoint,
-                json=payload,
-                headers=self._headers(),
-            )
+            response = await client.post(endpoint, json=payload, headers=self._headers())
             logger.info("[swap][detect] response_status=%s", response.status_code)
-            logger.info("[swap][detect] response_body=%s", response.text[:2000])
-            response.raise_for_status()
+            logger.info("[swap][detect] response_body=%s", response.text[:1500])
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                logger.error("[swap][detect] http_error status=%s body=%s", response.status_code, response.text[:1500])
+                raise RuntimeError(
+                    f"akool detect http error: status={response.status_code} body={response.text[:800]}"
+                ) from exc
             body = response.json()
         normalized = self.normalize_detect_result(
             body,

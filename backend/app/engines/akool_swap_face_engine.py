@@ -91,6 +91,22 @@ class AkoolSwapFaceEngine:
         selected = max(target_faces, key=self._face_area)
         return [selected]
 
+    async def _probe_source_face_url(self, url: str, on_log: Callable[[str], None]) -> None:
+        suffix = url.rsplit(".", 1)[-1].lower() if "." in url.rsplit("/", 1)[-1] else ""
+        on_log(f"[swap][source_face] url={url}")
+        on_log(f"[swap][source_face] is_https={str(url.startswith('https://')).lower()}")
+        on_log(f"[swap][source_face] suffix={suffix or 'n/a'}")
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0), follow_redirects=True) as client:
+                response = await client.head(url)
+                if response.status_code >= 400 or response.status_code == 405:
+                    response = await client.get(url, headers={"Range": "bytes=0-0"})
+                on_log(f"[swap][source_face] probe_status={response.status_code}")
+                on_log(f"[swap][source_face] content_type={response.headers.get('content-type', 'n/a')}")
+                on_log(f"[swap][source_face] content_length={response.headers.get('content-length', 'n/a')}")
+        except Exception as exc:
+            on_log(f"[swap][source_face] probe_error={type(exc).__name__}: {exc}")
+
     async def run(
         self,
         task_id: str,
@@ -157,6 +173,7 @@ class AkoolSwapFaceEngine:
         on_log(f"[swap][akool] status_url={provider_debug.get('result_endpoint')}")
 
         try:
+            await self._probe_source_face_url(source_face_image_url, on_log)
             on_log(f"[swap][detect] kind=image start")
             on_log(f"[swap][detect] kind=image endpoint={provider_debug.get('face_detect_endpoint')}")
             detect_stage = "source_face_detect"
@@ -173,98 +190,12 @@ class AkoolSwapFaceEngine:
             on_log(f"[swap][detect] parsed_face_count={len(source_faces)}")
             on_log(f"[swap][detect] source_face faces={len(source_faces)}")
             on_log(f"[swap][detect] source_face_url={source_face['path']}")
-            on_stage("running", 20)
-
-            on_log(f"[swap][detect] kind=video start")
-            on_log(f"[swap][detect] kind=video endpoint={provider_debug.get('face_detect_endpoint')}")
-            detect_stage = "source_video_detect"
-            target_detect = await self.client.detect_faces(
-                source_video_url,
-                single_face=False,
-                return_face_url=True,
-                num_frames=8,
-            )
-            target_faces = list(target_detect.get("faces") or [])
-            if not target_faces:
-                on_log("[swap][detect] target_face fail")
-                raise EngineRunError("target face not detected in video")
-            on_log(f"[swap][detect] parsed_face_count={len(target_faces)}")
-            on_log(f"[swap][detect] target_faces_count={len(target_faces)}")
-            selected_target_faces = self._select_baseline_target_faces(target_faces)
-            target_face = selected_target_faces[0]
-            on_log("[swap][select] baseline_target_face=largest")
-            on_log(f"[swap][detect] target_face faces={len(target_faces)}")
-            on_log(f"[swap][detect] target_face_url={target_face['path']}")
-            on_stage("running", 35)
-
-            submit_payload = {
-                "sourceImage": [{"path": source_face["path"], "opts": source_face["opts"]}],
-                "targetImage": [{"path": face["path"], "opts": face["opts"]} for face in selected_target_faces],
-                "modifyVideo": source_video_url,
-                "face_enhance": face_enhance,
-            }
-            on_log(f"[swap][submit] payload_preview={submit_payload}")
-            on_log("[swap][akool] auth_start")
-            on_log("[swap][akool] auth_ok")
-            on_log("[swap][akool] submit_start")
-            submit_stage = "submit_start"
-            job = await self.client.submit_video_faceswap(
-                source_face=source_face,
-                target_faces=selected_target_faces,
-                modify_video=source_video_url,
-                face_enhance=face_enhance,
-            )
-            submit_stage = "submit_ok"
-            on_log("[swap][akool] submit_ok code=1000")
-            on_log(f"[swap][submit] request_id={job.request_id or 'n/a'} job_id={job.job_id or 'n/a'}")
-            on_log(
-                f"[swap][provider] request_id={job.request_id or 'n/a'} remote_status={job.remote_status or 'submitted'}"
-            )
-            on_stage("rendering", 55)
-
-            remote_payload = dict(job.raw)
-            remote_status = self.client.extract_remote_status(remote_payload)
-            poll_started = time.perf_counter()
-            on_log("[swap][akool] poll_start")
-            while True:
-                result_url = self.client.extract_result_url(remote_payload) or job.result_url
-                if result_url:
-                    on_log(
-                        f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status} output_url={result_url}"
-                    )
-                if result_url:
-                    break
-                await asyncio.sleep(self.poll_interval_sec)
-                remote_payload = await self.client.poll_video_faceswap(job)
-                remote_status = self.client.extract_remote_status(remote_payload)
-                elapsed_ms = int((time.perf_counter() - poll_started) * 1000)
-                on_log(
-                    f"[swap][poll] request_id={job.request_id or 'n/a'} job_id={job.job_id or 'n/a'} "
-                    f"remote_status={remote_status} output_url={self.client.extract_result_url(remote_payload) or 'n/a'} elapsed_ms={elapsed_ms}"
-                )
-                if remote_status in {"failed", "error", "cancelled"}:
-                    raise EngineRunError(f"poll failed: request_id={job.request_id or 'n/a'} status={remote_status}")
-                if elapsed_ms > self.timeout_sec * 1000:
-                    raise EngineRunError(f"poll failed: timeout after {self.timeout_sec}s")
-            on_log("[swap][akool] poll_ok")
-
-            result_url = self.client.extract_result_url(remote_payload) or job.result_url
-            if not result_url:
-                raise EngineRunError("poll failed: swap provider returned no result url")
-
-            on_log(f"[swap][download] request_id={job.request_id or 'n/a'} result_url={result_url}")
-            content = await self.client.download_result(result_url)
-            content = self._apply_audio_strategy(content, keep_original_audio)
-            on_log("[swap][output] download_ok")
-
-            output_key = f"outputs/{task_id}/result.mp4"
-            output_url = self.r2.upload_bytes(output_key, content, content_type="video/mp4")
-            on_log("[swap][output] r2_upload_ok")
+            on_log(f"[swap][detect] faces_obj={source_detect}")
+            on_log("[swap][debug] source face detect succeeded; skipping video detect and submit")
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             manifest_key = f"outputs/{task_id}/manifest.json"
             outputs = {
-                "video_key": output_key,
-                "video_url": output_url,
                 "manifest_key": manifest_key,
             }
             manifest = build_manifest(
@@ -297,20 +228,21 @@ class AkoolSwapFaceEngine:
                     "swap_type": swap_type,
                     "face_detect": {
                         "source_face_count": len(source_faces),
-                        "target_face_count": len(target_faces),
+                        "target_face_count": 0,
                     },
                     "detect_summary": {
                         "source_face": source_detect,
-                        "target_face": target_detect,
+                        "target_face": None,
                     },
                     "provider_debug": {
                         **provider_debug,
-                        "job_id": job.job_id,
-                        "_id": job.request_id,
+                        "job_id": None,
+                        "_id": None,
                     },
-                    "submit_response": job.raw,
-                    "provider_request_id": job.request_id,
-                    "output_video_url": output_url,
+                    "submit_response": None,
+                    "provider_request_id": None,
+                    "output_video_url": None,
+                    "debug_mode": "source_face_detect_only",
                     "resource_expire_days": 7,
                 },
             )
@@ -322,13 +254,13 @@ class AkoolSwapFaceEngine:
             on_stage("DONE", 100)
 
             return EngineResult(
-                output_key=output_key,
-                output_url=output_url,
+                output_key=manifest_key,
+                output_url=manifest_url,
                 metadata={
                     "provider": self.provider,
-                    "request_id": job.request_id or None,
-                    "job_id": job.job_id or None,
-                    "remote_status": remote_status,
+                    "request_id": None,
+                    "job_id": None,
+                    "remote_status": "debug_source_face_detect_ok",
                     "elapsed_ms": elapsed_ms,
                     "detect_stage": detect_stage,
                     "submit_stage": submit_stage,
@@ -338,26 +270,29 @@ class AkoolSwapFaceEngine:
                     "manifest_preview": manifest,
                     "detect_summary": {
                         "source_face": source_detect,
-                        "target_face": target_detect,
+                        "target_face": None,
                     },
-                    "submit_response": job.raw,
-                    "provider_request_id": job.request_id or None,
-                    "output_video_url": output_url,
+                    "submit_response": None,
+                    "provider_request_id": None,
+                    "output_video_url": None,
                     "swap_type": swap_type,
                     "keep_original_audio": keep_original_audio,
                     "face_fidelity": face_fidelity,
                     "face_enhance": bool(face_enhance),
                     "face_detect": manifest["face_detect"],
                     "provider_debug": manifest["provider_debug"],
+                    "debug_mode": "source_face_detect_only",
                     "resource_expire_days": 7,
                 },
             )
         except ValueError as exc:
             raise EngineRunError(str(exc)) from exc
         except httpx.HTTPError as exc:
-            stage_label = detect_stage if detect_stage not in {"pending", "source_video_detect"} or submit_stage == "pending" else submit_stage
             if detect_stage == "source_face_detect":
-                raise EngineRunError(f"source_face_detect failed: {type(exc).__name__}: {exc}") from exc
+                response = getattr(exc, "response", None)
+                status_code = response.status_code if response is not None else "n/a"
+                response_text = response.text if response is not None else str(exc)
+                raise EngineRunError(f"source_face_detect failed: status={status_code} body={response_text[:800]}") from exc
             if detect_stage == "source_video_detect" and submit_stage == "pending":
                 raise EngineRunError(f"source_video_detect failed: {type(exc).__name__}: {exc}") from exc
             if submit_stage in {"submit_start", "pending"}:
@@ -365,7 +300,10 @@ class AkoolSwapFaceEngine:
             raise EngineRunError(f"poll failed: {type(exc).__name__}: {exc}") from exc
         except RuntimeError as exc:
             if detect_stage == "source_face_detect" and submit_stage == "pending":
-                raise EngineRunError(f"source_face_detect failed: {exc}") from exc
+                text = str(exc)
+                if "status=" in text and "body=" in text:
+                    raise EngineRunError(f"source_face_detect failed: {text}") from exc
+                raise EngineRunError(f"source_face_detect failed: {text}") from exc
             if detect_stage == "source_video_detect" and submit_stage == "pending":
                 raise EngineRunError(f"source_video_detect failed: {exc}") from exc
             if submit_stage in {"submit_start", "pending"}:
