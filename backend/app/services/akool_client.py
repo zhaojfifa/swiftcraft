@@ -300,6 +300,12 @@ class AkoolClient:
                     return item
         data = payload.get("data")
         if isinstance(data, dict):
+            nested_result = data.get("result")
+            if isinstance(nested_result, list):
+                for item in nested_result:
+                    if isinstance(item, dict):
+                        return item
+        if isinstance(data, dict):
             return data
         return None
 

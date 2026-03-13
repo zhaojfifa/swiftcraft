@@ -205,6 +205,27 @@ def test_poll_video_faceswap_reads_official_result_list(monkeypatch):
     assert payload["result"][0]["url"] == "https://vendor.example/result.mp4"
 
 
+def test_extract_result_item_reads_data_result_first():
+    payload = {
+        "code": 1000,
+        "msg": "OK",
+        "data": {
+            "result": [
+                {
+                    "_id": "req-1",
+                    "job_id": "job-1",
+                    "url": "https://vendor.example/result.mp4",
+                    "faceswap_status": 3,
+                }
+            ]
+        },
+    }
+    item = AkoolClient.extract_result_item(payload)
+    assert item is not None
+    assert item["faceswap_status"] == 3
+    assert item["url"] == "https://vendor.example/result.mp4"
+
+
 def test_swap_engine_no_legacy_selected_target_faces_reference():
     source = Path("backend/app/engines/akool_swap_face_engine.py").read_text(encoding="utf-8")
     assert "selected_" + "target_faces" not in source
