@@ -126,6 +126,12 @@ class AkoolSwapFaceEngine:
             "submit_validation": {"sourceImage_count": 0, "targetImage_count": 0, "ok": False, "reason": None},
             "poll": {"last_remote_status": None, "vendor_result_url": None},
             "result_fetch": {"attempted": False, "reason": "remote status not completed yet"},
+            "request_id": None,
+            "submit_raw": None,
+            "first_poll_raw": None,
+            "latest_poll_raw": None,
+            "final_poll_raw": None,
+            "suspected_provider_stuck": False,
         }
         on_log(
             f"[swap][preflight] provider={self.provider} mode={record.mode} swap_type={swap_type} "
@@ -264,9 +270,11 @@ class AkoolSwapFaceEngine:
                 "soft_accepted": job.remote_status == "submitted_pending",
                 "remote_status": job.remote_status,
             }
+            vendor_runtime["request_id"] = job.request_id or None
             vendor_runtime["vendor_request_id"] = job.request_id or None
             vendor_runtime["vendor_job_id"] = job.job_id or None
             vendor_runtime["vendor_result_url"] = job.result_url
+            vendor_runtime["submit_raw"] = dict(job.raw)
             on_log(f"[swap][provider] request_id={job.request_id or 'n/a'} remote_status={job.remote_status or 'submitted'}")
             on_stage("rendering", 55)
 
@@ -275,8 +283,14 @@ class AkoolSwapFaceEngine:
             success_statuses = {"completed", "succeeded", "done", "finished", "success"}
             pending_statuses = {"submitted_pending", "pending", "processing", "queued", "submitted", ""}
             poll_started = time.perf_counter()
+            stuck_threshold_sec = max(60, min(300, self.timeout_sec // 2))
             while True:
                 result_url = self.client.extract_result_url(remote_payload) or job.result_url
+                elapsed_sec = int(time.perf_counter() - poll_started)
+                if vendor_runtime["first_poll_raw"] is None:
+                    vendor_runtime["first_poll_raw"] = dict(remote_payload)
+                vendor_runtime["latest_poll_raw"] = dict(remote_payload)
+                vendor_runtime["final_poll_raw"] = dict(remote_payload)
                 vendor_runtime["poll"] = {
                     "last_remote_status": remote_status or None,
                     "vendor_result_url": result_url,
@@ -284,9 +298,12 @@ class AkoolSwapFaceEngine:
                 if remote_status in success_statuses:
                     on_log(f"[swap][poll] remote_status={remote_status} result_ready=true")
                     on_log(f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status}")
+                    on_log(f"[swap][poll] raw_response={remote_payload}")
                     break
                 on_log(f"[swap][poll] remote_status={remote_status} result_ready=false")
                 on_log(f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status}")
+                on_log(f"[swap][poll] elapsed_sec={elapsed_sec}")
+                on_log(f"[swap][poll] raw_response={remote_payload}")
                 vendor_runtime["result_fetch"] = {
                     "attempted": False,
                     "reason": "remote status not completed yet",
@@ -295,14 +312,22 @@ class AkoolSwapFaceEngine:
                     raise EngineRunError(f"poll failed: request_id={job.request_id or 'n/a'} status={remote_status}")
                 if remote_status not in pending_statuses:
                     raise EngineRunError(f"poll failed: request_id={job.request_id or 'n/a'} unexpected status={remote_status}")
+                if elapsed_sec >= stuck_threshold_sec:
+                    vendor_runtime["suspected_provider_stuck"] = True
+                    on_log("[swap][poll] suspected_provider_stuck=true")
                 await asyncio.sleep(self.poll_interval_sec)
                 remote_payload = await self.client.poll_video_faceswap(job)
                 remote_status = str(self.client.extract_remote_status(remote_payload) or "").strip().lower()
                 elapsed_ms = int((time.perf_counter() - poll_started) * 1000)
                 if elapsed_ms > self.timeout_sec * 1000:
-                    raise EngineRunError(f"poll failed: timeout after {self.timeout_sec}s")
+                    vendor_runtime["final_poll_raw"] = dict(remote_payload)
+                    on_log(f"[swap][poll] timeout provider_request_id={job.request_id or 'n/a'}")
+                    raise EngineRunError(
+                        "provider_timeout: Akool request accepted but remained in processing without terminal status"
+                    )
 
             result_url = self.client.extract_result_url(remote_payload) or job.result_url
+            vendor_runtime["final_poll_raw"] = dict(remote_payload)
             vendor_runtime["poll"] = {
                 "last_remote_status": remote_status or None,
                 "vendor_result_url": result_url,

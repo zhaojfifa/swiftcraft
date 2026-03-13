@@ -17,3 +17,11 @@ def test_normalize_engine_error_fal_error_only_for_fal_provider():
     svc = _svc()
     payload = svc._normalize_engine_error(RuntimeError("fal.ai request failed with 502"))
     assert payload["reason_code"] == "fal_error"
+
+
+def test_normalize_engine_error_provider_timeout():
+    svc = _svc()
+    payload = svc._normalize_engine_error(
+        RuntimeError("provider_timeout: Akool request accepted but remained in processing without terminal status")
+    )
+    assert payload["reason_code"] == "provider_timeout"

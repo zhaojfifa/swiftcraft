@@ -927,7 +927,9 @@ class TaskService:
         message = str(exc)
         lower = message.lower()
         reason_code = "engine_error"
-        if "asr_empty_or_fallback" in lower:
+        if "provider_timeout" in lower:
+            reason_code = "provider_timeout"
+        elif "asr_empty_or_fallback" in lower:
             reason_code = "asr_empty_or_fallback"
         elif "asr_runtime_unavailable" in lower:
             reason_code = "asr_runtime_unavailable"
