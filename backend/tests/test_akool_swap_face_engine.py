@@ -259,6 +259,10 @@ class _FakeClient:
         value = payload.get("faceswap_status")
         return int(value) if value is not None else None
 
+    def faceswap_status_label(self, value):
+        mapping = {1: "queued", 2: "processing", 3: "success", 4: "failed"}
+        return mapping.get(value, "unknown")
+
     def extract_result_url(self, payload):
         return payload.get("url")
 

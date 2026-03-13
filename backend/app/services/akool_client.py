@@ -317,6 +317,18 @@ class AkoolClient:
         return None
 
     @staticmethod
+    def faceswap_status_label(value: int | None) -> str:
+        if value == 1:
+            return "queued"
+        if value == 2:
+            return "processing"
+        if value == 3:
+            return "success"
+        if value == 4:
+            return "failed"
+        return "unknown"
+
+    @staticmethod
     def extract_remote_status(payload: Dict[str, Any]) -> str:
         faceswap_status = AkoolClient.extract_faceswap_status(payload)
         if faceswap_status == 1:

@@ -275,7 +275,13 @@ class AkoolSwapFaceEngine:
             vendor_runtime["vendor_job_id"] = job.job_id or None
             vendor_runtime["vendor_result_url"] = job.result_url
             vendor_runtime["faceswap_status"] = None
+            vendor_runtime["faceswap_status_raw"] = None
+            vendor_runtime["faceswap_status_label"] = "unknown"
             vendor_runtime["result_ready"] = False
+            vendor_runtime["result_ready_expected"] = False
+            vendor_runtime["result_probe_http_status"] = None
+            vendor_runtime["result_downloaded"] = False
+            vendor_runtime["result_uploaded"] = False
             vendor_runtime["submit_raw"] = dict(job.raw)
             on_log(f"[swap][provider] request_id={job.request_id or 'n/a'} remote_status={job.remote_status or 'submitted'}")
             on_stage("rendering", 55)
@@ -288,8 +294,10 @@ class AkoolSwapFaceEngine:
             stuck_threshold_sec = max(60, min(300, self.timeout_sec // 2))
             while True:
                 faceswap_status = self.client.extract_faceswap_status(remote_payload)
+                faceswap_status_label = self.client.faceswap_status_label(faceswap_status)
                 result_url = self.client.extract_result_url(remote_payload) if faceswap_status == 3 else None
                 result_ready = faceswap_status == 3 and bool(result_url)
+                item_found = bool(remote_payload)
                 elapsed_sec = int(time.perf_counter() - poll_started)
                 if vendor_runtime["first_poll_raw"] is None:
                     vendor_runtime["first_poll_raw"] = dict(remote_payload)
@@ -300,10 +308,16 @@ class AkoolSwapFaceEngine:
                     "vendor_result_url": result_url or job.result_url,
                 }
                 vendor_runtime["faceswap_status"] = faceswap_status
+                vendor_runtime["faceswap_status_raw"] = faceswap_status
+                vendor_runtime["faceswap_status_label"] = faceswap_status_label
                 vendor_runtime["vendor_result_url"] = result_url or job.result_url
                 vendor_runtime["result_ready"] = result_ready
-                on_log(f"[swap][result-check] faceswap_status={faceswap_status if faceswap_status is not None else 'n/a'}")
-                on_log(f"[swap][result-check] result_ready={str(result_ready).lower()}")
+                vendor_runtime["result_ready_expected"] = result_ready
+                on_log(f"[swap][result-check] item_found={str(item_found).lower()}")
+                on_log(f"[swap][result-check] faceswap_status_raw={faceswap_status if faceswap_status is not None else 'n/a'}")
+                on_log(f"[swap][result-check] faceswap_status_label={faceswap_status_label}")
+                on_log(f"[swap][result-check] vendor_result_url={result_url or job.result_url or 'n/a'}")
+                on_log(f"[swap][result-check] result_ready_expected={str(result_ready).lower()}")
                 if faceswap_status == 3 or remote_status in success_statuses:
                     vendor_runtime["suspected_provider_stuck"] = False
                     remote_status = "completed"
@@ -323,7 +337,7 @@ class AkoolSwapFaceEngine:
                     raise EngineRunError(f"poll failed: request_id={job.request_id or 'n/a'} status={remote_status}")
                 if remote_status not in pending_statuses:
                     raise EngineRunError(f"poll failed: request_id={job.request_id or 'n/a'} unexpected status={remote_status}")
-                if elapsed_sec >= stuck_threshold_sec:
+                if faceswap_status in {1, 2} and elapsed_sec >= stuck_threshold_sec:
                     vendor_runtime["suspected_provider_stuck"] = True
                     on_log("[swap][poll] suspected_provider_stuck=true")
                 await asyncio.sleep(self.poll_interval_sec)
@@ -338,6 +352,7 @@ class AkoolSwapFaceEngine:
                     )
 
             faceswap_status = self.client.extract_faceswap_status(remote_payload)
+            faceswap_status_label = self.client.faceswap_status_label(faceswap_status)
             result_url = self.client.extract_result_url(remote_payload) if faceswap_status == 3 else None
             vendor_runtime["final_poll_raw"] = dict(remote_payload)
             vendor_runtime["poll"] = {
@@ -345,8 +360,11 @@ class AkoolSwapFaceEngine:
                 "vendor_result_url": result_url or job.result_url,
             }
             vendor_runtime["faceswap_status"] = faceswap_status
+            vendor_runtime["faceswap_status_raw"] = faceswap_status
+            vendor_runtime["faceswap_status_label"] = faceswap_status_label
             vendor_runtime["vendor_result_url"] = result_url or job.result_url
             vendor_runtime["result_ready"] = faceswap_status == 3 and bool(result_url)
+            vendor_runtime["result_ready_expected"] = faceswap_status == 3 and bool(result_url)
             if faceswap_status == 3:
                 remote_status = "completed"
                 vendor_runtime["suspected_provider_stuck"] = False
@@ -355,23 +373,24 @@ class AkoolSwapFaceEngine:
 
             result_stage = "download_start"
             vendor_runtime["result_fetch"] = {"attempted": True, "reason": None}
-            on_log(f"[swap][result] probe vendor_result_url={result_url}")
+            on_log(f"[swap][result-probe] start url={result_url}")
             try:
                 probe_status, probe_content_type = await self.client.probe_result(result_url)
+                vendor_runtime["result_probe_http_status"] = probe_status
+                on_log(f"[swap][result-probe] http_status={probe_status}")
                 if probe_status != 200 or "video/mp4" not in probe_content_type:
                     vendor_runtime["result_fetch"] = {
                         "attempted": True,
                         "reason": f"probe failed: http_status={probe_status} content_type={probe_content_type or 'unknown'}",
                     }
-                    on_log(
-                        f"[swap][result] download failed http_status={probe_status} content_type={probe_content_type or 'unknown'}"
-                    )
+                    on_log(f"[swap][result-download] failed http_status={probe_status} content_type={probe_content_type or 'unknown'}")
                     raise EngineRunError(
                         f"result fetch failed: probe http_status={probe_status} content_type={probe_content_type or 'unknown'}"
                     )
-                on_log(f"[swap][result] downloading vendor_result_url={result_url}")
+                on_log(f"[swap][result-download] start url={result_url}")
                 content = await self.client.download_result(result_url)
-                on_log(f"[swap][result] download ok bytes={len(content)}")
+                vendor_runtime["result_downloaded"] = True
+                on_log(f"[swap][result-download] ok local_file=in-memory bytes={len(content)}")
             except Exception as exc:
                 vendor_runtime["result_fetch"] = {
                     "attempted": True,
@@ -381,7 +400,10 @@ class AkoolSwapFaceEngine:
             result_stage = "download_ok"
             content = self._apply_audio_strategy(content, keep_original_audio)
             output_key = f"outputs/{task_id}/result.mp4"
+            on_log(f"[swap][result-upload] start output_key={output_key}")
             output_url = self.r2.upload_bytes(output_key, content, content_type="video/mp4")
+            vendor_runtime["result_uploaded"] = True
+            on_log(f"[swap][result-upload] ok cdn_url={output_url}")
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             manifest_key = f"outputs/{task_id}/manifest.json"
             outputs = {
@@ -448,6 +470,7 @@ class AkoolSwapFaceEngine:
             outputs["manifest_url"] = manifest_url
             manifest["outputs"]["manifest_url"] = manifest_url
             on_log(f"[swap][manifest] manifest_url={manifest_url}")
+            on_log(f"[swap][finalize] status=succeeded output_key={output_key} output_url={output_url}")
             on_stage("DONE", 100)
 
             return EngineResult(
