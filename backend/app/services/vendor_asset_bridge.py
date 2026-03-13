@@ -24,6 +24,16 @@ class BridgedVendorAsset:
     public_url: str
     content_type: str
     sha256: str
+    size_bytes: int | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "storage_key": self.object_key,
+            "cdn_url": self.public_url,
+            "content_type": self.content_type,
+            "size_bytes": self.size_bytes,
+            "sha256": self.sha256,
+        }
 
 
 class VendorAssetBridge:
@@ -120,4 +130,5 @@ class VendorAssetBridge:
             public_url=self.public_url(object_key),
             content_type=content_type,
             sha256=sha256,
+            size_bytes=len(body),
         )

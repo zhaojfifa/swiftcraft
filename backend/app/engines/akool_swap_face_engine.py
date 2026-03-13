@@ -69,6 +69,19 @@ class AkoolSwapFaceEngine:
                 raise EngineRunError(f"swap audio processing failed: {stderr[-400:]}") from exc
             return output_path.read_bytes()
 
+    @staticmethod
+    def _serialize_bridged_asset(asset: Any) -> Dict[str, Any]:
+        if hasattr(asset, "to_dict") and callable(asset.to_dict):
+            data = asset.to_dict()
+            if isinstance(data, dict):
+                return data
+        return {
+            "storage_key": getattr(asset, "object_key", None),
+            "cdn_url": getattr(asset, "public_url", None),
+            "content_type": getattr(asset, "content_type", None),
+            "size_bytes": getattr(asset, "size_bytes", None),
+        }
+
     async def run(
         self,
         task_id: str,
@@ -196,13 +209,14 @@ class AkoolSwapFaceEngine:
             detected_target_faces = extraction["detected_faces"]
             target_faces = list(extraction["target_faces"])
             bridged_target_images = extraction["bridged_target_images"]
+            bridged_target_image_dicts = [self._serialize_bridged_asset(asset) for asset in bridged_target_images]
             source_image_payload = [{"path": source_face["path"], "opts": source_face["opts"]}]
             target_face_runtime = {
                 "frames_sampled": len(frame_paths),
                 "faces_detected": len(detected_target_faces),
                 "selected_count": len(target_faces),
                 "target_image_payload": target_faces,
-                "bridged_target_images": bridged_target_images,
+                "bridged_target_images": bridged_target_image_dicts,
                 "used_bbox_fallback": bool(extraction.get("used_bbox_fallback")),
                 "require_landmarks": bool(extraction.get("require_landmarks")),
             }
