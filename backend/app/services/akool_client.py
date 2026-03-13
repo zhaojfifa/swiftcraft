@@ -300,13 +300,31 @@ class AkoolClient:
         return items[0] if items else {}
 
     @staticmethod
+    def extract_faceswap_status(payload: Dict[str, Any]) -> int | None:
+        for key in ("faceswap_status", "faceSwapStatus", "status_code"):
+            value = payload.get(key)
+            try:
+                if value is not None:
+                    return int(value)
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
     def extract_remote_status(payload: Dict[str, Any]) -> str:
+        faceswap_status = AkoolClient.extract_faceswap_status(payload)
+        if faceswap_status == 1:
+            return "queued"
+        if faceswap_status == 2:
+            return "rendering"
+        if faceswap_status == 3:
+            return "completed"
+        if faceswap_status == 4:
+            return "failed"
         for key in ("status", "job_status", "state"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip().lower()
-        if AkoolClient.extract_result_url(payload):
-            return "completed"
         return "processing"
 
     @staticmethod

@@ -48,6 +48,13 @@ def test_extract_remote_status_prefers_payload_state():
     assert AkoolClient.extract_remote_status(payload) == "processing"
 
 
+def test_extract_remote_status_maps_faceswap_status():
+    assert AkoolClient.extract_remote_status({"faceswap_status": 1}) == "queued"
+    assert AkoolClient.extract_remote_status({"faceswap_status": 2}) == "rendering"
+    assert AkoolClient.extract_remote_status({"faceswap_status": 3}) == "completed"
+    assert AkoolClient.extract_remote_status({"faceswap_status": 4}) == "failed"
+
+
 def test_detect_faces_parser_prefers_crop_landmarks():
     payload = {
         "error_code": 0,
@@ -200,10 +207,14 @@ class _FakeClient:
 
     async def poll_video_faceswap(self, _job):
         self.poll_calls += 1
-        return {"status": "completed", "url": "https://vendor.example/result.mp4"}
+        return {"faceswap_status": 3, "url": "https://vendor.example/result.mp4"}
 
     def extract_remote_status(self, payload):
         return str(payload.get("status") or "submitted")
+
+    def extract_faceswap_status(self, payload):
+        value = payload.get("faceswap_status")
+        return int(value) if value is not None else None
 
     def extract_result_url(self, payload):
         return payload.get("url")

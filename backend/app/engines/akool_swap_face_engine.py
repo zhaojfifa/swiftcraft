@@ -274,18 +274,22 @@ class AkoolSwapFaceEngine:
             vendor_runtime["vendor_request_id"] = job.request_id or None
             vendor_runtime["vendor_job_id"] = job.job_id or None
             vendor_runtime["vendor_result_url"] = job.result_url
+            vendor_runtime["faceswap_status"] = None
+            vendor_runtime["result_ready"] = False
             vendor_runtime["submit_raw"] = dict(job.raw)
             on_log(f"[swap][provider] request_id={job.request_id or 'n/a'} remote_status={job.remote_status or 'submitted'}")
             on_stage("rendering", 55)
 
             remote_payload = dict(job.raw)
             remote_status = str(job.remote_status or self.client.extract_remote_status(remote_payload)).strip().lower()
-            success_statuses = {"completed", "succeeded", "done", "finished", "success"}
-            pending_statuses = {"submitted_pending", "pending", "processing", "queued", "submitted", ""}
+            success_statuses = {"completed", "done", "success", "finished"}
+            pending_statuses = {"submitted_pending", "pending", "processing", "queued", "submitted", "rendering", ""}
             poll_started = time.perf_counter()
             stuck_threshold_sec = max(60, min(300, self.timeout_sec // 2))
             while True:
-                result_url = self.client.extract_result_url(remote_payload) or job.result_url
+                faceswap_status = self.client.extract_faceswap_status(remote_payload)
+                result_url = self.client.extract_result_url(remote_payload) if faceswap_status == 3 else None
+                result_ready = faceswap_status == 3 and bool(result_url)
                 elapsed_sec = int(time.perf_counter() - poll_started)
                 if vendor_runtime["first_poll_raw"] is None:
                     vendor_runtime["first_poll_raw"] = dict(remote_payload)
@@ -293,9 +297,14 @@ class AkoolSwapFaceEngine:
                 vendor_runtime["final_poll_raw"] = dict(remote_payload)
                 vendor_runtime["poll"] = {
                     "last_remote_status": remote_status or None,
-                    "vendor_result_url": result_url,
+                    "vendor_result_url": result_url or job.result_url,
                 }
-                if remote_status in success_statuses:
+                vendor_runtime["faceswap_status"] = faceswap_status
+                vendor_runtime["vendor_result_url"] = result_url or job.result_url
+                vendor_runtime["result_ready"] = result_ready
+                on_log(f"[swap][result-check] faceswap_status={faceswap_status if faceswap_status is not None else 'n/a'}")
+                on_log(f"[swap][result-check] result_ready={str(result_ready).lower()}")
+                if faceswap_status == 3 or remote_status in success_statuses:
                     on_log(f"[swap][poll] remote_status={remote_status} result_ready=true")
                     on_log(f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status}")
                     on_log(f"[swap][poll] raw_response={remote_payload}")
@@ -308,7 +317,7 @@ class AkoolSwapFaceEngine:
                     "attempted": False,
                     "reason": "remote status not completed yet",
                 }
-                if remote_status in {"failed", "error", "cancelled"}:
+                if faceswap_status == 4 or remote_status in {"failed", "error", "cancelled"}:
                     raise EngineRunError(f"poll failed: request_id={job.request_id or 'n/a'} status={remote_status}")
                 if remote_status not in pending_statuses:
                     raise EngineRunError(f"poll failed: request_id={job.request_id or 'n/a'} unexpected status={remote_status}")
@@ -326,12 +335,16 @@ class AkoolSwapFaceEngine:
                         "provider_timeout: Akool request accepted but remained in processing without terminal status"
                     )
 
-            result_url = self.client.extract_result_url(remote_payload) or job.result_url
+            faceswap_status = self.client.extract_faceswap_status(remote_payload)
+            result_url = self.client.extract_result_url(remote_payload) if faceswap_status == 3 else None
             vendor_runtime["final_poll_raw"] = dict(remote_payload)
             vendor_runtime["poll"] = {
                 "last_remote_status": remote_status or None,
-                "vendor_result_url": result_url,
+                "vendor_result_url": result_url or job.result_url,
             }
+            vendor_runtime["faceswap_status"] = faceswap_status
+            vendor_runtime["vendor_result_url"] = result_url or job.result_url
+            vendor_runtime["result_ready"] = faceswap_status == 3 and bool(result_url)
             if not result_url:
                 raise EngineRunError("poll failed: swap provider returned no result url")
 
