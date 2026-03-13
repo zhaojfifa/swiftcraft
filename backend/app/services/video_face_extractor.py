@@ -155,13 +155,23 @@ class VideoFaceExtractor:
         target_faces: List[Dict[str, Any]] = []
         for index, bridged in enumerate(bridged_target_images):
             selected_face = selected_faces[index]
+            try:
+                detected = await self.client.detect_faces(
+                    bridged.public_url,
+                    single_face=True,
+                    return_face_url=True,
+                )
+                faces = list(detected.get("faces") or [])
+            except RuntimeError:
+                faces = []
+            standardized_face = faces[0] if faces else selected_face
             target_faces.append(
                 {
-                    "face_id": selected_face.get("face_id") or f"target-{index+1}",
-                    "path": bridged.public_url,
-                    "opts": selected_face.get("opts"),
-                    "region": selected_face.get("region"),
-                    "frame_time": selected_face.get("frame_time"),
+                    "face_id": standardized_face.get("face_id") or selected_face.get("face_id") or f"target-{index+1}",
+                    "path": standardized_face.get("path") or bridged.public_url,
+                    "opts": standardized_face.get("opts") or selected_face.get("opts"),
+                    "region": standardized_face.get("region") or selected_face.get("region"),
+                    "frame_time": standardized_face.get("frame_time") or selected_face.get("frame_time"),
                     "bridged_target_image_url": bridged.public_url,
                     "used_bbox_fallback": bool(selected_face.get("used_bbox_fallback")),
                 }

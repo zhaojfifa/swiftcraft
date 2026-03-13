@@ -237,30 +237,29 @@ class AkoolClient:
         logger.info("[swap][submit] raw_response=%s", self.safe_json(body))
         code = body.get("code") if isinstance(body, dict) else None
         msg = str(body.get("msg") or "") if isinstance(body, dict) else ""
-        soft_accepted = code == 1000 and "please be patient" in msg.lower()
-        if soft_accepted:
-            root = body if isinstance(body, dict) else {}
-            data_dict = root.get("data") if isinstance(root.get("data"), dict) else root
-            request_id = str(data_dict.get("_id") or data_dict.get("id") or "").strip()
-            job_id = str(data_dict.get("job_id") or data_dict.get("jobId") or "").strip()
-            result_url = str(data_dict.get("url") or "").strip() or None
+        root = body if isinstance(body, dict) else {}
+        data_dict = root.get("data") if isinstance(root.get("data"), dict) else root
+        request_id = str(data_dict.get("_id") or data_dict.get("id") or "").strip()
+        job_id = str(data_dict.get("job_id") or data_dict.get("jobId") or "").strip()
+        result_url = str(data_dict.get("url") or "").strip() or None
+        if code == 1000:
+            remote_status = "submitted" if msg == "OK" else "submitted_pending"
             logger.info(
-                "[swap][submit] soft_accepted code=%s msg=%s request_id=%s job_id=%s",
-                code,
-                msg,
+                "[swap][submit] accepted request_id=%s job_id=%s vendor_result_url=%s",
                 request_id or "",
                 job_id or "",
+                result_url or "",
             )
             if request_id or job_id:
                 return AkoolSwapJob(
                     request_id=request_id or job_id,
                     job_id=job_id or request_id,
-                    remote_status="submitted_pending",
+                    remote_status=remote_status,
                     result_url=result_url,
                     raw=body,
                 )
             raise RuntimeError(
-                f"akool submit soft-accepted but missing _id/job_id: body={self.safe_json(body)}"
+                f"akool submit accepted but missing _id/job_id: body={self.safe_json(body)}"
             )
         data = self._ensure_ok(body, "submit")
         data_dict = data if isinstance(data, dict) else {}
@@ -323,3 +322,12 @@ class AkoolClient:
             response = await client.get(ensure_http_url("result_url", result_url))
             response.raise_for_status()
             return response.content
+
+    async def probe_result(self, result_url: str) -> tuple[int, str]:
+        url = ensure_http_url("result_url", result_url)
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            response = await client.head(url)
+            if response.status_code in {405, 501}:
+                response = await client.get(url, headers={"Range": "bytes=0-0"})
+            content_type = str(response.headers.get("content-type") or "").lower()
+            return response.status_code, content_type

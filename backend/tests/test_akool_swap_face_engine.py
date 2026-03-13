@@ -208,6 +208,9 @@ class _FakeClient:
     def extract_result_url(self, payload):
         return payload.get("url")
 
+    async def probe_result(self, _url):
+        return 200, "video/mp4"
+
     async def download_result(self, _url):
         return b"video"
 

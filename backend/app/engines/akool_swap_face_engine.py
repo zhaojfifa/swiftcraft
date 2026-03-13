@@ -264,6 +264,9 @@ class AkoolSwapFaceEngine:
                 "soft_accepted": job.remote_status == "submitted_pending",
                 "remote_status": job.remote_status,
             }
+            vendor_runtime["vendor_request_id"] = job.request_id or None
+            vendor_runtime["vendor_job_id"] = job.job_id or None
+            vendor_runtime["vendor_result_url"] = job.result_url
             on_log(f"[swap][provider] request_id={job.request_id or 'n/a'} remote_status={job.remote_status or 'submitted'}")
             on_stage("rendering", 55)
 
@@ -309,9 +312,23 @@ class AkoolSwapFaceEngine:
 
             result_stage = "download_start"
             vendor_runtime["result_fetch"] = {"attempted": True, "reason": None}
-            on_log(f"[swap][result] downloading vendor_result_url={result_url}")
+            on_log(f"[swap][result] probe vendor_result_url={result_url}")
             try:
+                probe_status, probe_content_type = await self.client.probe_result(result_url)
+                if probe_status != 200 or "video/mp4" not in probe_content_type:
+                    vendor_runtime["result_fetch"] = {
+                        "attempted": True,
+                        "reason": f"probe failed: http_status={probe_status} content_type={probe_content_type or 'unknown'}",
+                    }
+                    on_log(
+                        f"[swap][result] download failed http_status={probe_status} content_type={probe_content_type or 'unknown'}"
+                    )
+                    raise EngineRunError(
+                        f"result fetch failed: probe http_status={probe_status} content_type={probe_content_type or 'unknown'}"
+                    )
+                on_log(f"[swap][result] downloading vendor_result_url={result_url}")
                 content = await self.client.download_result(result_url)
+                on_log(f"[swap][result] download ok bytes={len(content)}")
             except Exception as exc:
                 vendor_runtime["result_fetch"] = {
                     "attempted": True,
@@ -371,6 +388,9 @@ class AkoolSwapFaceEngine:
                         "_id": job.request_id,
                     },
                     "submit_response": job.raw,
+                    "vendor_request_id": job.request_id,
+                    "vendor_job_id": job.job_id,
+                    "vendor_result_url": job.result_url,
                     "provider_request_id": job.request_id,
                     "output_video_url": output_url,
                     "vendor_bridge_enabled": True,
@@ -405,6 +425,9 @@ class AkoolSwapFaceEngine:
                     "detect_summary": manifest["detect_summary"],
                     "vendor_runtime": vendor_runtime,
                     "submit_response": job.raw,
+                    "vendor_request_id": job.request_id or None,
+                    "vendor_job_id": job.job_id or None,
+                    "vendor_result_url": job.result_url,
                     "provider_request_id": job.request_id or None,
                     "output_video_url": output_url,
                     "swap_type": swap_type,
