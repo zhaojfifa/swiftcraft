@@ -49,10 +49,10 @@ def test_extract_remote_status_prefers_payload_state():
 
 
 def test_extract_remote_status_maps_faceswap_status():
-    assert AkoolClient.extract_remote_status({"faceswap_status": 1}) == "queued"
-    assert AkoolClient.extract_remote_status({"faceswap_status": 2}) == "rendering"
-    assert AkoolClient.extract_remote_status({"faceswap_status": 3}) == "completed"
-    assert AkoolClient.extract_remote_status({"faceswap_status": 4}) == "failed"
+    assert AkoolClient.extract_remote_status({"result": [{"faceswap_status": 1}]}) == "queued"
+    assert AkoolClient.extract_remote_status({"result": [{"faceswap_status": 2}]}) == "rendering"
+    assert AkoolClient.extract_remote_status({"result": [{"faceswap_status": 3}]}) == "completed"
+    assert AkoolClient.extract_remote_status({"result": [{"faceswap_status": 4}]}) == "failed"
 
 
 def test_detect_faces_parser_prefers_crop_landmarks():
@@ -201,8 +201,8 @@ def test_poll_video_faceswap_reads_official_result_list(monkeypatch):
     monkeypatch.setattr("app.services.akool_client.httpx.AsyncClient", lambda *args, **kwargs: _AsyncClient())
 
     payload = asyncio.run(client.poll_video_faceswap(_Job()))
-    assert payload["faceswap_status"] == 3
-    assert payload["url"] == "https://vendor.example/result.mp4"
+    assert payload["result"][0]["faceswap_status"] == 3
+    assert payload["result"][0]["url"] == "https://vendor.example/result.mp4"
 
 
 def test_swap_engine_no_legacy_selected_target_faces_reference():
@@ -250,13 +250,24 @@ class _FakeClient:
 
     async def poll_video_faceswap(self, _job):
         self.poll_calls += 1
-        return {"faceswap_status": 3, "url": "https://vendor.example/result.mp4"}
+        return {"result": [{"faceswap_status": 3, "url": "https://vendor.example/result.mp4"}]}
+
+    def extract_result_item(self, payload):
+        result = payload.get("result")
+        if isinstance(result, list) and result:
+            return result[0]
+        return None
 
     def extract_remote_status(self, payload):
+        item = self.extract_result_item(payload) or {}
+        value = item.get("faceswap_status")
+        if value == 3:
+            return "completed"
         return str(payload.get("status") or "submitted")
 
     def extract_faceswap_status(self, payload):
-        value = payload.get("faceswap_status")
+        item = self.extract_result_item(payload) or {}
+        value = item.get("faceswap_status")
         return int(value) if value is not None else None
 
     def faceswap_status_label(self, value):
@@ -264,7 +275,8 @@ class _FakeClient:
         return mapping.get(value, "unknown")
 
     def extract_result_url(self, payload):
-        return payload.get("url")
+        item = self.extract_result_item(payload) or {}
+        return item.get("url")
 
     async def probe_result(self, _url):
         return 200, "video/mp4"

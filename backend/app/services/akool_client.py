@@ -287,28 +287,27 @@ class AkoolClient:
         code = body.get("code") if isinstance(body, dict) else None
         if code != 1000:
             self._ensure_ok(body, "poll")
-        if isinstance(body, dict) and isinstance(body.get("result"), list):
-            items = [item for item in body.get("result") if isinstance(item, dict)]
-            return items[0] if items else {}
-        data = body.get("data") if isinstance(body, dict) else None
-        if isinstance(data, list):
-            items = [item for item in data if isinstance(item, dict)]
-        elif isinstance(data, dict):
-            for key in ("list", "records", "items", "data"):
-                value = data.get(key)
-                if isinstance(value, list):
-                    items = [item for item in value if isinstance(item, dict)]
-                    break
-            else:
-                items = [data]
-        else:
-            items = []
-        return items[0] if items else {}
+        return body if isinstance(body, dict) else {}
+
+    @staticmethod
+    def extract_result_item(payload: Dict[str, Any]) -> Dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        result = payload.get("result")
+        if isinstance(result, list):
+            for item in result:
+                if isinstance(item, dict):
+                    return item
+        data = payload.get("data")
+        if isinstance(data, dict):
+            return data
+        return None
 
     @staticmethod
     def extract_faceswap_status(payload: Dict[str, Any]) -> int | None:
+        item = AkoolClient.extract_result_item(payload) or payload
         for key in ("faceswap_status", "faceSwapStatus", "status_code"):
-            value = payload.get(key)
+            value = item.get(key)
             try:
                 if value is not None:
                     return int(value)
@@ -347,8 +346,9 @@ class AkoolClient:
 
     @staticmethod
     def extract_result_url(payload: Dict[str, Any]) -> str | None:
+        item = AkoolClient.extract_result_item(payload) or payload
         for key in ("url", "videoUrl", "video_url", "result_url", "output_url"):
-            value = payload.get(key)
+            value = item.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return None

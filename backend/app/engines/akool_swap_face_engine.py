@@ -293,11 +293,12 @@ class AkoolSwapFaceEngine:
             poll_started = time.perf_counter()
             stuck_threshold_sec = max(60, min(300, self.timeout_sec // 2))
             while True:
+                result_item = self.client.extract_result_item(remote_payload)
                 faceswap_status = self.client.extract_faceswap_status(remote_payload)
                 faceswap_status_label = self.client.faceswap_status_label(faceswap_status)
                 result_url = self.client.extract_result_url(remote_payload) if faceswap_status == 3 else None
                 result_ready = faceswap_status == 3 and bool(result_url)
-                item_found = bool(remote_payload)
+                item_found = result_item is not None
                 elapsed_sec = int(time.perf_counter() - poll_started)
                 if vendor_runtime["first_poll_raw"] is None:
                     vendor_runtime["first_poll_raw"] = dict(remote_payload)
