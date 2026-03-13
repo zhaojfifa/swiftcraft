@@ -162,6 +162,49 @@ def test_submit_video_faceswap_soft_accepted_returns_pending(monkeypatch):
     assert job.remote_status == "submitted_pending"
 
 
+def test_poll_video_faceswap_reads_official_result_list(monkeypatch):
+    client = AkoolClient.__new__(AkoolClient)
+    client.timeout = None
+    client.build_result_url = lambda request_id: f"https://openapi.akool.com/api/open/v3/faceswap/result/listbyids?_ids={request_id}"
+    client._headers = lambda: {"x-api-key": "test", "Content-Type": "application/json", "Accept": "application/json"}
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "code": 1000,
+                "result": [
+                    {
+                        "_id": "req-1",
+                        "job_id": "job-1",
+                        "url": "https://vendor.example/result.mp4",
+                        "faceswap_status": 3,
+                    }
+                ],
+            }
+
+    class _AsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, *args, **kwargs):
+            return _Response()
+
+    class _Job:
+        request_id = "req-1"
+
+    monkeypatch.setattr("app.services.akool_client.httpx.AsyncClient", lambda *args, **kwargs: _AsyncClient())
+
+    payload = asyncio.run(client.poll_video_faceswap(_Job()))
+    assert payload["faceswap_status"] == 3
+    assert payload["url"] == "https://vendor.example/result.mp4"
+
+
 def test_swap_engine_no_legacy_selected_target_faces_reference():
     source = Path("backend/app/engines/akool_swap_face_engine.py").read_text(encoding="utf-8")
     assert "selected_" + "target_faces" not in source

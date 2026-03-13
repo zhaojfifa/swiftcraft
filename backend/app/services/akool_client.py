@@ -284,7 +284,13 @@ class AkoolClient:
             )
             response.raise_for_status()
             body = response.json()
-        data = self._ensure_ok(body, "poll")
+        code = body.get("code") if isinstance(body, dict) else None
+        if code != 1000:
+            self._ensure_ok(body, "poll")
+        if isinstance(body, dict) and isinstance(body.get("result"), list):
+            items = [item for item in body.get("result") if isinstance(item, dict)]
+            return items[0] if items else {}
+        data = body.get("data") if isinstance(body, dict) else None
         if isinstance(data, list):
             items = [item for item in data if isinstance(item, dict)]
         elif isinstance(data, dict):

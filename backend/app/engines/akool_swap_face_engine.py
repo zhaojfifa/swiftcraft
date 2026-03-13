@@ -305,6 +305,8 @@ class AkoolSwapFaceEngine:
                 on_log(f"[swap][result-check] faceswap_status={faceswap_status if faceswap_status is not None else 'n/a'}")
                 on_log(f"[swap][result-check] result_ready={str(result_ready).lower()}")
                 if faceswap_status == 3 or remote_status in success_statuses:
+                    vendor_runtime["suspected_provider_stuck"] = False
+                    remote_status = "completed"
                     on_log(f"[swap][poll] remote_status={remote_status} result_ready=true")
                     on_log(f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status}")
                     on_log(f"[swap][poll] raw_response={remote_payload}")
@@ -345,6 +347,9 @@ class AkoolSwapFaceEngine:
             vendor_runtime["faceswap_status"] = faceswap_status
             vendor_runtime["vendor_result_url"] = result_url or job.result_url
             vendor_runtime["result_ready"] = faceswap_status == 3 and bool(result_url)
+            if faceswap_status == 3:
+                remote_status = "completed"
+                vendor_runtime["suspected_provider_stuck"] = False
             if not result_url:
                 raise EngineRunError("poll failed: swap provider returned no result url")
 
