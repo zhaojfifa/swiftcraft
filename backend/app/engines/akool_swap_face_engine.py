@@ -292,12 +292,14 @@ class AkoolSwapFaceEngine:
             pending_statuses = {"submitted_pending", "pending", "processing", "queued", "submitted", "rendering", ""}
             poll_started = time.perf_counter()
             stuck_threshold_sec = max(60, min(300, self.timeout_sec // 2))
+            resolved_result_url: str | None = None
             while True:
                 result_item = self.client.extract_result_item(remote_payload)
                 faceswap_status = self.client.extract_faceswap_status(remote_payload)
                 faceswap_status_label = self.client.faceswap_status_label(faceswap_status)
                 result_url = self.client.extract_result_url(remote_payload) if faceswap_status == 3 else None
                 result_ready = faceswap_status == 3 and bool(result_url)
+                fallback_result_url = None
                 item_found = result_item is not None
                 elapsed_sec = int(time.perf_counter() - poll_started)
                 if vendor_runtime["first_poll_raw"] is None:
@@ -319,9 +321,31 @@ class AkoolSwapFaceEngine:
                 on_log(f"[swap][result-check] faceswap_status_label={faceswap_status_label}")
                 on_log(f"[swap][result-check] vendor_result_url={result_url or job.result_url or 'n/a'}")
                 on_log(f"[swap][result-check] result_ready_expected={str(result_ready).lower()}")
+                if not result_ready and job.result_url:
+                    try:
+                        fallback_probe_status, fallback_probe_type = await self.client.probe_result(job.result_url)
+                        if fallback_probe_status == 200:
+                            fallback_result_url = job.result_url
+                            result_ready = True
+                            vendor_runtime["result_probe_http_status"] = fallback_probe_status
+                    except Exception:
+                        fallback_result_url = None
+                if fallback_result_url:
+                    vendor_runtime["vendor_result_url"] = fallback_result_url
+                    vendor_runtime["result_ready"] = True
+                    vendor_runtime["result_ready_expected"] = True
+                    vendor_runtime["suspected_provider_stuck"] = False
+                    remote_status = "completed"
+                    resolved_result_url = fallback_result_url
+                    on_log(f"[swap][poll] remote_status={remote_status} result_ready=true")
+                    on_log(f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status}")
+                    on_log(f"[swap][poll] raw_response={remote_payload}")
+                    result_url = fallback_result_url
+                    break
                 if faceswap_status == 3 or remote_status in success_statuses:
                     vendor_runtime["suspected_provider_stuck"] = False
                     remote_status = "completed"
+                    resolved_result_url = result_url
                     on_log(f"[swap][poll] remote_status={remote_status} result_ready=true")
                     on_log(f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status}")
                     on_log(f"[swap][poll] raw_response={remote_payload}")
@@ -354,7 +378,7 @@ class AkoolSwapFaceEngine:
 
             faceswap_status = self.client.extract_faceswap_status(remote_payload)
             faceswap_status_label = self.client.faceswap_status_label(faceswap_status)
-            result_url = self.client.extract_result_url(remote_payload) if faceswap_status == 3 else None
+            result_url = resolved_result_url or (self.client.extract_result_url(remote_payload) if faceswap_status == 3 else None)
             vendor_runtime["final_poll_raw"] = dict(remote_payload)
             vendor_runtime["poll"] = {
                 "last_remote_status": remote_status or None,
@@ -374,6 +398,8 @@ class AkoolSwapFaceEngine:
 
             result_stage = "download_start"
             vendor_runtime["result_fetch"] = {"attempted": True, "reason": None}
+            on_log(f"[swap][finalize] vendor_result_url={result_url}")
+            on_log("[swap][finalize] harvest_start")
             on_log(f"[swap][result-probe] start url={result_url}")
             try:
                 probe_status, probe_content_type = await self.client.probe_result(result_url)
@@ -402,9 +428,11 @@ class AkoolSwapFaceEngine:
             content = self._apply_audio_strategy(content, keep_original_audio)
             output_key = f"outputs/{task_id}/result.mp4"
             on_log(f"[swap][result-upload] start output_key={output_key}")
+            on_stage("finalizing", 90)
             output_url = self.r2.upload_bytes(output_key, content, content_type="video/mp4")
             vendor_runtime["result_uploaded"] = True
             on_log(f"[swap][result-upload] ok cdn_url={output_url}")
+            on_log(f"[swap][finalize] harvest_ok output_key={output_key}")
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             manifest_key = f"outputs/{task_id}/manifest.json"
             outputs = {
@@ -472,6 +500,7 @@ class AkoolSwapFaceEngine:
             manifest["outputs"]["manifest_url"] = manifest_url
             on_log(f"[swap][manifest] manifest_url={manifest_url}")
             on_log(f"[swap][finalize] status=succeeded output_key={output_key} output_url={output_url}")
+            on_log("[swap][finalize] task_completed status=success progress=100")
             on_stage("DONE", 100)
 
             return EngineResult(
