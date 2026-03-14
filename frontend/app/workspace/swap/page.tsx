@@ -13,7 +13,7 @@ type UiState =
   | { kind: 'error'; message: string; taskId?: string };
 
 export default function SwapWorkspacePage() {
-  const [mode, setMode] = useState<SwapMode>('baseline');
+  const [mode, setMode] = useState<SwapMode>('basic');
   const [state, setState] = useState<UiState>({ kind: 'idle' });
   const [task, setTask] = useState<TaskRecord | null>(null);
 
@@ -107,8 +107,8 @@ export default function SwapWorkspacePage() {
             style={{ padding: '8px 10px', borderRadius: 10, border: '1px solid #e5e7eb' }}
             disabled={state.kind === 'creating' || state.kind === 'polling'}
           >
-            <option value="baseline">baseline</option>
-            <option value="intelligent">intelligent</option>
+            <option value="basic">basic</option>
+            <option value="intelligence">intelligence</option>
           </select>
 
           <div style={{ color: '#6b7280', fontSize: 13 }}>

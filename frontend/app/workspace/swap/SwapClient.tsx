@@ -363,7 +363,8 @@ export default function SwapClient({ service = "swap" }: Props) {
   const runAvatarTask = async (overrides?: { motionKey?: string; characterKey?: string; modeOverride?: SwapMode }) => {
     const characterKey = overrides?.characterKey || (await uploadFileToR2(imageFile as File));
     const motionKey = overrides?.motionKey || (await uploadFileToR2(videoFile as File));
-    const modeForRequest = (overrides?.modeOverride || modeApi) === "intelligent" ? "intelligent" : "baseline";
+    const resolvedMode = String(overrides?.modeOverride || modeApi).toLowerCase();
+    const modeForRequest = resolvedMode === "intelligent" || resolvedMode === "intelligence" ? "intelligence" : "basic";
     return createTask({
       service_type: "action_replica",
       model_id: "kling-v2.6-std-motion",
@@ -423,7 +424,7 @@ export default function SwapClient({ service = "swap" }: Props) {
         const sourceFaceImageKey = await uploadFileToR2(imageFile as File);
         result = await createTask({
           service_type: "swap",
-          mode: "basic",
+          mode: isIntelligenceMode ? "intelligence" : "basic",
           swap_type: "face",
           provider: swapProvider,
           source_video_key: sourceVideoKey,
@@ -571,7 +572,7 @@ export default function SwapClient({ service = "swap" }: Props) {
       }
     : {
         service_type: "swap",
-        mode: "basic",
+        mode: isIntelligenceMode ? "intelligence" : "basic",
         swap_type: "face",
         provider: swapProvider,
         source_video_key: "(source video key)",
@@ -594,7 +595,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"swap\",\"mode\":\"basic\",\"swap_type\":\"face\",\"provider\":\"${swapProvider}\",\"source_video_key\":\"<source_video_key>\",\"source_face_image_key\":\"<source_face_key>\",\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${faceFidelity}\",\"face_enhance\":${faceEnhance}}'`
+        `  -d '{\"service_type\":\"swap\",\"mode\":\"${isIntelligenceMode ? "intelligence" : "basic"}\",\"swap_type\":\"face\",\"provider\":\"${swapProvider}\",\"source_video_key\":\"<source_video_key>\",\"source_face_image_key\":\"<source_face_key>\",\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${faceFidelity}\",\"face_enhance\":${faceEnhance}}'`
       ].join(" \\\n");
 
   const handleRetrySafeSlicing = async () => {
@@ -659,7 +660,7 @@ export default function SwapClient({ service = "swap" }: Props) {
           <button
             onClick={() => setMode("basic")}
             className={`px-6 py-1.5 rounded-md text-sm font-medium transition-all duration-200 z-10 ${
-              (mode === "baseline" || mode === "basic")
+              mode === "basic"
                 ? "bg-white text-slate-900 shadow-sm border border-slate-200 ring-1 ring-black/5"
                 : "text-slate-500 hover:text-slate-700"
             }`}
@@ -667,7 +668,7 @@ export default function SwapClient({ service = "swap" }: Props) {
             Basic
           </button>
           <button
-            onClick={() => !isSwap && setMode("intelligence")}
+            onClick={() => setMode("intelligence")}
             disabled={isSwap}
             className={`px-6 py-1.5 rounded-md text-sm font-medium transition-all duration-200 z-10 ${
               (mode === "intelligent" || mode === "intelligence")
@@ -677,7 +678,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                   : "text-slate-500 hover:text-slate-700"
             }`}
           >
-            {isSwap ? "Intelligence Coming Soon" : "Intelligence"}
+            Intelligence
           </button>
         </div>
 
@@ -1279,7 +1280,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                           </button>
                         </div>
                         <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                          Basic is fixed to <span className="font-semibold">akool_swap_face</span>. Intelligence reuses the same single-face contract through its own internal slot.
+                          Basic is fixed to <span className="font-semibold">akool_swap_face</span>. Intelligence reuses the same single-face contract through its own internal slot, with the same one-face input shape.
                         </div>
                       </div>
                     ) : null}
@@ -1406,7 +1407,7 @@ export default function SwapClient({ service = "swap" }: Props) {
               } ${!canRun ? "opacity-60 cursor-not-allowed" : ""}`}
             >
               <Play className="w-4 h-4" />
-              {isRunning ? "Running..." : isSwap ? "Run Basic" : `Run ${isIntelligenceMode ? "Intelligence" : "Basic"}`}
+              {isRunning ? "Running..." : `Run ${isIntelligenceMode ? "Intelligence" : "Basic"}`}
             </button>
             <div className="text-center mt-3 text-[10px] text-slate-400 font-medium">
               Estimated Cost: {isIntelligenceMode ? "$0.15" : "$0.05"}
