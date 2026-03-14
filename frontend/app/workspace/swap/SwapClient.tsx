@@ -537,6 +537,12 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskSwapStrength = String(taskMetadata.swap_strength || "");
   const taskSingleFaceOnly = String(taskMetadata.single_face_only ?? "");
   const taskFaceCountLimit = String(taskMetadata.face_count_limit ?? "");
+  const taskSourceFaceScore = String(taskMetadata.source_face_score ?? "");
+  const taskTargetFaceScore = String(taskMetadata.target_face_score ?? "");
+  const taskSelectedTargetFrameIndex = String(taskMetadata.selected_target_frame_index ?? "");
+  const taskRiskTags = Array.isArray(taskMetadata.risk_tags)
+    ? (taskMetadata.risk_tags as unknown[]).map((value) => String(value)).filter(Boolean)
+    : [];
   const canUseSafeDemo = Boolean(safeDemoMotionKey && safeDemoCharacterKey) && !isRunning;
   const canRun = isAvatar
     ? Boolean(videoFile && imageFile) && !isRunning
@@ -1408,6 +1414,10 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Keep Original Audio: {taskKeepOriginalAudio ? taskKeepOriginalAudio : "-"}</div>
                         <div>Detect Stage: {taskDetectStage || "-"}</div>
                         <div>Submit Stage: {taskSubmitStage || "-"}</div>
+                        <div>Source Face Score: {taskSourceFaceScore || "-"}</div>
+                        <div>Target Face Score: {taskTargetFaceScore || "-"}</div>
+                        <div>Selected Anchor Frame: {taskSelectedTargetFrameIndex || "-"}</div>
+                        <div>Risk Tags: {taskRiskTags.length ? taskRiskTags.join(", ") : "-"}</div>
                         <div>Remote Status: {taskRemoteStatus || "-"}</div>
                         <div>Elapsed: {taskElapsedMs ? `${taskElapsedMs} ms` : "-"}</div>
                       </div>
@@ -1489,6 +1499,14 @@ export default function SwapClient({ service = "swap" }: Props) {
                         Video: <a href={outputUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline">Open result.mp4</a>
                       </div>
                     ) : null}
+                    <div className="grid gap-1 text-xs text-slate-600 sm:grid-cols-2">
+                      <div>Mode: {taskModeSummary || task?.mode || "-"}</div>
+                      <div>Swap Strength: {taskSwapStrength || "-"}</div>
+                      <div>Source Face Score: {taskSourceFaceScore || "-"}</div>
+                      <div>Target Face Score: {taskTargetFaceScore || "-"}</div>
+                      <div>Selected Anchor Frame: {taskSelectedTargetFrameIndex || "-"}</div>
+                      <div>Risk Tags: {taskRiskTags.length ? taskRiskTags.join(", ") : "-"}</div>
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-2">

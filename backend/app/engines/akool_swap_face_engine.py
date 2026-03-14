@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import subprocess
 import tempfile
 import time
@@ -69,6 +70,46 @@ class AkoolSwapFaceEngine:
                 stderr = (exc.stderr or b"").decode("utf-8", errors="ignore")
                 raise EngineRunError(f"swap audio processing failed: {stderr[-400:]}") from exc
             return output_path.read_bytes()
+
+    def _apply_intelligence_postprocess(
+        self,
+        content: bytes,
+        on_log: Callable[[str], None],
+    ) -> tuple[bytes, Dict[str, Any]]:
+        filters = "unsharp=5:5:0.7:5:5:0.0,eq=contrast=1.03:saturation=1.02"
+        if shutil.which("ffmpeg") is None:
+            on_log("[swap][postprocess] skipped reason=ffmpeg_unavailable")
+            return content, {"attempted": True, "applied": False, "reason": "ffmpeg_unavailable", "filters": filters}
+        with tempfile.TemporaryDirectory(prefix="swap-postprocess-") as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            input_path = tmp_path / "result.mp4"
+            output_path = tmp_path / "result-postprocessed.mp4"
+            input_path.write_bytes(content)
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(input_path),
+                "-vf",
+                filters,
+                "-c:a",
+                "copy",
+                str(output_path),
+            ]
+            on_log(f"[swap][postprocess] start filters={filters}")
+            try:
+                subprocess.run(cmd, check=True, capture_output=True)
+                processed = output_path.read_bytes()
+                on_log("[swap][postprocess] ok")
+                return processed, {"attempted": True, "applied": True, "reason": None, "filters": filters}
+            except FileNotFoundError:
+                on_log("[swap][postprocess] skipped reason=ffmpeg_unavailable")
+                return content, {"attempted": True, "applied": False, "reason": "ffmpeg_unavailable", "filters": filters}
+            except subprocess.CalledProcessError as exc:
+                stderr = (exc.stderr or b"").decode("utf-8", errors="ignore")
+                reason = f"ffmpeg_failed:{stderr[-200:]}" if stderr else "ffmpeg_failed"
+                on_log(f"[swap][postprocess] failed reason={reason}")
+                return content, {"attempted": True, "applied": False, "reason": reason, "filters": filters}
 
     @staticmethod
     def _serialize_bridged_asset(asset: Any) -> Dict[str, Any]:
@@ -179,6 +220,7 @@ class AkoolSwapFaceEngine:
         target_face_score = None
         target_face_risk_tags: list[str] = []
         selected_target_frame_index = None
+        quality_summary: Dict[str, Any] | None = None
         on_log(
             f"[swap][preflight] provider={provider_name} mode={record.mode} swap_type={swap_type} "
             f"timeout_sec={self.timeout_sec} poll_interval_sec={self.poll_interval_sec}"
@@ -609,6 +651,10 @@ class AkoolSwapFaceEngine:
                 raise EngineRunError(f"result fetch failed: {exc}") from exc
             result_stage = "download_ok"
             content = self._apply_audio_strategy(content, keep_original_audio)
+            if is_intelligence_route:
+                processed_content, postprocess_info = self._apply_intelligence_postprocess(content, on_log)
+                vendor_runtime["postprocess"] = postprocess_info
+                content = processed_content
             output_key = f"outputs/{task_id}/result.mp4"
             on_log(f"[swap][result-upload] start output_key={output_key}")
             on_stage("finalizing", 90)
@@ -619,6 +665,15 @@ class AkoolSwapFaceEngine:
             on_log(f"[swap][finalize] harvest_ok output_key={output_key}")
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             manifest_key = f"outputs/{task_id}/manifest.json"
+            risk_tags = sorted({*source_face_risk_tags, *target_face_risk_tags})
+            quality_summary = {
+                "swap_strength": swap_strength,
+                "source_face_score": source_face_score,
+                "target_face_score": target_face_score,
+                "selected_target_frame_index": selected_target_frame_index,
+                "risk_tags": risk_tags,
+                "route_summary": f"{str(record.mode or 'basic').lower()}_{api_version}_single_face_{swap_strength}",
+            }
             outputs = {
                 "video_key": output_key,
                 "video_url": output_url,
@@ -636,7 +691,7 @@ class AkoolSwapFaceEngine:
                 },
                 outputs=outputs,
                 metrics={"total_latency_ms": elapsed_ms},
-                qa_summary={},
+                qa_summary={"quality_summary": quality_summary},
                 run_config_snapshot={
                     **run_cfg,
                     "provider": provider_name,
@@ -669,6 +724,8 @@ class AkoolSwapFaceEngine:
                     "target_face_score": target_face_score,
                     "selected_target_frame_index": selected_target_frame_index,
                     "target_face_risk_tags": target_face_risk_tags,
+                    "risk_tags": risk_tags,
+                    "quality_summary": quality_summary,
                     "source_crop_policy": source_crop_policy,
                     "target_anchor_policy": target_anchor_policy,
                     "face_detect": {
@@ -700,6 +757,7 @@ class AkoolSwapFaceEngine:
                     "resource_expire_days": 7,
                     "single_face_only": True,
                     "face_count_limit": 1,
+                    "mode": str(record.mode or "basic").lower(),
                 }),
             )
             self.r2.put_json(manifest_key, manifest)
@@ -727,6 +785,9 @@ class AkoolSwapFaceEngine:
                     "target_face_score": target_face_score,
                     "selected_target_frame_index": selected_target_frame_index,
                     "target_face_risk_tags": target_face_risk_tags,
+                    "risk_tags": risk_tags,
+                    "quality_summary": quality_summary,
+                    "mode": str(record.mode or "basic").lower(),
                     "request_id": job.request_id or None,
                     "job_id": job.job_id or None,
                     "remote_status": remote_status,

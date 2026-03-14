@@ -432,6 +432,7 @@ def test_swap_engine_run_submits_once_without_legacy_target_variable():
     engine.video_face_extractor = _FakeExtractor()
     engine.swap_quality_pipeline = _FakeQualityPipeline()
     engine._apply_audio_strategy = lambda content, _keep: content
+    engine._apply_intelligence_postprocess = lambda content, _on_log: (content, {"attempted": False, "applied": False, "reason": "not_used"})
 
     record = TaskRecord(
         task_id="task-1",
@@ -478,6 +479,10 @@ def test_swap_engine_intelligence_uses_v4_submit_path():
     engine.video_face_extractor = _FakeExtractor()
     engine.swap_quality_pipeline = _FakeQualityPipeline()
     engine._apply_audio_strategy = lambda content, _keep: content
+    engine._apply_intelligence_postprocess = lambda content, _on_log: (
+        content,
+        {"attempted": True, "applied": True, "reason": None, "filters": "test"},
+    )
 
     record = TaskRecord(
         task_id="task-v4-1",
@@ -516,3 +521,10 @@ def test_swap_engine_intelligence_uses_v4_submit_path():
     assert result.metadata["provider_contract"] == "akool_v4_faceswap_plus_video_single_face"
     assert result.metadata["api_version"] == "v4"
     assert result.metadata["model_style"] == "realistic"
+    assert result.metadata["risk_tags"] == ["face_small", "lighting_gap"]
+    assert result.metadata["quality_summary"]["swap_strength"] == "strong_identity"
+    assert result.metadata["quality_summary"]["source_face_score"] == 84
+    assert result.metadata["quality_summary"]["target_face_score"] == 78
+    assert result.metadata["quality_summary"]["selected_target_frame_index"] == 5
+    assert result.metadata["manifest_preview"]["quality_summary"]["route_summary"] == "intelligence_v4_single_face_strong_identity"
+    assert result.metadata["manifest_preview"]["risk_tags"] == ["face_small", "lighting_gap"]
