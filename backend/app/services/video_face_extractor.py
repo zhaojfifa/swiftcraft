@@ -51,10 +51,25 @@ class VideoFaceExtractor:
             raise EngineRunError(f"target_face_extraction failed: ffmpeg frame extraction failed: {stderr[-400:]}") from exc
         return sorted(frames_dir.glob("frame_*.jpg"))
 
-    async def detect_faces_from_frames(self, frame_paths: List[Path], service: str = "swap") -> List[Dict[str, Any]]:
+    @staticmethod
+    def _normalized_box(box: tuple[float, float, float, float], width: float, height: float) -> Dict[str, float]:
+        return {
+            "x": round(box[0] / max(width, 1.0), 4),
+            "y": round(box[1] / max(height, 1.0), 4),
+            "width": round(box[2] / max(width, 1.0), 4),
+            "height": round(box[3] / max(height, 1.0), 4),
+        }
+
+    async def detect_faces_from_frames(
+        self,
+        frame_paths: List[Path],
+        service: str = "swap",
+        on_log: Any | None = None,
+    ) -> List[Dict[str, Any]]:
         detections: List[Dict[str, Any]] = []
         for index, frame_path in enumerate(frame_paths):
             bridged = await self.bridge.bridge_asset(source_path=str(frame_path), service=service, asset_kind="target-frame")
+            frame_width, frame_height = self._image_size(frame_path)
             try:
                 detected = await self.client.detect_faces(
                     bridged.public_url,
@@ -62,12 +77,20 @@ class VideoFaceExtractor:
                     return_face_url=True,
                 )
                 for face in list(detected.get("faces") or []):
+                    raw_box = self._region_to_box(face.get("region"))
+                    normalized_box = self._normalized_box(raw_box, frame_width, frame_height) if raw_box is not None else None
+                    if on_log is not None:
+                        on_log(f"[swap][target-track][frame={index}] raw_box={raw_box}")
+                        on_log(f"[swap][target-track][frame={index}] normalized_box={normalized_box}")
+                        on_log(f"[swap][target-track][frame={index}] fallback=false")
                     detections.append(
                         {
                             "frame_index": index,
                             "frame_path": str(frame_path),
                             "frame_vendor_url": bridged.public_url,
                             "used_bbox_fallback": False,
+                            "raw_box": raw_box,
+                            "normalized_box": normalized_box,
                             **face,
                         }
                     )
@@ -75,7 +98,13 @@ class VideoFaceExtractor:
                 text = str(exc)
                 if "returned no crop_landmarks" not in text:
                     continue
-                width, height = self._image_size(frame_path)
+                width, height = frame_width, frame_height
+                raw_box = (0.0, 0.0, float(width), float(height))
+                normalized_box = self._normalized_box(raw_box, width, height)
+                if on_log is not None:
+                    on_log(f"[swap][target-track][frame={index}] raw_box={raw_box}")
+                    on_log(f"[swap][target-track][frame={index}] normalized_box={normalized_box}")
+                    on_log(f"[swap][target-track][frame={index}] fallback=true")
                 detections.append(
                     {
                         "frame_index": index,
@@ -88,6 +117,8 @@ class VideoFaceExtractor:
                         "frame_time": None,
                         "raw": {"fallback": "bbox", "reason": text},
                         "used_bbox_fallback": True,
+                        "raw_box": raw_box,
+                        "normalized_box": normalized_box,
                     }
                 )
         return detections
@@ -186,6 +217,7 @@ class VideoFaceExtractor:
     ) -> Dict[str, Any]:
         boxes: List[tuple[float, float, float, float]] = []
         frames: List[int] = []
+        fallback_frames = 0
         for candidate in candidates:
             box = self._region_to_box(candidate.get("region"))
             if box is None:
@@ -195,6 +227,8 @@ class VideoFaceExtractor:
                     box = (0.0, 0.0, float(width), float(height))
             if box is None:
                 continue
+            if bool(candidate.get("used_bbox_fallback")):
+                fallback_frames += 1
             boxes.append(box)
             frames.append(int(candidate.get("frame_index") or 0))
         if not boxes:
@@ -207,6 +241,10 @@ class VideoFaceExtractor:
         avg_y = sum(box[1] for box in boxes) / len(boxes)
         avg_w = sum(box[2] for box in boxes) / len(boxes)
         avg_h = sum(box[3] for box in boxes) / len(boxes)
+        frame_area = float((video_size[0] if video_size else 0) * (video_size[1] if video_size else 0)) or 1.0
+        avg_box_area = avg_w * avg_h
+        avg_box_area_ratio = avg_box_area / frame_area
+        full_frame_fallback = avg_box_area_ratio >= 0.8
         return {
             "tracked_frames": len(boxes),
             "frame_indexes": frames,
@@ -219,6 +257,9 @@ class VideoFaceExtractor:
             "selected_frame_index": selected_face.get("frame_index") if selected_face else None,
             "video_width": video_size[0] if video_size else None,
             "video_height": video_size[1] if video_size else None,
+            "fallback_frames": fallback_frames,
+            "avg_box_area_ratio": round(avg_box_area_ratio, 4),
+            "full_frame_fallback": full_frame_fallback,
         }
 
     def create_focused_target_clip(
@@ -227,7 +268,7 @@ class VideoFaceExtractor:
         source_video_path: Path,
         output_path: Path,
         face_track_summary: Dict[str, Any],
-    ) -> Path:
+    ) -> tuple[Path | None, Dict[str, Any]]:
         video_width = int(face_track_summary.get("video_width") or 0)
         video_height = int(face_track_summary.get("video_height") or 0)
         avg_box = dict(face_track_summary.get("avg_box") or {})
@@ -237,14 +278,44 @@ class VideoFaceExtractor:
         height = float(avg_box.get("height") or video_height or 0.0)
         if video_width <= 0 or video_height <= 0:
             raise EngineRunError("target_face_extraction failed: focused clip missing video dimensions")
-        margin_scale = 1.45
-        crop_w = min(video_width, self._even_int(width * margin_scale))
-        crop_h = min(video_height, self._even_int(height * margin_scale))
+        margin_x_scale = 1.2
+        margin_y_scale = 1.3
+        crop_w = min(video_width, self._even_int(width * margin_x_scale))
+        crop_h = min(video_height, self._even_int(height * margin_y_scale))
         center_x = x + width / 2.0
         center_y = y + height / 2.0
         crop_x = max(0, min(video_width - crop_w, self._even_int(center_x - crop_w / 2.0, minimum=0)))
         crop_y = max(0, min(video_height - crop_h, self._even_int(center_y - crop_h / 2.0, minimum=0)))
+        crop_area_ratio = (crop_w * crop_h) / max(video_width * video_height, 1)
+        focus_face_ratio = (width * height) / max(crop_w * crop_h, 1)
+        suspicious_overexpanded = crop_area_ratio > 0.75 and ((width * height) / max(video_width * video_height, 1)) < 0.45
+        focus_mode = "focused_crop"
+        focus_crop_valid = True
+        if bool(face_track_summary.get("full_frame_fallback")):
+            focus_crop_valid = False
+            focus_mode = "full_frame_fallback"
+        elif crop_area_ratio > 0.8 or suspicious_overexpanded:
+            focus_crop_valid = False
+            focus_mode = "suspicious_overexpanded"
         crop_filter = f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}"
+        focus_meta = {
+            "x": crop_x,
+            "y": crop_y,
+            "width": crop_w,
+            "height": crop_h,
+            "focus_crop_valid": focus_crop_valid,
+            "focus_mode": focus_mode,
+            "focus_face_ratio": round(focus_face_ratio, 4),
+            "focus_crop_area_ratio": round(crop_area_ratio, 4),
+            "crop_filter": crop_filter,
+        }
+        face_track_summary["focused_crop"] = focus_meta
+        face_track_summary["focus_crop_valid"] = focus_crop_valid
+        face_track_summary["focus_mode"] = focus_mode
+        face_track_summary["focus_face_ratio"] = round(focus_face_ratio, 4)
+        face_track_summary["focus_crop_area_ratio"] = round(crop_area_ratio, 4)
+        if not focus_crop_valid:
+            return None, focus_meta
         cmd = [
             "ffmpeg",
             "-y",
@@ -263,13 +334,7 @@ class VideoFaceExtractor:
         except subprocess.CalledProcessError as exc:
             stderr = (exc.stderr or b"").decode("utf-8", errors="ignore")
             raise EngineRunError(f"target_face_extraction failed: focused clip generation failed: {stderr[-400:]}") from exc
-        face_track_summary["focused_crop"] = {
-            "x": crop_x,
-            "y": crop_y,
-            "width": crop_w,
-            "height": crop_h,
-        }
-        return output_path
+        return output_path, focus_meta
 
     def export_target_face_images(self, selected_faces: List[Dict[str, Any]], output_dir: Path) -> List[Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -298,7 +363,7 @@ class VideoFaceExtractor:
         frames = self.extract_candidate_frames(video_path, max_frames=max_frames)
         if on_log is not None:
             on_log(f"[swap][target-sample] frames_sampled={len(frames)}")
-        detected_faces = await self.detect_faces_from_frames(frames, service=service)
+        detected_faces = await self.detect_faces_from_frames(frames, service=service, on_log=on_log)
         if not detected_faces:
             raise EngineRunError("target_face_extraction failed: no face detected in sampled frames")
         for detected in detected_faces:
@@ -333,19 +398,30 @@ class VideoFaceExtractor:
             for path in exported_paths
         ]
         focused_clip_asset = None
+        focus_crop_valid = False
+        focus_mode = "not_attempted"
+        focus_face_ratio = None
+        focus_crop_area_ratio = None
         if create_focused_clip:
-            focused_clip_path = self.create_focused_target_clip(
+            focused_clip_path, focus_meta = self.create_focused_target_clip(
                 source_video_path=video_path,
                 output_path=work_dir / "focused_target.mp4",
                 face_track_summary=face_track_summary,
             )
-            focused_clip_asset = await self.bridge.bridge_asset(
-                source_path=str(focused_clip_path),
-                service=service,
-                asset_kind="focused-target-video",
-            )
-            if on_log is not None:
+            focus_crop_valid = bool(focus_meta.get("focus_crop_valid"))
+            focus_mode = str(focus_meta.get("focus_mode") or "unknown")
+            focus_face_ratio = focus_meta.get("focus_face_ratio")
+            focus_crop_area_ratio = focus_meta.get("focus_crop_area_ratio")
+            if focused_clip_path is not None:
+                focused_clip_asset = await self.bridge.bridge_asset(
+                    source_path=str(focused_clip_path),
+                    service=service,
+                    asset_kind="focused-target-video",
+                )
+            if on_log is not None and focused_clip_asset is not None:
                 on_log(f"[swap][target-focus] focused_target_url={focused_clip_asset.public_url}")
+            if on_log is not None and focused_clip_asset is None:
+                on_log(f"[swap][target-focus] focus_crop_valid=false focus_mode={focus_mode}")
         target_faces: List[Dict[str, Any]] = []
         for index, bridged in enumerate(bridged_target_images):
             selected_face = selected_faces[index]
@@ -389,5 +465,9 @@ class VideoFaceExtractor:
             "focused_target_asset": focused_clip_asset,
             "focused_target_url": focused_clip_asset.public_url if focused_clip_asset is not None else None,
             "replacement_mode": "focused_clip" if focused_clip_asset is not None else "raw_target_video",
+            "focus_crop_valid": focus_crop_valid,
+            "focus_mode": focus_mode,
+            "focus_face_ratio": focus_face_ratio,
+            "focus_crop_area_ratio": focus_crop_area_ratio,
             "original_target_url": source_video_url,
         }

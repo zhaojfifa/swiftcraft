@@ -17,6 +17,10 @@
 - `target_face_risk_tags`
 - `risk_tags`
 - `quality_summary`
+- `focus_crop_valid`
+- `focus_mode`
+- `focus_face_ratio`
+- `focus_crop_area_ratio`
 
 ## Routing Behavior
 - `mode=basic`
@@ -57,6 +61,10 @@ Both routes remain single-face only in v1.x.
   - sampled frame indexes
   - averaged bbox
   - focused crop box
+- invalid focus now falls back explicitly instead of pretending focused success:
+  - `focus_crop_valid=false`
+  - `focus_mode=full_frame_fallback | suspicious_overexpanded`
+  - `replacement_mode=raw_target_video`
 
 ## Source Selection Route
 - `selected_source_face_index`

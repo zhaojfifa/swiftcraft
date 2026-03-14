@@ -405,8 +405,29 @@ class _FakeExtractor:
             },
             "focused_target_url": "https://vendor.example/focused-target.mp4",
             "replacement_mode": "focused_clip",
+            "focus_crop_valid": True,
+            "focus_mode": "focused_crop",
+            "focus_face_ratio": 0.42,
+            "focus_crop_area_ratio": 0.28,
             "original_target_url": "https://vendor.example/source-video.bin",
         }
+
+
+class _InvalidFocusExtractor(_FakeExtractor):
+    async def build_target_faces(self, **_kwargs):
+        payload = await super().build_target_faces(**_kwargs)
+        payload["focused_target_url"] = None
+        payload["replacement_mode"] = "raw_target_video"
+        payload["focus_crop_valid"] = False
+        payload["focus_mode"] = "full_frame_fallback"
+        payload["focus_face_ratio"] = 0.12
+        payload["focus_crop_area_ratio"] = 1.0
+        payload["face_track_summary"] = {
+            **dict(payload["face_track_summary"]),
+            "full_frame_fallback": True,
+            "avg_box_area_ratio": 1.0,
+        }
+        return payload
 
 
 class _FakeQualityPipeline:
@@ -578,6 +599,10 @@ def test_swap_engine_intelligence_uses_v4_submit_path():
     assert result.metadata["focused_target_url"] == "https://vendor.example/focused-target.mp4"
     assert result.metadata["original_target_url"] == "https://vendor.example/source-video.bin"
     assert result.metadata["replacement_mode"] == "focused_clip"
+    assert result.metadata["focus_crop_valid"] is True
+    assert result.metadata["focus_mode"] == "focused_crop"
+    assert result.metadata["focus_face_ratio"] == 0.42
+    assert result.metadata["focus_crop_area_ratio"] == 0.28
     assert result.metadata["face_track_summary"]["tracked_frames"] == 3
     assert result.metadata["provider_contract"] == "akool_v4_faceswap_plus_video_single_face"
     assert result.metadata["api_version"] == "v4"
@@ -590,6 +615,8 @@ def test_swap_engine_intelligence_uses_v4_submit_path():
     assert result.metadata["manifest_preview"]["quality_summary"]["route_summary"] == "intelligence_v4_single_face_strong_identity"
     assert result.metadata["manifest_preview"]["risk_tags"] == ["face_small", "lighting_gap"]
     assert result.metadata["manifest_preview"]["replacement_mode"] == "focused_clip"
+    assert result.metadata["manifest_preview"]["focus_crop_valid"] is True
+    assert result.metadata["manifest_preview"]["focus_mode"] == "focused_crop"
 
 
 def test_swap_engine_intelligence_selects_best_source_reference():
@@ -696,3 +723,59 @@ def test_swap_engine_intelligence_segment_route_stitches_and_fallbacks():
     assert result.metadata["replacement_mode"] == "segment_based"
     assert result.metadata["segment_summary"]["segment_count"] == 2
     assert result.metadata["vendor_runtime"]["segment_count"] == 2
+
+
+def test_swap_engine_intelligence_invalid_focus_falls_back_to_raw_target_video():
+    engine = AkoolSwapFaceEngine.__new__(AkoolSwapFaceEngine)
+    engine.provider = "swap_intelligence_akool"
+    engine.service_type = "swap"
+    engine.poll_interval_sec = 1
+    engine.timeout_sec = 30
+    engine.watchdog_timeout_sec = 30
+    engine.client = _FakeClient()
+    engine.r2 = _FakeR2Upload()
+    engine.vendor_bridge = _FakeBridge()
+    engine.video_face_extractor = _InvalidFocusExtractor()
+    engine.swap_quality_pipeline = _FakeQualityPipeline()
+    engine.swap_segmenter = _FakeSegmenter(segment_count=1)
+    engine._apply_audio_strategy = lambda content, _keep: content
+    engine._apply_intelligence_postprocess = lambda content, _on_log: (
+        content,
+        {"attempted": True, "applied": True, "reason": None, "filters": "test"},
+    )
+
+    record = TaskRecord(
+        task_id="task-v4-4",
+        service="swap",
+        mode="intelligence",
+        input_key="uploads/source.mp4",
+        input_image_key="uploads/source-face.png",
+        metadata={
+            "provider": "swap_intelligence_akool",
+            "run_config_snapshot": {
+                "provider": "swap_intelligence_akool",
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+                "keep_original_audio": True,
+                "face_enhance": True,
+            }
+        },
+    )
+
+    result = asyncio.run(
+        engine.run(
+            "task-v4-4",
+            record,
+            {},
+            on_log=lambda _message: None,
+            on_stage=lambda _stage, _progress: None,
+        )
+    )
+
+    assert engine.client.submit_plus_calls == 1
+    assert engine.client.last_submit_plus_kwargs["target_url"] == "https://vendor.example/source-video.bin"
+    assert result.metadata["focused_target_url"] is None
+    assert result.metadata["replacement_mode"] == "raw_target_video"
+    assert result.metadata["focus_crop_valid"] is False
+    assert result.metadata["focus_mode"] == "full_frame_fallback"
+    assert result.metadata["manifest_preview"]["focus_crop_valid"] is False

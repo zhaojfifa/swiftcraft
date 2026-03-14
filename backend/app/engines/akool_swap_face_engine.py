@@ -298,6 +298,10 @@ class AkoolSwapFaceEngine:
         replacement_mode = "raw_target_video"
         segment_summary: Dict[str, Any] | None = None
         segment_build: Dict[str, Any] | None = None
+        focus_crop_valid = False
+        focus_mode = "not_attempted"
+        focus_face_ratio = None
+        focus_crop_area_ratio = None
         quality_summary: Dict[str, Any] | None = None
         on_log(
             f"[swap][preflight] provider={provider_name} mode={record.mode} swap_type={swap_type} "
@@ -466,6 +470,10 @@ class AkoolSwapFaceEngine:
                     "face_track_summary": extraction.get("face_track_summary"),
                     "focused_target_url": extraction.get("focused_target_url"),
                     "replacement_mode": extraction.get("replacement_mode"),
+                    "focus_crop_valid": extraction.get("focus_crop_valid"),
+                    "focus_mode": extraction.get("focus_mode"),
+                    "focus_face_ratio": extraction.get("focus_face_ratio"),
+                    "focus_crop_area_ratio": extraction.get("focus_crop_area_ratio"),
                 }
                 vendor_runtime["target_face_extraction"] = {
                     "attempted": True,
@@ -473,6 +481,10 @@ class AkoolSwapFaceEngine:
                     "faces_detected": target_face_runtime["faces_detected"],
                     "require_landmarks": target_face_runtime["require_landmarks"],
                     "used_bbox_fallback": target_face_runtime["used_bbox_fallback"],
+                    "focus_crop_valid": target_face_runtime["focus_crop_valid"],
+                    "focus_mode": target_face_runtime["focus_mode"],
+                    "focus_face_ratio": target_face_runtime["focus_face_ratio"],
+                    "focus_crop_area_ratio": target_face_runtime["focus_crop_area_ratio"],
                 }
                 vendor_runtime["source_video_detect"] = {
                     "attempted": True,
@@ -487,6 +499,15 @@ class AkoolSwapFaceEngine:
                 focused_target_url = extraction.get("focused_target_url")
                 face_track_summary = extraction.get("face_track_summary")
                 replacement_mode = str(extraction.get("replacement_mode") or "focused_clip")
+                focus_crop_valid = bool(extraction.get("focus_crop_valid"))
+                focus_mode = str(extraction.get("focus_mode") or "unknown")
+                focus_face_ratio = extraction.get("focus_face_ratio")
+                focus_crop_area_ratio = extraction.get("focus_crop_area_ratio")
+                on_log(
+                    f"[swap][target-focus] focus_crop_valid={str(focus_crop_valid).lower()} "
+                    f"focus_mode={focus_mode} focus_face_ratio={focus_face_ratio} "
+                    f"focus_crop_area_ratio={focus_crop_area_ratio}"
+                )
                 if focused_target_url:
                     if self.swap_segmenter is None:
                         from app.services.swap_segmenter import SwapSegmenter
@@ -599,18 +620,30 @@ class AkoolSwapFaceEngine:
                     "face_track_summary": extraction.get("face_track_summary"),
                     "focused_target_url": extraction.get("focused_target_url"),
                     "replacement_mode": extraction.get("replacement_mode"),
+                    "focus_crop_valid": extraction.get("focus_crop_valid"),
+                    "focus_mode": extraction.get("focus_mode"),
+                    "focus_face_ratio": extraction.get("focus_face_ratio"),
+                    "focus_crop_area_ratio": extraction.get("focus_crop_area_ratio"),
                 }
                 target_face_score = extraction.get("target_face_score")
                 target_face_risk_tags = list(extraction.get("target_face_risk_tags") or [])
                 selected_target_frame_index = extraction.get("selected_target_frame_index")
                 original_target_url = extraction.get("original_target_url") or source_video_vendor_url
                 face_track_summary = extraction.get("face_track_summary")
+                focus_crop_valid = bool(extraction.get("focus_crop_valid"))
+                focus_mode = str(extraction.get("focus_mode") or "unknown")
+                focus_face_ratio = extraction.get("focus_face_ratio")
+                focus_crop_area_ratio = extraction.get("focus_crop_area_ratio")
                 vendor_runtime["target_face_extraction"] = {
                     "attempted": True,
                     "frames_sampled": target_face_runtime["frames_sampled"],
                     "faces_detected": target_face_runtime["faces_detected"],
                     "require_landmarks": target_face_runtime["require_landmarks"],
                     "used_bbox_fallback": target_face_runtime["used_bbox_fallback"],
+                    "focus_crop_valid": target_face_runtime["focus_crop_valid"],
+                    "focus_mode": target_face_runtime["focus_mode"],
+                    "focus_face_ratio": target_face_runtime["focus_face_ratio"],
+                    "focus_crop_area_ratio": target_face_runtime["focus_crop_area_ratio"],
                 }
                 vendor_runtime["source_video_detect"] = {
                     "attempted": True,
@@ -996,6 +1029,10 @@ class AkoolSwapFaceEngine:
                     "focused_target_url": focused_target_url,
                     "face_track_summary": face_track_summary,
                     "replacement_mode": replacement_mode,
+                    "focus_crop_valid": focus_crop_valid,
+                    "focus_mode": focus_mode,
+                    "focus_face_ratio": focus_face_ratio,
+                    "focus_crop_area_ratio": focus_crop_area_ratio,
                     "segment_summary": segment_summary,
                     "target_face_score": target_face_score,
                     "selected_target_frame_index": selected_target_frame_index,
@@ -1064,6 +1101,10 @@ class AkoolSwapFaceEngine:
                     "focused_target_url": focused_target_url,
                     "face_track_summary": face_track_summary,
                     "replacement_mode": replacement_mode,
+                    "focus_crop_valid": focus_crop_valid,
+                    "focus_mode": focus_mode,
+                    "focus_face_ratio": focus_face_ratio,
+                    "focus_crop_area_ratio": focus_crop_area_ratio,
                     "segment_summary": segment_summary,
                     "target_face_score": target_face_score,
                     "selected_target_frame_index": selected_target_frame_index,
