@@ -671,13 +671,10 @@ export default function SwapClient({ service = "swap" }: Props) {
           </button>
           <button
             onClick={() => setMode("intelligence")}
-            disabled={isSwap}
             className={`px-6 py-1.5 rounded-md text-sm font-medium transition-all duration-200 z-10 ${
               (mode === "intelligent" || mode === "intelligence")
                 ? "bg-white text-blue-600 shadow-sm border border-slate-200 ring-1 ring-black/5"
-                : isSwap
-                  ? "text-slate-300 cursor-not-allowed"
-                  : "text-slate-500 hover:text-slate-700"
+                : "text-slate-500 hover:text-slate-700"
             }`}
           >
             Intelligence
