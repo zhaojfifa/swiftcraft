@@ -28,7 +28,7 @@
   - route summary: `basic_v3_single_face_balanced`
 - `mode=intelligence`
   - provider: `swap_intelligence_akool`
-  - route summary: `intelligence_v4_single_face_strong_identity`
+  - route summary: `intelligence_v3_single_face_strong_identity`
 
 Both routes remain single-face only in v1.x.
 
@@ -54,11 +54,9 @@ Both routes remain single-face only in v1.x.
 - Postprocess is non-blocking. If it fails, finalize continues with the vendor result.
 
 ## Focused Replacement Route
-- `replacement_mode=mapped_anchor`
+- `replacement_mode=focused_clip`
 - `original_target_url` keeps the bridged full target video URL
 - `focused_target_url` stores the focused replacement clip URL
-- `source_face_mapping_url` stores the detected source anchor face URL used in `face_mapping`
-- `target_face_mapping_url` stores the detected target anchor face URL used in `face_mapping`
 - `face_track_summary` records:
   - sampled frame indexes
   - averaged bbox

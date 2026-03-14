@@ -116,22 +116,19 @@ class AkoolSwapFaceEngine:
     async def _run_intelligence_vendor_job(
         self,
         *,
-        source_url: str,
-        target_url: str,
-        model_style: str,
+        source_face: Dict[str, Any],
+        target_faces: list[Dict[str, Any]],
+        modify_video: str,
         face_enhance: bool,
-        face_mapping: list[Dict[str, Any]] | None,
         on_log: Callable[[str], None],
         segment_label: str | None = None,
     ) -> tuple[bytes, Dict[str, Any]]:
         prefix = f"[swap][segment][{segment_label}]" if segment_label else "[swap]"
-        job = await self.client.submit_faceswap_plus_video(
-            source_url=source_url,
-            target_url=target_url,
-            single_face_mode=False,
-            model_style=model_style or "realistic",
-            face_enhance=bool(face_enhance),
-            face_mapping=face_mapping,
+        job = await self.client.submit_video_faceswap(
+            source_face=source_face,
+            target_faces=target_faces,
+            modify_video=modify_video,
+            face_enhance=1 if bool(face_enhance) else 0,
         )
         on_log(f"{prefix} request_id={job.request_id or 'n/a'} remote_status={job.remote_status or 'submitted'}")
         remote_payload = dict(job.raw)
@@ -154,7 +151,7 @@ class AkoolSwapFaceEngine:
             if remote_status not in pending_statuses:
                 raise EngineRunError(f"segment poll failed: request_id={job.request_id or 'n/a'} unexpected status={remote_status}")
             await asyncio.sleep(self.poll_interval_sec)
-            remote_payload = await self.client.poll_faceswap_plus_video(job)
+            remote_payload = await self.client.poll_video_faceswap(job)
             remote_status = str(self.client.extract_remote_status(remote_payload) or "").strip().lower()
             elapsed_ms = int((time.perf_counter() - poll_started) * 1000)
             if elapsed_ms > self.timeout_sec * 1000:
@@ -257,11 +254,11 @@ class AkoolSwapFaceEngine:
         source_crop_policy = str(run_cfg.get("source_crop_policy") or ("tight_identity_focus" if is_intelligence_route else "standard_single_face")).strip().lower()
         target_anchor_policy = str(run_cfg.get("target_anchor_policy") or ("strong_identity_primary" if is_intelligence_route else "primary_face")).strip().lower()
         provider_contract = (
-            "akool_v4_faceswap_plus_video_single_face"
+            "akool_v3_video_faceswap_strong_identity"
             if is_intelligence_route
             else "akool_v3_video_faceswap"
         )
-        api_version = "v4" if is_intelligence_route else "v3"
+        api_version = "v3"
         model_style = "realistic" if is_intelligence_route else None
 
         if not source_video_url:
@@ -310,9 +307,6 @@ class AkoolSwapFaceEngine:
         source_score_breakdown: Dict[str, Any] = {}
         source_face_risk_tags: list[str] = []
         canonical_source_face_url = source_face_vendor_url = source_video_vendor_url = None
-        source_face_mapping_url = None
-        target_face_mapping_url = None
-        target_anchor_valid = False
         selected_source_face_index = 0
         source_selection_reason = "single_source_only"
         target_face_score = None
@@ -601,56 +595,40 @@ class AkoolSwapFaceEngine:
                         f"[swap][source-select] selected_index={selected_source_face_index} "
                         f"reason={source_selection_reason} score={selected_candidate.get('selection_score') or source_face_score}"
                     )
-                source_face_mapping_url = await self._detect_mapping_face_url(
-                    image_url=canonical_source_face_url or source_face_vendor_url,
-                    on_log=on_log,
-                    stage_label="source-anchor-detect",
+                intelligence_source_detect = await self.client.detect_faces(
+                    canonical_source_face_url or source_face_vendor_url,
+                    single_face=True,
+                    return_face_url=True,
                 )
-                target_anchor_image_url = None
-                if target_faces:
-                    target_anchor_image_url = str(
-                        target_faces[0].get("bridged_target_image_url")
-                        or target_faces[0].get("path")
-                        or ""
-                    ).strip() or None
-                if not target_anchor_image_url:
-                    raise EngineRunError("target_anchor_detect failed: missing target anchor image url")
-                target_face_mapping_url = await self._detect_mapping_face_url(
-                    image_url=target_anchor_image_url,
-                    on_log=on_log,
-                    stage_label="target-anchor-detect",
-                )
-                target_anchor_valid = True
-                replacement_mode = "segment_based" if segment_summary and int(segment_summary.get("segment_count") or 0) > 1 else "mapped_anchor"
-                on_log(f"[swap][mapping] source_face_url={source_face_mapping_url}")
-                on_log(f"[swap][mapping] target_face_url={target_face_mapping_url}")
+                intelligence_source_faces = list(intelligence_source_detect.get("faces") or [])
+                if not intelligence_source_faces:
+                    raise EngineRunError("source face not detected")
+                source_face = dict(intelligence_source_faces[0])
+                replacement_mode = "segment_based" if segment_summary and int(segment_summary.get("segment_count") or 0) > 1 else "focused_clip"
                 on_stage("running", 35)
                 submit_payload = {
-                    "source_url": canonical_source_face_url or source_face_vendor_url,
-                    "target_url": focused_target_url or source_video_vendor_url,
-                    "single_face_mode": False,
-                    "model_style": model_style or "realistic",
-                    "face_enhance": bool(face_enhance),
-                    "face_mapping": [
-                        {
-                            "source_face_info": {"face_url": source_face_mapping_url},
-                            "target_face_info": {"face_url": target_face_mapping_url},
-                        }
-                    ],
+                    "sourceImage": [{"path": source_face["path"], "opts": source_face["opts"]}],
+                    "targetImage": [{"path": face["path"], "opts": face["opts"]} for face in target_face_runtime["target_image_payload"]],
+                    "modifyVideo": focused_target_url or source_video_vendor_url,
+                    "face_enhance": face_enhance,
                 }
                 vendor_runtime["submit_validation"] = {
                     "sourceImage_count": 1,
-                    "targetImage_count": 1,
-                    "ok": True,
-                    "reason": None,
+                    "targetImage_count": len(submit_payload["targetImage"]),
+                    "ok": bool(submit_payload["targetImage"]),
+                    "reason": None if submit_payload["targetImage"] else "targetImage is empty after target-face extraction",
                 }
-                on_log("[swap][submit][validate] sourceImage_count=1 targetImage_count=1 ok=true")
+                if not submit_payload["targetImage"]:
+                    on_log("[swap][submit][validate] sourceImage_count=1 targetImage_count=0 ok=false")
+                    raise EngineRunError("submit validation failed: targetImage is empty after target-face extraction")
+                on_log(
+                    f"[swap][submit][validate] sourceImage_count=1 targetImage_count={len(submit_payload['targetImage'])} ok=true"
+                )
                 on_log(f"[swap][submit] endpoint={provider_debug.get('submit_endpoint')}")
-                on_log("[swap][submit] single_face_mode=false face_mapping_count=1")
                 on_log(
                     f"[swap][submit] payload_summary="
-                    f"{{'source_url': '{canonical_source_face_url or source_face_vendor_url}', 'target_url': '{focused_target_url or source_video_vendor_url}', "
-                    f"'single_face_mode': false, 'model_style': '{model_style or 'realistic'}', 'face_enhance': {bool(face_enhance)}, 'face_mapping_count': 1}}"
+                    f"{{'sourceImage_count': 1, 'targetImage_count': {len(submit_payload['targetImage'])}, "
+                    f"'modifyVideo': '{focused_target_url or source_video_vendor_url}', 'face_enhance': {face_enhance}}}"
                 )
                 on_log(f"[swap][submit] payload={submit_payload}")
             else:
@@ -776,16 +754,10 @@ class AkoolSwapFaceEngine:
                     result_path = Path(segment_build["segment_assets"][segment_index]["path"]).parent / f"result_segment_{segment_label}.mp4"
                     try:
                         segment_content, segment_runtime = await self._run_intelligence_vendor_job(
-                            source_url=canonical_source_face_url or source_face_vendor_url,
-                            target_url=str(segment.get("url") or ""),
-                            model_style=model_style or "realistic",
+                            source_face=source_face,
+                            target_faces=target_face_runtime["target_image_payload"],
+                            modify_video=str(segment.get("url") or ""),
                             face_enhance=bool(face_enhance),
-                            face_mapping=[
-                                {
-                                    "source_face_info": {"face_url": source_face_mapping_url},
-                                    "target_face_info": {"face_url": target_face_mapping_url},
-                                }
-                            ],
                             on_log=on_log,
                             segment_label=segment_label,
                         )
@@ -827,18 +799,11 @@ class AkoolSwapFaceEngine:
                 )
             else:
                 job = (
-                    await self.client.submit_faceswap_plus_video(
-                        source_url=canonical_source_face_url or source_face_vendor_url,
-                        target_url=focused_target_url or source_video_vendor_url,
-                        single_face_mode=False,
-                        model_style=model_style or "realistic",
-                        face_enhance=bool(face_enhance),
-                        face_mapping=[
-                            {
-                                "source_face_info": {"face_url": source_face_mapping_url},
-                                "target_face_info": {"face_url": target_face_mapping_url},
-                            }
-                        ],
+                    await self.client.submit_video_faceswap(
+                        source_face=source_face,
+                        target_faces=target_face_runtime["target_image_payload"],
+                        modify_video=focused_target_url or source_video_vendor_url,
+                        face_enhance=face_enhance,
                     )
                     if is_intelligence_route
                     else await self.client.submit_video_faceswap(
@@ -1113,9 +1078,6 @@ class AkoolSwapFaceEngine:
                     "face_track_summary": face_track_summary,
                     "target_anchor_summary": target_anchor_summary,
                     "replacement_mode": replacement_mode,
-                    "target_anchor_valid": target_anchor_valid,
-                    "source_face_mapping_url": source_face_mapping_url,
-                    "target_face_mapping_url": target_face_mapping_url,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,
                     "focus_face_ratio": focus_face_ratio,
@@ -1189,9 +1151,6 @@ class AkoolSwapFaceEngine:
                     "face_track_summary": face_track_summary,
                     "target_anchor_summary": target_anchor_summary,
                     "replacement_mode": replacement_mode,
-                    "target_anchor_valid": target_anchor_valid,
-                    "source_face_mapping_url": source_face_mapping_url,
-                    "target_face_mapping_url": target_face_mapping_url,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,
                     "focus_face_ratio": focus_face_ratio,
