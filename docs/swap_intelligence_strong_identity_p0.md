@@ -77,6 +77,7 @@ Both routes remain single-face only in v1.x.
 - `replacement_mode=segment_based` when focused target splitting is enabled
 - Current P0 behavior:
   - split focused target video into 2-4 short segments
+  - prefer cut points from sampled face-box movement / quality transitions instead of pure equal-duration slicing
   - run Intelligence swap per segment
   - stitch swapped segments back together
   - if a segment fails, fallback to the original focused segment

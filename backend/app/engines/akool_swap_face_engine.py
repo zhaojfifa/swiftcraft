@@ -518,11 +518,15 @@ class AkoolSwapFaceEngine:
                         source_url=focused_target_url,
                         work_dir=segment_work_dir,
                         service="swap",
+                        detected_faces=detected_target_faces,
                         on_log=on_log,
                     )
                     segment_summary = {
                         "segment_count": int(segment_build.get("segment_count") or 1),
                         "duration_sec": round(float(segment_build.get("duration_sec") or 0.0), 3),
+                        "segmentation_mode": segment_build.get("segmentation_mode"),
+                        "cut_points_sec": list(segment_build.get("cut_points_sec") or []),
+                        "transition_summary": list(segment_build.get("transition_summary") or []),
                         "segments": [
                             {
                                 "index": int(item.get("index") or 0),
