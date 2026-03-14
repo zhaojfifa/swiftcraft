@@ -23,9 +23,19 @@ THUMB_DIR.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="SwiftCraft Demo API")
 app.include_router(api_v1_router, prefix="/api/v1")
 
+default_cors_origins = [
+    "https://swiftcraft.ai",
+    "https://www.swiftcraft.ai",
+]
+raw_cors_origins = (os.getenv("CORS_ALLOW_ORIGINS") or "").strip()
+if raw_cors_origins:
+    cors_origins = [item.strip() for item in raw_cors_origins.split(",") if item.strip()]
+else:
+    cors_origins = default_cors_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://swiftcraft.ai", "https://www.swiftcraft.ai"],
+    allow_origins=cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

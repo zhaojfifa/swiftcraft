@@ -1,0 +1,78 @@
+services:
+  - type: web
+    name: swiftcraft-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: USE_MOCK_AI
+        value: "false"
+      - key: SWIFT_SWAP_DEFAULT_PROVIDER
+        value: akool_swap_face
+      - key: SWIFT_SWAP_ENABLE_FACE
+        value: "true"
+      - key: SWIFT_SWAP_ENABLE_SCENE
+        value: "false"
+      - key: PUBLIC_CDN_BASE_URL
+        sync: false
+      - key: CORS_ALLOW_ORIGINS
+        sync: false
+      - key: R2_ENDPOINT
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_PUBLIC_BASE
+        sync: false
+      - key: AKOOL_API_KEY
+        sync: false
+      - key: AKOOL_API_BASE_URL
+        value: https://openapi.akool.com
+      - key: AKOOL_FACE_DETECT_ENDPOINT
+        value: https://openapi.akool.com/interface/detect-api/detect_faces
+      - key: AKOOL_SWAP_ENDPOINT
+        value: /api/open/v3/faceswap/highquality/specifyvideo
+      - key: AKOOL_SWAP_RESULT_ENDPOINT
+        value: /api/open/v3/faceswap/result/listbyids
+      - key: AKOOL_SWAP_PLUS_ENDPOINT
+        value: /api/open/v4/faceswap/faceswapPlusByImage
+      - key: AKOOL_SWAP_PLUS_RESULT_ENDPOINT
+        value: /api/open/v3/faceswap/result/listbyids
+      - key: S3_VENDOR_BRIDGE_ENABLED
+        sync: false
+      - key: S3_VENDOR_BRIDGE_BUCKET
+        sync: false
+      - key: S3_VENDOR_BRIDGE_REGION
+        value: us-east-2
+      - key: S3_VENDOR_BRIDGE_PREFIX
+        value: vendor-public
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+  - type: web
+    name: swiftcraft-frontend
+    runtime: node
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    startCommand: npx next start -H 0.0.0.0 -p $PORT
+    envVars:
+      - key: NODE_VERSION
+        value: 20.12.2
+      - key: NEXT_PUBLIC_API_BASE
+        sync: false
+      - key: NEXT_PUBLIC_CDN_BASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_PRESET_MAP_JSON
+        sync: false
+      - key: NEXT_PUBLIC_SAFE_DEMO_MOTION_KEY
+        sync: false
+      - key: NEXT_PUBLIC_SAFE_DEMO_CHARACTER_KEY
+        sync: false
