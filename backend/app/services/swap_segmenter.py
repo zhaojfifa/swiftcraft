@@ -82,6 +82,7 @@ class SwapSegmenter:
         duration_sec: float,
         detected_faces: List[Dict[str, Any]],
         max_segments: int,
+        anchor_frame_index: int | None = None,
     ) -> Dict[str, Any]:
         if max_segments <= 1 or duration_sec <= 0:
             return {
@@ -153,12 +154,22 @@ class SwapSegmenter:
             segments.append({"index": index, "start_sec": round(start, 3), "duration_sec": duration})
         if len(segments) > max_segments:
             segments = segments[:max_segments]
+        anchor_segment_index = None
+        for segment in segments:
+            start_sec = float(segment["start_sec"])
+            end_sec = start_sec + float(segment["duration_sec"])
+            if anchor_frame_index is not None:
+                anchor_sec = round((anchor_frame_index / float(denominator)) * duration_sec, 3)
+                if start_sec <= anchor_sec < end_sec or (segment["index"] == len(segments) - 1 and anchor_sec <= end_sec):
+                    anchor_segment_index = int(segment["index"])
+                    break
         return {
             "segment_count": len(segments),
             "cut_points_sec": cut_points,
             "segments": segments,
             "segmentation_mode": "pose_motion_stability",
             "transition_summary": transitions,
+            "anchor_segment_index": anchor_segment_index,
         }
 
     def _split_video(self, source_path: Path, output_dir: Path, segments: List[Dict[str, Any]]) -> List[Path]:
@@ -203,6 +214,7 @@ class SwapSegmenter:
         work_dir: Path,
         service: str = "swap",
         detected_faces: List[Dict[str, Any]] | None = None,
+        anchor_frame_index: int | None = None,
         on_log: Any | None = None,
     ) -> Dict[str, Any]:
         source_path = work_dir / "focused_target.mp4"
@@ -213,6 +225,7 @@ class SwapSegmenter:
             duration_sec=duration_sec,
             detected_faces=list(detected_faces or []),
             max_segments=planned_count,
+            anchor_frame_index=anchor_frame_index,
         )
         segment_count = int(split_plan.get("segment_count") or 1)
         if on_log is not None:
@@ -221,6 +234,7 @@ class SwapSegmenter:
                 f"duration_sec={round(duration_sec, 2)} segmentation_mode={split_plan.get('segmentation_mode')}"
             )
             on_log(f"[swap][segment] cut_points_sec={split_plan.get('cut_points_sec')}")
+            on_log(f"[swap][segment] anchor_segment_index={split_plan.get('anchor_segment_index')}")
         segment_paths = self._split_video(source_path, work_dir / "segments", list(split_plan.get("segments") or []))
         segment_assets = []
         for index, segment_path in enumerate(segment_paths):
@@ -243,6 +257,7 @@ class SwapSegmenter:
             "segmentation_mode": split_plan.get("segmentation_mode"),
             "cut_points_sec": split_plan.get("cut_points_sec"),
             "transition_summary": split_plan.get("transition_summary"),
+            "anchor_segment_index": split_plan.get("anchor_segment_index"),
             "segments": split_plan.get("segments"),
             "segment_assets": segment_assets,
         }

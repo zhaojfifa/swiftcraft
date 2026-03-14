@@ -401,7 +401,17 @@ class _FakeExtractor:
                 "tracked_frames": 3,
                 "frame_indexes": [1, 3, 5],
                 "avg_box": {"x": 40, "y": 20, "width": 180, "height": 180},
+                "anchor_box": {"x": 42, "y": 22, "width": 176, "height": 176},
+                "smoothed_anchor_box": {"x": 44, "y": 24, "width": 172, "height": 172},
                 "focused_crop": {"x": 10, "y": 0, "width": 260, "height": 260},
+            },
+            "target_anchor_summary": {
+                "frame_index": 5,
+                "quality_score": 78,
+                "risk_tags": ["face_small"],
+                "region": [40, 20, 220, 200],
+                "raw_box": (40.0, 20.0, 180.0, 180.0),
+                "quality_breakdown": {"frontalness": 17},
             },
             "focused_target_url": "https://vendor.example/focused-target.mp4",
             "replacement_mode": "focused_clip",
@@ -486,7 +496,15 @@ class _FakeSegmenter:
             asset = _FakeBridgeAsset(f"https://vendor.example/segment-{index + 1:02d}.mp4")
             asset.object_key = f"vendor-public/swap/segment-{index + 1:02d}.mp4"
             segment_assets.append({"index": index, "path": path, "asset": asset, "url": asset.public_url})
-        return {"segment_count": self.segment_count, "duration_sec": 6.0, "segment_assets": segment_assets}
+        return {
+            "segment_count": self.segment_count,
+            "duration_sec": 6.0,
+            "segmentation_mode": "pose_motion_stability",
+            "cut_points_sec": [3.0] if self.segment_count > 1 else [],
+            "transition_summary": [{"frame_index": 5, "cut_sec": 3.0, "transition_score": 91.0}] if self.segment_count > 1 else [],
+            "anchor_segment_index": 1 if self.segment_count > 1 else 0,
+            "segment_assets": segment_assets,
+        }
 
     def concat_segments(self, segment_paths, output_path):
         output_path.write_bytes(b"".join(Path(path).read_bytes() for path in segment_paths))
@@ -617,6 +635,8 @@ def test_swap_engine_intelligence_uses_v4_submit_path():
     assert result.metadata["manifest_preview"]["replacement_mode"] == "focused_clip"
     assert result.metadata["manifest_preview"]["focus_crop_valid"] is True
     assert result.metadata["manifest_preview"]["focus_mode"] == "focused_crop"
+    assert result.metadata["target_anchor_summary"]["frame_index"] == 5
+    assert result.metadata["face_track_summary"]["smoothed_anchor_box"]["x"] == 44
 
 
 def test_swap_engine_intelligence_selects_best_source_reference():
@@ -722,6 +742,8 @@ def test_swap_engine_intelligence_segment_route_stitches_and_fallbacks():
     assert engine.client.submit_plus_calls == 2
     assert result.metadata["replacement_mode"] == "segment_based"
     assert result.metadata["segment_summary"]["segment_count"] == 2
+    assert result.metadata["segment_summary"]["segmentation_mode"] == "pose_motion_stability"
+    assert result.metadata["segment_summary"]["anchor_segment_index"] == 1
     assert result.metadata["vendor_runtime"]["segment_count"] == 2
 
 

@@ -72,12 +72,14 @@ Both routes remain single-face only in v1.x.
 - Current reasons:
   - `single_source_only`
   - `target_anchor_pose_match`
+- source selection now reads the explicit `target_anchor_summary` instead of only relying on the first detected target face payload
 
 ## Segment-Based Route
 - `replacement_mode=segment_based` when focused target splitting is enabled
 - Current P0 behavior:
   - split focused target video into 2-4 short segments
   - prefer cut points from sampled face-box movement / quality transitions instead of pure equal-duration slicing
+  - record `anchor_segment_index` so the anchor-driven segment can be processed first while final stitch keeps original order
   - run Intelligence swap per segment
   - stitch swapped segments back together
   - if a segment fails, fallback to the original focused segment

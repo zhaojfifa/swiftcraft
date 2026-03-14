@@ -241,6 +241,23 @@ class VideoFaceExtractor:
         avg_y = sum(box[1] for box in boxes) / len(boxes)
         avg_w = sum(box[2] for box in boxes) / len(boxes)
         avg_h = sum(box[3] for box in boxes) / len(boxes)
+        anchor_index = int(selected_face.get("frame_index") or 0) if selected_face else None
+        anchor_neighbors = []
+        for candidate in candidates:
+            frame_index = int(candidate.get("frame_index") or 0)
+            if anchor_index is not None and abs(frame_index - anchor_index) <= 1:
+                neighbor_box = self._region_to_box(candidate.get("region"))
+                if neighbor_box is not None:
+                    anchor_neighbors.append(neighbor_box)
+        anchor_box = self._region_to_box(selected_face.get("region")) if selected_face else None
+        smoothed_anchor_box = None
+        if anchor_neighbors:
+            smoothed_anchor_box = {
+                "x": round(sum(box[0] for box in anchor_neighbors) / len(anchor_neighbors), 2),
+                "y": round(sum(box[1] for box in anchor_neighbors) / len(anchor_neighbors), 2),
+                "width": round(sum(box[2] for box in anchor_neighbors) / len(anchor_neighbors), 2),
+                "height": round(sum(box[3] for box in anchor_neighbors) / len(anchor_neighbors), 2),
+            }
         frame_area = float((video_size[0] if video_size else 0) * (video_size[1] if video_size else 0)) or 1.0
         avg_box_area = avg_w * avg_h
         avg_box_area_ratio = avg_box_area / frame_area
@@ -254,7 +271,14 @@ class VideoFaceExtractor:
                 "width": round(avg_w, 2),
                 "height": round(avg_h, 2),
             },
-            "selected_frame_index": selected_face.get("frame_index") if selected_face else None,
+            "selected_frame_index": anchor_index,
+            "anchor_box": {
+                "x": round(anchor_box[0], 2),
+                "y": round(anchor_box[1], 2),
+                "width": round(anchor_box[2], 2),
+                "height": round(anchor_box[3], 2),
+            } if anchor_box is not None else None,
+            "smoothed_anchor_box": smoothed_anchor_box,
             "video_width": video_size[0] if video_size else None,
             "video_height": video_size[1] if video_size else None,
             "fallback_frames": fallback_frames,
@@ -271,11 +295,11 @@ class VideoFaceExtractor:
     ) -> tuple[Path | None, Dict[str, Any]]:
         video_width = int(face_track_summary.get("video_width") or 0)
         video_height = int(face_track_summary.get("video_height") or 0)
-        avg_box = dict(face_track_summary.get("avg_box") or {})
-        x = float(avg_box.get("x") or 0.0)
-        y = float(avg_box.get("y") or 0.0)
-        width = float(avg_box.get("width") or video_width or 0.0)
-        height = float(avg_box.get("height") or video_height or 0.0)
+        anchor_box = dict(face_track_summary.get("smoothed_anchor_box") or face_track_summary.get("anchor_box") or face_track_summary.get("avg_box") or {})
+        x = float(anchor_box.get("x") or 0.0)
+        y = float(anchor_box.get("y") or 0.0)
+        width = float(anchor_box.get("width") or video_width or 0.0)
+        height = float(anchor_box.get("height") or video_height or 0.0)
         if video_width <= 0 or video_height <= 0:
             raise EngineRunError("target_face_extraction failed: focused clip missing video dimensions")
         margin_x_scale = 1.2
@@ -303,6 +327,7 @@ class VideoFaceExtractor:
             "y": crop_y,
             "width": crop_w,
             "height": crop_h,
+            "anchor_frame_index": face_track_summary.get("selected_frame_index"),
             "focus_crop_valid": focus_crop_valid,
             "focus_mode": focus_mode,
             "focus_face_ratio": round(focus_face_ratio, 4),
@@ -462,6 +487,14 @@ class VideoFaceExtractor:
             "selected_target_frame_index": selected_faces[0].get("frame_index") if selected_faces else None,
             "target_face_risk_tags": list(selected_faces[0].get("risk_tags") or []) if selected_faces else [],
             "face_track_summary": face_track_summary,
+            "target_anchor_summary": {
+                "frame_index": selected_faces[0].get("frame_index") if selected_faces else None,
+                "quality_score": selected_faces[0].get("quality_score") if selected_faces else None,
+                "risk_tags": list(selected_faces[0].get("risk_tags") or []) if selected_faces else [],
+                "region": selected_faces[0].get("region") if selected_faces else None,
+                "raw_box": selected_faces[0].get("raw_box") if selected_faces else None,
+                "quality_breakdown": dict(selected_faces[0].get("quality_breakdown") or {}) if selected_faces else {},
+            },
             "focused_target_asset": focused_clip_asset,
             "focused_target_url": focused_clip_asset.public_url if focused_clip_asset is not None else None,
             "replacement_mode": "focused_clip" if focused_clip_asset is not None else "raw_target_video",

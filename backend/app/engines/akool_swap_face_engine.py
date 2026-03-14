@@ -295,6 +295,7 @@ class AkoolSwapFaceEngine:
         original_target_url = None
         focused_target_url = None
         face_track_summary: Dict[str, Any] | None = None
+        target_anchor_summary: Dict[str, Any] | None = None
         replacement_mode = "raw_target_video"
         segment_summary: Dict[str, Any] | None = None
         segment_build: Dict[str, Any] | None = None
@@ -474,6 +475,7 @@ class AkoolSwapFaceEngine:
                     "focus_mode": extraction.get("focus_mode"),
                     "focus_face_ratio": extraction.get("focus_face_ratio"),
                     "focus_crop_area_ratio": extraction.get("focus_crop_area_ratio"),
+                    "target_anchor_summary": extraction.get("target_anchor_summary"),
                 }
                 vendor_runtime["target_face_extraction"] = {
                     "attempted": True,
@@ -498,6 +500,7 @@ class AkoolSwapFaceEngine:
                 original_target_url = extraction.get("original_target_url") or source_video_vendor_url
                 focused_target_url = extraction.get("focused_target_url")
                 face_track_summary = extraction.get("face_track_summary")
+                target_anchor_summary = extraction.get("target_anchor_summary")
                 replacement_mode = str(extraction.get("replacement_mode") or "focused_clip")
                 focus_crop_valid = bool(extraction.get("focus_crop_valid"))
                 focus_mode = str(extraction.get("focus_mode") or "unknown")
@@ -519,12 +522,14 @@ class AkoolSwapFaceEngine:
                         work_dir=segment_work_dir,
                         service="swap",
                         detected_faces=detected_target_faces,
+                        anchor_frame_index=selected_target_frame_index,
                         on_log=on_log,
                     )
                     segment_summary = {
                         "segment_count": int(segment_build.get("segment_count") or 1),
                         "duration_sec": round(float(segment_build.get("duration_sec") or 0.0), 3),
                         "segmentation_mode": segment_build.get("segmentation_mode"),
+                        "anchor_segment_index": segment_build.get("anchor_segment_index"),
                         "cut_points_sec": list(segment_build.get("cut_points_sec") or []),
                         "transition_summary": list(segment_build.get("transition_summary") or []),
                         "segments": [
@@ -555,7 +560,7 @@ class AkoolSwapFaceEngine:
                         source_candidates_prepared.append(await _prepare_source_candidate(raw_value, source_index))
                     selection = self.swap_quality_pipeline.select_best_source_reference(
                         source_candidates=source_candidates_prepared,
-                        target_anchor=target_faces[0] if target_faces else None,
+                        target_anchor=target_anchor_summary or (target_faces[0] if target_faces else None),
                     )
                     selected_candidate = dict(selection["selected"])
                     selected_source_face_index = int(selection["selected_index"])
@@ -628,12 +633,14 @@ class AkoolSwapFaceEngine:
                     "focus_mode": extraction.get("focus_mode"),
                     "focus_face_ratio": extraction.get("focus_face_ratio"),
                     "focus_crop_area_ratio": extraction.get("focus_crop_area_ratio"),
+                    "target_anchor_summary": extraction.get("target_anchor_summary"),
                 }
                 target_face_score = extraction.get("target_face_score")
                 target_face_risk_tags = list(extraction.get("target_face_risk_tags") or [])
                 selected_target_frame_index = extraction.get("selected_target_frame_index")
                 original_target_url = extraction.get("original_target_url") or source_video_vendor_url
                 face_track_summary = extraction.get("face_track_summary")
+                target_anchor_summary = extraction.get("target_anchor_summary")
                 focus_crop_valid = bool(extraction.get("focus_crop_valid"))
                 focus_mode = str(extraction.get("focus_mode") or "unknown")
                 focus_face_ratio = extraction.get("focus_face_ratio")
@@ -698,9 +705,15 @@ class AkoolSwapFaceEngine:
             harvested_content: bytes | None = None
             if is_intelligence_route and segment_build and int(segment_summary.get("segment_count") or 0) > 1:
                 segment_results = []
-                stitched_inputs: list[Path] = []
+                stitched_inputs_by_index: dict[int, Path] = {}
                 segment_assets = list(segment_build.get("segment_assets") or [])
-                for segment in segment_assets:
+                anchor_segment_index = int(segment_summary.get("anchor_segment_index") or 0)
+                ordered_segments = sorted(
+                    segment_assets,
+                    key=lambda item: (0 if int(item.get("index") or 0) == anchor_segment_index else 1, int(item.get("index") or 0)),
+                )
+                segment_results_by_index: dict[int, dict[str, Any]] = {}
+                for segment in ordered_segments:
                     segment_index = int(segment.get("index") or 0)
                     segment_label = f"{segment_index + 1:02d}"
                     on_log(f"[swap][segment] start index={segment_label} target_url={segment.get('url')}")
@@ -715,28 +728,26 @@ class AkoolSwapFaceEngine:
                             segment_label=segment_label,
                         )
                         result_path.write_bytes(segment_content)
-                        stitched_inputs.append(result_path)
-                        segment_results.append(
-                            {
-                                "index": segment_index,
-                                "status": "succeeded",
-                                "fallback_used": False,
-                                **segment_runtime,
-                            }
-                        )
+                        stitched_inputs_by_index[segment_index] = result_path
+                        segment_results_by_index[segment_index] = {
+                            "index": segment_index,
+                            "status": "succeeded",
+                            "fallback_used": False,
+                            **segment_runtime,
+                        }
                     except Exception as exc:
                         fallback_path = Path(segment.get("path"))
-                        stitched_inputs.append(fallback_path)
-                        segment_results.append(
-                            {
-                                "index": segment_index,
-                                "status": "fallback_original_segment",
-                                "fallback_used": True,
-                                "reason": str(exc),
-                                "target_url": segment.get("url"),
-                            }
-                        )
+                        stitched_inputs_by_index[segment_index] = fallback_path
+                        segment_results_by_index[segment_index] = {
+                            "index": segment_index,
+                            "status": "fallback_original_segment",
+                            "fallback_used": True,
+                            "reason": str(exc),
+                            "target_url": segment.get("url"),
+                        }
                         on_log(f"[swap][segment] fallback index={segment_label} reason={exc}")
+                segment_results = [segment_results_by_index[index] for index in sorted(segment_results_by_index)]
+                stitched_inputs = [stitched_inputs_by_index[index] for index in sorted(stitched_inputs_by_index)]
                 stitched_path = self.swap_segmenter.concat_segments(
                     stitched_inputs,
                     Path(segment_build["segment_assets"][0]["path"]).parent / "stitched_result.mp4",
@@ -1032,6 +1043,7 @@ class AkoolSwapFaceEngine:
                     "original_target_url": original_target_url,
                     "focused_target_url": focused_target_url,
                     "face_track_summary": face_track_summary,
+                    "target_anchor_summary": target_anchor_summary,
                     "replacement_mode": replacement_mode,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,
@@ -1104,6 +1116,7 @@ class AkoolSwapFaceEngine:
                     "original_target_url": original_target_url,
                     "focused_target_url": focused_target_url,
                     "face_track_summary": face_track_summary,
+                    "target_anchor_summary": target_anchor_summary,
                     "replacement_mode": replacement_mode,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,

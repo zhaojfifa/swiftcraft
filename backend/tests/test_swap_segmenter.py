@@ -14,6 +14,7 @@ def test_build_stability_segments_uses_motion_cut_points():
         duration_sec=6.0,
         detected_faces=detected_faces,
         max_segments=2,
+        anchor_frame_index=2,
     )
 
     assert plan["segment_count"] == 2
@@ -21,6 +22,7 @@ def test_build_stability_segments_uses_motion_cut_points():
     assert len(plan["cut_points_sec"]) == 1
     assert 2.5 <= plan["cut_points_sec"][0] <= 4.5
     assert len(plan["segments"]) == 2
+    assert plan["anchor_segment_index"] in {0, 1}
 
 
 def test_build_stability_segments_falls_back_when_samples_insufficient():
