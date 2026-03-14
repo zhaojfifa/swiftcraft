@@ -166,3 +166,43 @@ class SwapQualityPipeline:
                 "occlusion": round(occlusion, 2),
             },
         }
+
+    def select_best_source_reference(
+        self,
+        *,
+        source_candidates: List[Dict[str, Any]],
+        target_anchor: Dict[str, Any] | None,
+    ) -> Dict[str, Any]:
+        if not source_candidates:
+            raise EngineRunError("source_selection failed: no source candidates")
+        if len(source_candidates) == 1:
+            candidate = dict(source_candidates[0])
+            candidate["selection_score"] = candidate.get("source_face_score")
+            return {
+                "selected": candidate,
+                "selected_index": int(candidate.get("source_index") or 0),
+                "selection_reason": "single_source_only",
+            }
+        target_breakdown = dict((target_anchor or {}).get("quality_breakdown") or {})
+        target_frontalness = float(target_breakdown.get("frontalness") or 0.0)
+        best_candidate = None
+        best_score = -1.0
+        for candidate in source_candidates:
+            source_breakdown = dict(candidate.get("source_score_breakdown") or {})
+            source_frontalness = float(source_breakdown.get("frontalness") or 0.0)
+            source_resolution = float(source_breakdown.get("resolution") or 0.0)
+            source_score = float(candidate.get("source_face_score") or 0.0)
+            frontalness_alignment = max(0.0, 20.0 - abs(source_frontalness - target_frontalness))
+            selection_score = source_score + frontalness_alignment + source_resolution
+            enriched = dict(candidate)
+            enriched["selection_score"] = round(selection_score, 2)
+            if selection_score > best_score:
+                best_candidate = enriched
+                best_score = selection_score
+        if best_candidate is None:
+            raise EngineRunError("source_selection failed: no source candidates")
+        return {
+            "selected": best_candidate,
+            "selected_index": int(best_candidate.get("source_index") or 0),
+            "selection_reason": "target_anchor_pose_match",
+        }

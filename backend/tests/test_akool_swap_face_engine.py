@@ -409,18 +409,37 @@ class _FakeExtractor:
 
 
 class _FakeQualityPipeline:
+    def __init__(self):
+        self.canonicalize_calls = 0
+        self.score_calls = 0
+
     async def canonicalize_source_face(self, **_kwargs):
+        self.canonicalize_calls += 1
         return {
             "canonical_path": Path("backend/tests/fixtures/canonical_source_face.png"),
-            "canonical_source_face_url": "https://vendor.example/canonical-source-face.png",
-            "canonical_source_face_asset": {"cdn_url": "https://vendor.example/canonical-source-face.png"},
+            "canonical_source_face_url": f"https://vendor.example/canonical-source-face-{self.canonicalize_calls}.png",
+            "canonical_source_face_asset": {"cdn_url": f"https://vendor.example/canonical-source-face-{self.canonicalize_calls}.png"},
         }
 
     def score_source_face(self, *_args, **_kwargs):
+        self.score_calls += 1
+        score = 84 if self.score_calls == 1 else 92
+        risk_tags = ["lighting_gap"] if self.score_calls == 1 else ["lighting_gap", "frontalness_low"]
         return {
-            "score": 84,
-            "risk_tags": ["lighting_gap"],
-            "breakdown": {},
+            "score": score,
+            "risk_tags": risk_tags,
+            "breakdown": {"frontalness": 14 if self.score_calls == 1 else 18, "resolution": 16},
+        }
+
+    def score_target_face(self, *_args, **_kwargs):
+        return {"score": 78, "risk_tags": ["face_small"], "breakdown": {"frontalness": 17}}
+
+    def select_best_source_reference(self, *, source_candidates, target_anchor):
+        selected = max(source_candidates, key=lambda candidate: candidate.get("source_face_score") or 0)
+        return {
+            "selected": selected,
+            "selected_index": selected["source_index"],
+            "selection_reason": "target_anchor_pose_match",
         }
 
 
@@ -548,3 +567,55 @@ def test_swap_engine_intelligence_uses_v4_submit_path():
     assert result.metadata["manifest_preview"]["quality_summary"]["route_summary"] == "intelligence_v4_single_face_strong_identity"
     assert result.metadata["manifest_preview"]["risk_tags"] == ["face_small", "lighting_gap"]
     assert result.metadata["manifest_preview"]["replacement_mode"] == "focused_clip"
+
+
+def test_swap_engine_intelligence_selects_best_source_reference():
+    engine = AkoolSwapFaceEngine.__new__(AkoolSwapFaceEngine)
+    engine.provider = "swap_intelligence_akool"
+    engine.service_type = "swap"
+    engine.poll_interval_sec = 1
+    engine.timeout_sec = 30
+    engine.watchdog_timeout_sec = 30
+    engine.client = _FakeClient()
+    engine.r2 = _FakeR2Upload()
+    engine.vendor_bridge = _FakeBridge()
+    engine.video_face_extractor = _FakeExtractor()
+    engine.swap_quality_pipeline = _FakeQualityPipeline()
+    engine._apply_audio_strategy = lambda content, _keep: content
+    engine._apply_intelligence_postprocess = lambda content, _on_log: (
+        content,
+        {"attempted": True, "applied": True, "reason": None, "filters": "test"},
+    )
+
+    record = TaskRecord(
+        task_id="task-v4-2",
+        service="swap",
+        mode="intelligence",
+        input_key="uploads/source.mp4",
+        input_image_key="uploads/source-face-a.png",
+        metadata={
+            "provider": "swap_intelligence_akool",
+            "run_config_snapshot": {
+                "provider": "swap_intelligence_akool",
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face-a.png",
+                "source_face_images": ["uploads/source-face-a.png", "uploads/source-face-b.png"],
+                "keep_original_audio": True,
+                "face_enhance": True,
+            }
+        },
+    )
+
+    result = asyncio.run(
+        engine.run(
+            "task-v4-2",
+            record,
+            {},
+            on_log=lambda _message: None,
+            on_stage=lambda _stage, _progress: None,
+        )
+    )
+
+    assert engine.client.last_submit_plus_kwargs["source_url"] == "https://vendor.example/canonical-source-face-2.png"
+    assert result.metadata["selected_source_face_index"] == 1
+    assert result.metadata["source_selection_reason"] == "target_anchor_pose_match"

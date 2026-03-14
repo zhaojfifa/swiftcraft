@@ -43,6 +43,7 @@ Both routes remain single-face only in v1.x.
 ## Intelligence Additions
 - Source face canonicalization normalizes the source identity anchor before submit.
 - Source scoring records identity risks such as lighting, occlusion, and expression drift.
+- Intelligence can now accept multiple backend source references via `source_face_images[]` and selects the best source by target anchor fit.
 - Target sampling scores candidate frames and records the selected anchor frame.
 - Intelligence target preprocessing now creates a focused target clip from the sampled face track and submits that clip instead of the raw target video.
 - Intelligence-only postprocess applies a lightweight sharpen/contrast pass after vendor download.
@@ -56,6 +57,13 @@ Both routes remain single-face only in v1.x.
   - sampled frame indexes
   - averaged bbox
   - focused crop box
+
+## Source Selection Route
+- `selected_source_face_index`
+- `source_selection_reason`
+- Current reasons:
+  - `single_source_only`
+  - `target_anchor_pose_match`
 
 ## Known Limitations
 - Single-face only.

@@ -99,6 +99,23 @@ def _swap_strength_for_mode(mode: str | None) -> str:
 def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, Any]:
     inputs = payload.get("inputs")
     data = dict(inputs) if isinstance(inputs, dict) else {}
+    def _collect_face_sources(*values: Any) -> list[str]:
+        collected: list[str] = []
+        for value in values:
+            if isinstance(value, list):
+                for item in value:
+                    text = str(item or "").strip()
+                    if text:
+                        collected.append(text)
+            elif value is not None:
+                text = str(value or "").strip()
+                if text:
+                    collected.append(text)
+        deduped: list[str] = []
+        for item in collected:
+            if item not in deduped:
+                deduped.append(item)
+        return deduped
     swap_type = str(payload.get("swap_type") or payload.get("subtype") or "face").strip().lower() or "face"
     if swap_type != "face":
         swap_type = "face"
@@ -127,6 +144,17 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         or payload.get("input_image_url")
         or ""
     ).strip() or None
+    source_face_images = _collect_face_sources(
+        data.get("source_face_images"),
+        data.get("source_face_image_urls"),
+        data.get("source_face_image_keys"),
+        payload.get("source_face_images"),
+        payload.get("source_face_image_urls"),
+        payload.get("source_face_image_keys"),
+        source_face_image,
+    )
+    if not source_face_image and source_face_images:
+        source_face_image = source_face_images[0]
     keep_original_audio = data.get("keep_original_audio")
     if keep_original_audio is None:
         keep_original_audio = payload.get("keep_original_audio")
@@ -164,6 +192,8 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         "source_face_image_key": (
             data.get("source_face_image_key") or payload.get("source_face_image_key") or source_face_image
         ),
+        "source_face_images": source_face_images,
+        "source_face_image_keys": source_face_images,
         "keep_original_audio": bool(keep_original_audio),
         "face_fidelity": face_fidelity,
         "face_enhance": bool(face_enhance),
@@ -504,9 +534,6 @@ class TaskService:
     def _validate_swap_single_face_inputs(self, payload: Dict[str, Any]) -> None:
         inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
         multi_face_fields = (
-            "source_face_images",
-            "source_face_image_urls",
-            "source_face_image_keys",
             "target_faces",
             "target_face_images",
             "face_mapping",

@@ -147,10 +147,13 @@ class AkoolSwapFaceEngine:
         on_stage: Callable[[str, int], None],
     ) -> EngineResult:
         run_cfg = dict((record.metadata or {}).get("run_config_snapshot") or {})
+        source_face_candidates_raw = list(run_cfg.get("source_face_images") or run_cfg.get("source_face_image_keys") or [])
         source_video_key = str(run_cfg.get("source_video_key") or run_cfg.get("input_key") or record.input_key or "").strip()
         source_face_image_key = str(
             run_cfg.get("source_face_image_key") or run_cfg.get("source_face_image_url") or record.input_image_key or ""
         ).strip()
+        if not source_face_candidates_raw and source_face_image_key:
+            source_face_candidates_raw = [source_face_image_key]
         source_video_url = self.resolve_public_url(run_cfg.get("source_video_url") or source_video_key or record.input_video_url)
         source_face_image_url = self.resolve_public_url(
             run_cfg.get("source_face_image_url") or source_face_image_key or record.input_image_url
@@ -215,8 +218,11 @@ class AkoolSwapFaceEngine:
             "suspected_provider_stuck": False,
         }
         source_face_score = None
+        source_score_breakdown: Dict[str, Any] = {}
         source_face_risk_tags: list[str] = []
         canonical_source_face_url = source_face_vendor_url = source_video_vendor_url = None
+        selected_source_face_index = 0
+        source_selection_reason = "single_source_only"
         target_face_score = None
         target_face_risk_tags: list[str] = []
         selected_target_frame_index = None
@@ -241,6 +247,46 @@ class AkoolSwapFaceEngine:
         finalize_stage = "pending"
         on_log(f"[swap][input] source_video_key={source_video_key or 'n/a'}")
         on_log(f"[swap][input] source_face_image_key={source_face_image_key or 'n/a'}")
+
+        async def _prepare_source_candidate(raw_value: str, source_index: int) -> Dict[str, Any]:
+            resolved_url = self.resolve_public_url(raw_value)
+            if not resolved_url:
+                raise EngineRunError("source_selection failed: source face candidate is empty")
+            bridged = await self.vendor_bridge.bridge_asset(
+                source_key=raw_value if not str(raw_value).startswith(("http://", "https://")) else None,
+                source_url=resolved_url if str(raw_value).startswith(("http://", "https://")) else None,
+                service="swap",
+                asset_kind="source-face",
+            )
+            detected = await self.client.detect_faces(
+                bridged.public_url,
+                single_face=True,
+                return_face_url=True,
+            )
+            faces = list(detected.get("faces") or [])
+            if not faces:
+                raise EngineRunError("source face not detected")
+            detected_face = faces[0]
+            with tempfile.TemporaryDirectory(prefix=f"swap-source-select-{task_id[:8]}-{source_index}-") as tmp_dir:
+                canonicalized = await self.swap_quality_pipeline.canonicalize_source_face(
+                    source_face_url=detected_face["path"],
+                    service="swap",
+                    output_dir=Path(tmp_dir),
+                )
+                source_score = self.swap_quality_pipeline.score_source_face(
+                    canonicalized["canonical_path"],
+                    detected_face,
+                )
+            return {
+                "source_index": source_index,
+                "raw_value": raw_value,
+                "source_face": detected_face,
+                "source_face_vendor_url": bridged.public_url,
+                "canonical_source_face_url": canonicalized["canonical_source_face_url"],
+                "source_face_score": source_score["score"],
+                "source_face_risk_tags": list(source_score["risk_tags"]),
+                "source_score_breakdown": dict(source_score.get("breakdown") or {}),
+            }
 
         try:
             bridged_face = await self.vendor_bridge.bridge_asset(
@@ -297,6 +343,7 @@ class AkoolSwapFaceEngine:
                     )
                 source_face_score = source_score["score"]
                 source_face_risk_tags = list(source_score["risk_tags"])
+                source_score_breakdown = dict(source_score.get("breakdown") or {})
                 on_log(
                     f"[swap][source-canonicalize] canonical_source_face_url={canonical_source_face_url}"
                 )
@@ -372,6 +419,38 @@ class AkoolSwapFaceEngine:
                 focused_target_url = extraction.get("focused_target_url")
                 face_track_summary = extraction.get("face_track_summary")
                 replacement_mode = str(extraction.get("replacement_mode") or "focused_clip")
+                if self.swap_quality_pipeline is not None:
+                    source_candidates_prepared = [
+                        {
+                            "source_index": 0,
+                            "raw_value": source_face_candidates_raw[0] if source_face_candidates_raw else source_face_image_key,
+                            "source_face": source_face,
+                            "source_face_vendor_url": source_face_vendor_url,
+                            "canonical_source_face_url": canonical_source_face_url,
+                            "source_face_score": source_face_score,
+                            "source_face_risk_tags": list(source_face_risk_tags),
+                            "source_score_breakdown": dict(source_score_breakdown),
+                        }
+                    ]
+                    for source_index, raw_value in enumerate(source_face_candidates_raw[1:], start=1):
+                        source_candidates_prepared.append(await _prepare_source_candidate(raw_value, source_index))
+                    selection = self.swap_quality_pipeline.select_best_source_reference(
+                        source_candidates=source_candidates_prepared,
+                        target_anchor=target_faces[0] if target_faces else None,
+                    )
+                    selected_candidate = dict(selection["selected"])
+                    selected_source_face_index = int(selection["selected_index"])
+                    source_selection_reason = str(selection["selection_reason"] or "single_source_only")
+                    source_face = dict(selected_candidate["source_face"])
+                    source_face_vendor_url = str(selected_candidate["source_face_vendor_url"])
+                    canonical_source_face_url = str(selected_candidate["canonical_source_face_url"])
+                    source_face_score = selected_candidate.get("source_face_score")
+                    source_face_risk_tags = list(selected_candidate.get("source_face_risk_tags") or [])
+                    source_score_breakdown = dict(selected_candidate.get("source_score_breakdown") or {})
+                    on_log(
+                        f"[swap][source-select] selected_index={selected_source_face_index} "
+                        f"reason={source_selection_reason} score={selected_candidate.get('selection_score') or source_face_score}"
+                    )
                 on_stage("running", 35)
                 submit_payload = {
                     "source_url": canonical_source_face_url or source_face_vendor_url,
@@ -688,6 +767,7 @@ class AkoolSwapFaceEngine:
                 "swap_strength": swap_strength,
                 "source_face_score": source_face_score,
                 "target_face_score": target_face_score,
+                "selected_source_face_index": selected_source_face_index,
                 "selected_target_frame_index": selected_target_frame_index,
                 "risk_tags": risk_tags,
                 "route_summary": f"{str(record.mode or 'basic').lower()}_{api_version}_single_face_{swap_strength}",
@@ -720,6 +800,7 @@ class AkoolSwapFaceEngine:
                     "source_video_url": source_video_url,
                     "source_face_image_key": source_face_image_key,
                     "source_face_image_url": source_face_image_url,
+                    "source_face_images": source_face_candidates_raw,
                     "swap_type": swap_type,
                     "keep_original_audio": keep_original_audio,
                     "face_fidelity": face_fidelity,
@@ -738,6 +819,8 @@ class AkoolSwapFaceEngine:
                     "swap_strength": swap_strength,
                     "source_face_score": source_face_score,
                     "source_face_risk_tags": source_face_risk_tags,
+                    "selected_source_face_index": selected_source_face_index,
+                    "source_selection_reason": source_selection_reason,
                     "canonical_source_face_url": canonical_source_face_url,
                     "original_target_url": original_target_url,
                     "focused_target_url": focused_target_url,
@@ -803,6 +886,8 @@ class AkoolSwapFaceEngine:
                     "swap_strength": swap_strength,
                     "source_face_score": source_face_score,
                     "source_face_risk_tags": source_face_risk_tags,
+                    "selected_source_face_index": selected_source_face_index,
+                    "source_selection_reason": source_selection_reason,
                     "canonical_source_face_url": canonical_source_face_url,
                     "original_target_url": original_target_url,
                     "focused_target_url": focused_target_url,

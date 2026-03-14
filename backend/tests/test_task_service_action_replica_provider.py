@@ -115,6 +115,20 @@ def test_extract_swap_run_config_sets_strong_identity_for_intelligence():
     assert cfg["swap_strength"] == "strong_identity"
 
 
+def test_extract_swap_run_config_keeps_source_face_images():
+    cfg = _extract_swap_run_config(
+        {
+            "inputs": {
+                "source_video_key": "uploads/source.mp4",
+                "source_face_images": ["uploads/source-face-a.png", "uploads/source-face-b.png"],
+            }
+        },
+        "intelligence",
+    )
+    assert cfg["source_face_images"] == ["uploads/source-face-a.png", "uploads/source-face-b.png"]
+    assert cfg["source_face_image_url"] == "uploads/source-face-a.png"
+
+
 def test_swap_provider_validation_rejects_mismatched_provider():
     svc = _svc()
     try:
@@ -125,10 +139,15 @@ def test_swap_provider_validation_rejects_mismatched_provider():
         raise AssertionError("expected provider mismatch validation error")
 
 
-def test_swap_single_face_validation_rejects_face_arrays():
+def test_swap_single_face_validation_allows_multiple_source_references():
+    svc = _svc()
+    svc._validate_swap_single_face_inputs({"inputs": {"source_face_images": ["a.png", "b.png"]}})
+
+
+def test_swap_single_face_validation_rejects_target_face_arrays():
     svc = _svc()
     try:
-        svc._validate_swap_single_face_inputs({"inputs": {"source_face_images": ["a.png", "b.png"]}})
+        svc._validate_swap_single_face_inputs({"inputs": {"target_face_images": ["a.png", "b.png"]}})
     except Exception as exc:
         assert "single-face only" in str(exc)
     else:
