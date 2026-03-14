@@ -299,6 +299,8 @@ class _FakeClient:
         self.submit_calls = 0
         self.submit_plus_calls = 0
         self.poll_calls = 0
+        self.last_submit_kwargs = None
+        self.last_submit_plus_kwargs = None
 
     def debug_snapshot(self, provider_contract="akool_v3_video_faceswap"):
         return {
@@ -314,6 +316,7 @@ class _FakeClient:
 
     async def submit_video_faceswap(self, **kwargs):
         self.submit_calls += 1
+        self.last_submit_kwargs = kwargs
 
         class _Job:
             request_id = "req-1"
@@ -326,6 +329,7 @@ class _FakeClient:
 
     async def submit_faceswap_plus_video(self, **kwargs):
         self.submit_plus_calls += 1
+        self.last_submit_plus_kwargs = kwargs
 
         class _Job:
             request_id = "req-v4-1"
@@ -392,6 +396,15 @@ class _FakeExtractor:
             "target_face_score": 78,
             "selected_target_frame_index": 5,
             "target_face_risk_tags": ["face_small"],
+            "face_track_summary": {
+                "tracked_frames": 3,
+                "frame_indexes": [1, 3, 5],
+                "avg_box": {"x": 40, "y": 20, "width": 180, "height": 180},
+                "focused_crop": {"x": 10, "y": 0, "width": 260, "height": 260},
+            },
+            "focused_target_url": "https://vendor.example/focused-target.mp4",
+            "replacement_mode": "focused_clip",
+            "original_target_url": "https://vendor.example/source-video.bin",
         }
 
 
@@ -463,6 +476,7 @@ def test_swap_engine_run_submits_once_without_legacy_target_variable():
     assert engine.client.submit_calls == 1
     assert engine.client.submit_plus_calls == 0
     assert engine.client.poll_calls in {0, 1}
+    assert engine.client.last_submit_kwargs["modify_video"] == "https://vendor.example/source-video.bin"
     assert result.output_url == "https://cdn.example/outputs/task-1/result.mp4"
 
 
@@ -514,10 +528,15 @@ def test_swap_engine_intelligence_uses_v4_submit_path():
 
     assert engine.client.submit_calls == 0
     assert engine.client.submit_plus_calls == 1
+    assert engine.client.last_submit_plus_kwargs["target_url"] == "https://vendor.example/focused-target.mp4"
     assert result.metadata["swap_strength"] == "strong_identity"
     assert result.metadata["source_face_score"] == 84
     assert result.metadata["target_face_score"] == 78
     assert result.metadata["selected_target_frame_index"] == 5
+    assert result.metadata["focused_target_url"] == "https://vendor.example/focused-target.mp4"
+    assert result.metadata["original_target_url"] == "https://vendor.example/source-video.bin"
+    assert result.metadata["replacement_mode"] == "focused_clip"
+    assert result.metadata["face_track_summary"]["tracked_frames"] == 3
     assert result.metadata["provider_contract"] == "akool_v4_faceswap_plus_video_single_face"
     assert result.metadata["api_version"] == "v4"
     assert result.metadata["model_style"] == "realistic"
@@ -528,3 +547,4 @@ def test_swap_engine_intelligence_uses_v4_submit_path():
     assert result.metadata["quality_summary"]["selected_target_frame_index"] == 5
     assert result.metadata["manifest_preview"]["quality_summary"]["route_summary"] == "intelligence_v4_single_face_strong_identity"
     assert result.metadata["manifest_preview"]["risk_tags"] == ["face_small", "lighting_gap"]
+    assert result.metadata["manifest_preview"]["replacement_mode"] == "focused_clip"

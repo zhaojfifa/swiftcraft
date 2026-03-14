@@ -220,6 +220,10 @@ class AkoolSwapFaceEngine:
         target_face_score = None
         target_face_risk_tags: list[str] = []
         selected_target_frame_index = None
+        original_target_url = None
+        focused_target_url = None
+        face_track_summary: Dict[str, Any] | None = None
+        replacement_mode = "raw_target_video"
         quality_summary: Dict[str, Any] | None = None
         on_log(
             f"[swap][preflight] provider={provider_name} mode={record.mode} swap_type={swap_type} "
@@ -328,6 +332,7 @@ class AkoolSwapFaceEngine:
                         work_dir=Path(tmp_dir),
                         service="swap",
                         max_frames=8,
+                        create_focused_clip=True,
                         on_log=on_log,
                     )
                 frame_paths = extraction["frames"]
@@ -343,6 +348,9 @@ class AkoolSwapFaceEngine:
                     "bridged_target_images": bridged_target_image_dicts,
                     "used_bbox_fallback": bool(extraction.get("used_bbox_fallback")),
                     "require_landmarks": bool(extraction.get("require_landmarks")),
+                    "face_track_summary": extraction.get("face_track_summary"),
+                    "focused_target_url": extraction.get("focused_target_url"),
+                    "replacement_mode": extraction.get("replacement_mode"),
                 }
                 vendor_runtime["target_face_extraction"] = {
                     "attempted": True,
@@ -360,10 +368,14 @@ class AkoolSwapFaceEngine:
                 target_face_score = extraction.get("target_face_score")
                 target_face_risk_tags = list(extraction.get("target_face_risk_tags") or [])
                 selected_target_frame_index = extraction.get("selected_target_frame_index")
+                original_target_url = extraction.get("original_target_url") or source_video_vendor_url
+                focused_target_url = extraction.get("focused_target_url")
+                face_track_summary = extraction.get("face_track_summary")
+                replacement_mode = str(extraction.get("replacement_mode") or "focused_clip")
                 on_stage("running", 35)
                 submit_payload = {
                     "source_url": canonical_source_face_url or source_face_vendor_url,
-                    "target_url": source_video_vendor_url,
+                    "target_url": focused_target_url or source_video_vendor_url,
                     "single_face_mode": True,
                     "model_style": model_style or "realistic",
                     "face_enhance": bool(face_enhance),
@@ -378,7 +390,7 @@ class AkoolSwapFaceEngine:
                 on_log(f"[swap][submit] endpoint={provider_debug.get('submit_endpoint')}")
                 on_log(
                     f"[swap][submit] payload_summary="
-                    f"{{'source_url': '{canonical_source_face_url or source_face_vendor_url}', 'target_url': '{source_video_vendor_url}', "
+                    f"{{'source_url': '{canonical_source_face_url or source_face_vendor_url}', 'target_url': '{focused_target_url or source_video_vendor_url}', "
                     f"'single_face_mode': true, 'model_style': '{model_style or 'realistic'}', 'face_enhance': {bool(face_enhance)}}}"
                 )
                 on_log(f"[swap][submit] payload={submit_payload}")
@@ -395,6 +407,7 @@ class AkoolSwapFaceEngine:
                         work_dir=Path(tmp_dir),
                         service="swap",
                         max_frames=8,
+                        create_focused_clip=False,
                         on_log=on_log,
                     )
                 frame_paths = extraction["frames"]
@@ -410,10 +423,15 @@ class AkoolSwapFaceEngine:
                     "bridged_target_images": bridged_target_image_dicts,
                     "used_bbox_fallback": bool(extraction.get("used_bbox_fallback")),
                     "require_landmarks": bool(extraction.get("require_landmarks")),
+                    "face_track_summary": extraction.get("face_track_summary"),
+                    "focused_target_url": extraction.get("focused_target_url"),
+                    "replacement_mode": extraction.get("replacement_mode"),
                 }
                 target_face_score = extraction.get("target_face_score")
                 target_face_risk_tags = list(extraction.get("target_face_risk_tags") or [])
                 selected_target_frame_index = extraction.get("selected_target_frame_index")
+                original_target_url = extraction.get("original_target_url") or source_video_vendor_url
+                face_track_summary = extraction.get("face_track_summary")
                 vendor_runtime["target_face_extraction"] = {
                     "attempted": True,
                     "frames_sampled": target_face_runtime["frames_sampled"],
@@ -469,8 +487,8 @@ class AkoolSwapFaceEngine:
             submit_stage = "submit_start"
             job = (
                 await self.client.submit_faceswap_plus_video(
-                    source_url=source_face_vendor_url,
-                    target_url=source_video_vendor_url,
+                    source_url=canonical_source_face_url or source_face_vendor_url,
+                    target_url=focused_target_url or source_video_vendor_url,
                     single_face_mode=True,
                     model_style=model_style or "realistic",
                     face_enhance=bool(face_enhance),
@@ -721,6 +739,10 @@ class AkoolSwapFaceEngine:
                     "source_face_score": source_face_score,
                     "source_face_risk_tags": source_face_risk_tags,
                     "canonical_source_face_url": canonical_source_face_url,
+                    "original_target_url": original_target_url,
+                    "focused_target_url": focused_target_url,
+                    "face_track_summary": face_track_summary,
+                    "replacement_mode": replacement_mode,
                     "target_face_score": target_face_score,
                     "selected_target_frame_index": selected_target_frame_index,
                     "target_face_risk_tags": target_face_risk_tags,
@@ -782,6 +804,10 @@ class AkoolSwapFaceEngine:
                     "source_face_score": source_face_score,
                     "source_face_risk_tags": source_face_risk_tags,
                     "canonical_source_face_url": canonical_source_face_url,
+                    "original_target_url": original_target_url,
+                    "focused_target_url": focused_target_url,
+                    "face_track_summary": face_track_summary,
+                    "replacement_mode": replacement_mode,
                     "target_face_score": target_face_score,
                     "selected_target_frame_index": selected_target_frame_index,
                     "target_face_risk_tags": target_face_risk_tags,

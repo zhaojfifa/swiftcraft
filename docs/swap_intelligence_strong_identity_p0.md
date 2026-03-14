@@ -44,8 +44,18 @@ Both routes remain single-face only in v1.x.
 - Source face canonicalization normalizes the source identity anchor before submit.
 - Source scoring records identity risks such as lighting, occlusion, and expression drift.
 - Target sampling scores candidate frames and records the selected anchor frame.
+- Intelligence target preprocessing now creates a focused target clip from the sampled face track and submits that clip instead of the raw target video.
 - Intelligence-only postprocess applies a lightweight sharpen/contrast pass after vendor download.
 - Postprocess is non-blocking. If it fails, finalize continues with the vendor result.
+
+## Focused Replacement Route
+- `replacement_mode=focused_clip`
+- `original_target_url` keeps the bridged full target video URL
+- `focused_target_url` stores the focused replacement clip URL
+- `face_track_summary` records:
+  - sampled frame indexes
+  - averaged bbox
+  - focused crop box
 
 ## Known Limitations
 - Single-face only.
