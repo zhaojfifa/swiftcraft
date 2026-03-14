@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Dict
 
 import httpx
@@ -31,6 +32,7 @@ class AkoolSwapFaceEngine:
         self.vendor_bridge = VendorAssetBridge()
         self.video_face_extractor = None
         self.swap_quality_pipeline = None
+        self.swap_segmenter = None
 
     def resolve_public_url(self, value: str | None) -> str | None:
         raw = str(value or "").strip()
@@ -110,6 +112,70 @@ class AkoolSwapFaceEngine:
                 reason = f"ffmpeg_failed:{stderr[-200:]}" if stderr else "ffmpeg_failed"
                 on_log(f"[swap][postprocess] failed reason={reason}")
                 return content, {"attempted": True, "applied": False, "reason": reason, "filters": filters}
+
+    async def _run_intelligence_vendor_job(
+        self,
+        *,
+        source_url: str,
+        target_url: str,
+        model_style: str,
+        face_enhance: bool,
+        on_log: Callable[[str], None],
+        segment_label: str | None = None,
+    ) -> tuple[bytes, Dict[str, Any]]:
+        prefix = f"[swap][segment][{segment_label}]" if segment_label else "[swap]"
+        job = await self.client.submit_faceswap_plus_video(
+            source_url=source_url,
+            target_url=target_url,
+            single_face_mode=True,
+            model_style=model_style or "realistic",
+            face_enhance=bool(face_enhance),
+        )
+        on_log(f"{prefix} request_id={job.request_id or 'n/a'} remote_status={job.remote_status or 'submitted'}")
+        remote_payload = dict(job.raw)
+        remote_status = str(job.remote_status or self.client.extract_remote_status(remote_payload)).strip().lower()
+        poll_started = time.perf_counter()
+        success_statuses = {"completed", "done", "success", "finished"}
+        pending_statuses = {"submitted_pending", "pending", "processing", "queued", "submitted", "rendering", ""}
+        resolved_result_url: str | None = None
+        while True:
+            faceswap_status = self.client.extract_faceswap_status(remote_payload)
+            result_url = self.client.extract_result_url(remote_payload) if faceswap_status == 3 else None
+            if faceswap_status == 3 or remote_status in success_statuses:
+                remote_status = "completed"
+                resolved_result_url = result_url
+                on_log(f"{prefix} remote_status={remote_status} result_ready=true")
+                break
+            on_log(f"{prefix} remote_status={remote_status} result_ready=false")
+            if faceswap_status == 4 or remote_status in {"failed", "error", "cancelled"}:
+                raise EngineRunError(f"segment poll failed: request_id={job.request_id or 'n/a'} status={remote_status}")
+            if remote_status not in pending_statuses:
+                raise EngineRunError(f"segment poll failed: request_id={job.request_id or 'n/a'} unexpected status={remote_status}")
+            await asyncio.sleep(self.poll_interval_sec)
+            remote_payload = await self.client.poll_faceswap_plus_video(job)
+            remote_status = str(self.client.extract_remote_status(remote_payload) or "").strip().lower()
+            elapsed_ms = int((time.perf_counter() - poll_started) * 1000)
+            if elapsed_ms > self.timeout_sec * 1000:
+                raise EngineRunError("provider_timeout: Akool segment remained in processing without terminal status")
+        result_url = resolved_result_url or job.result_url
+        if not result_url:
+            raise EngineRunError("segment poll failed: swap provider returned no result url")
+        on_log(f"{prefix} vendor_result_url={result_url}")
+        probe_status, probe_content_type = await self.client.probe_result(result_url)
+        if probe_status != 200 or "video/mp4" not in probe_content_type:
+            raise EngineRunError(
+                f"segment result fetch failed: probe http_status={probe_status} content_type={probe_content_type or 'unknown'}"
+            )
+        content = await self.client.download_result(result_url)
+        on_log(f"{prefix} download_ok bytes={len(content)}")
+        return content, {
+            "request_id": job.request_id,
+            "job_id": job.job_id,
+            "remote_status": remote_status,
+            "vendor_result_url": result_url,
+            "submit_raw": job.raw,
+            "poll_raw": remote_payload,
+        }
 
     @staticmethod
     def _serialize_bridged_asset(asset: Any) -> Dict[str, Any]:
@@ -230,6 +296,8 @@ class AkoolSwapFaceEngine:
         focused_target_url = None
         face_track_summary: Dict[str, Any] | None = None
         replacement_mode = "raw_target_video"
+        segment_summary: Dict[str, Any] | None = None
+        segment_build: Dict[str, Any] | None = None
         quality_summary: Dict[str, Any] | None = None
         on_log(
             f"[swap][preflight] provider={provider_name} mode={record.mode} swap_type={swap_type} "
@@ -419,6 +487,32 @@ class AkoolSwapFaceEngine:
                 focused_target_url = extraction.get("focused_target_url")
                 face_track_summary = extraction.get("face_track_summary")
                 replacement_mode = str(extraction.get("replacement_mode") or "focused_clip")
+                if focused_target_url:
+                    if self.swap_segmenter is None:
+                        from app.services.swap_segmenter import SwapSegmenter
+
+                        self.swap_segmenter = SwapSegmenter(bridge=self.vendor_bridge)
+                    segment_work_dir = Path(tempfile.mkdtemp(prefix=f"swap-segment-{task_id[:8]}-"))
+                    segment_build = await self.swap_segmenter.build_segments(
+                        source_url=focused_target_url,
+                        work_dir=segment_work_dir,
+                        service="swap",
+                        on_log=on_log,
+                    )
+                    segment_summary = {
+                        "segment_count": int(segment_build.get("segment_count") or 1),
+                        "duration_sec": round(float(segment_build.get("duration_sec") or 0.0), 3),
+                        "segments": [
+                            {
+                                "index": int(item.get("index") or 0),
+                                "url": item.get("url"),
+                                "storage_key": getattr(item.get("asset"), "object_key", None),
+                            }
+                            for item in list(segment_build.get("segment_assets") or [])
+                        ],
+                    }
+                    target_face_runtime["segment_summary"] = segment_summary
+                    replacement_mode = "segment_based" if segment_summary["segment_count"] > 1 else replacement_mode
                 if self.swap_quality_pipeline is not None:
                     source_candidates_prepared = [
                         {
@@ -564,22 +658,80 @@ class AkoolSwapFaceEngine:
                 )
                 on_log(f"[swap][submit] payload={submit_payload}")
             submit_stage = "submit_start"
-            job = (
-                await self.client.submit_faceswap_plus_video(
-                    source_url=canonical_source_face_url or source_face_vendor_url,
-                    target_url=focused_target_url or source_video_vendor_url,
-                    single_face_mode=True,
-                    model_style=model_style or "realistic",
-                    face_enhance=bool(face_enhance),
+            harvested_content: bytes | None = None
+            if is_intelligence_route and segment_build and int(segment_summary.get("segment_count") or 0) > 1:
+                segment_results = []
+                stitched_inputs: list[Path] = []
+                segment_assets = list(segment_build.get("segment_assets") or [])
+                for segment in segment_assets:
+                    segment_index = int(segment.get("index") or 0)
+                    segment_label = f"{segment_index + 1:02d}"
+                    on_log(f"[swap][segment] start index={segment_label} target_url={segment.get('url')}")
+                    result_path = Path(segment_build["segment_assets"][segment_index]["path"]).parent / f"result_segment_{segment_label}.mp4"
+                    try:
+                        segment_content, segment_runtime = await self._run_intelligence_vendor_job(
+                            source_url=canonical_source_face_url or source_face_vendor_url,
+                            target_url=str(segment.get("url") or ""),
+                            model_style=model_style or "realistic",
+                            face_enhance=bool(face_enhance),
+                            on_log=on_log,
+                            segment_label=segment_label,
+                        )
+                        result_path.write_bytes(segment_content)
+                        stitched_inputs.append(result_path)
+                        segment_results.append(
+                            {
+                                "index": segment_index,
+                                "status": "succeeded",
+                                "fallback_used": False,
+                                **segment_runtime,
+                            }
+                        )
+                    except Exception as exc:
+                        fallback_path = Path(segment.get("path"))
+                        stitched_inputs.append(fallback_path)
+                        segment_results.append(
+                            {
+                                "index": segment_index,
+                                "status": "fallback_original_segment",
+                                "fallback_used": True,
+                                "reason": str(exc),
+                                "target_url": segment.get("url"),
+                            }
+                        )
+                        on_log(f"[swap][segment] fallback index={segment_label} reason={exc}")
+                stitched_path = self.swap_segmenter.concat_segments(
+                    stitched_inputs,
+                    Path(segment_build["segment_assets"][0]["path"]).parent / "stitched_result.mp4",
                 )
-                if is_intelligence_route
-                else await self.client.submit_video_faceswap(
-                    source_face=source_face,
-                    target_faces=target_face_runtime["target_image_payload"],
-                    modify_video=source_video_vendor_url,
-                    face_enhance=face_enhance,
+                harvested_content = stitched_path.read_bytes()
+                vendor_runtime["segment_results"] = segment_results
+                vendor_runtime["segment_count"] = len(segment_results)
+                first_success = next((item for item in segment_results if not item.get("fallback_used")), None)
+                job = SimpleNamespace(
+                    request_id=str((first_success or {}).get("request_id") or "segment-composite"),
+                    job_id=str((first_success or {}).get("job_id") or "segment-composite"),
+                    remote_status="completed",
+                    result_url=None,
+                    raw={"segment_results": segment_results},
                 )
-            )
+            else:
+                job = (
+                    await self.client.submit_faceswap_plus_video(
+                        source_url=canonical_source_face_url or source_face_vendor_url,
+                        target_url=focused_target_url or source_video_vendor_url,
+                        single_face_mode=True,
+                        model_style=model_style or "realistic",
+                        face_enhance=bool(face_enhance),
+                    )
+                    if is_intelligence_route
+                    else await self.client.submit_video_faceswap(
+                        source_face=source_face,
+                        target_faces=target_face_runtime["target_image_payload"],
+                        modify_video=source_video_vendor_url,
+                        face_enhance=face_enhance,
+                    )
+                )
             submit_stage = "submit_ok"
             vendor_runtime["submit"] = {
                 "soft_accepted": job.remote_status == "submitted_pending",
@@ -605,97 +757,110 @@ class AkoolSwapFaceEngine:
 
             remote_payload = dict(job.raw)
             remote_status = str(job.remote_status or self.client.extract_remote_status(remote_payload)).strip().lower()
-            success_statuses = {"completed", "done", "success", "finished"}
-            pending_statuses = {"submitted_pending", "pending", "processing", "queued", "submitted", "rendering", ""}
-            poll_started = time.perf_counter()
-            stuck_threshold_sec = max(60, min(300, self.timeout_sec // 2))
-            resolved_result_url: str | None = None
-            while True:
-                result_item = self.client.extract_result_item(remote_payload)
-                faceswap_status = self.client.extract_faceswap_status(remote_payload)
-                faceswap_status_label = self.client.faceswap_status_label(faceswap_status)
-                result_url = self.client.extract_result_url(remote_payload) if faceswap_status == 3 else None
-                result_ready = faceswap_status == 3 and bool(result_url)
-                fallback_result_url = None
-                item_found = result_item is not None
-                elapsed_sec = int(time.perf_counter() - poll_started)
-                if vendor_runtime["first_poll_raw"] is None:
-                    vendor_runtime["first_poll_raw"] = dict(remote_payload)
+            if harvested_content is None:
+                success_statuses = {"completed", "done", "success", "finished"}
+                pending_statuses = {"submitted_pending", "pending", "processing", "queued", "submitted", "rendering", ""}
+                poll_started = time.perf_counter()
+                stuck_threshold_sec = max(60, min(300, self.timeout_sec // 2))
+                resolved_result_url: str | None = None
+                while True:
+                    result_item = self.client.extract_result_item(remote_payload)
+                    faceswap_status = self.client.extract_faceswap_status(remote_payload)
+                    faceswap_status_label = self.client.faceswap_status_label(faceswap_status)
+                    result_url = self.client.extract_result_url(remote_payload) if faceswap_status == 3 else None
+                    result_ready = faceswap_status == 3 and bool(result_url)
+                    fallback_result_url = None
+                    item_found = result_item is not None
+                    elapsed_sec = int(time.perf_counter() - poll_started)
+                    if vendor_runtime["first_poll_raw"] is None:
+                        vendor_runtime["first_poll_raw"] = dict(remote_payload)
+                    vendor_runtime["latest_poll_raw"] = dict(remote_payload)
+                    vendor_runtime["final_poll_raw"] = dict(remote_payload)
+                    vendor_runtime["poll"] = {
+                        "last_remote_status": remote_status or None,
+                        "vendor_result_url": result_url or job.result_url,
+                    }
+                    vendor_runtime["faceswap_status"] = faceswap_status
+                    vendor_runtime["faceswap_status_raw"] = faceswap_status
+                    vendor_runtime["faceswap_status_label"] = faceswap_status_label
+                    vendor_runtime["vendor_result_url"] = result_url or job.result_url
+                    vendor_runtime["result_ready"] = result_ready
+                    vendor_runtime["result_ready_expected"] = result_ready
+                    on_log(f"[swap][result-check] item_found={str(item_found).lower()}")
+                    on_log(f"[swap][result-check] faceswap_status_raw={faceswap_status if faceswap_status is not None else 'n/a'}")
+                    on_log(f"[swap][result-check] faceswap_status_label={faceswap_status_label}")
+                    on_log(f"[swap][result-check] vendor_result_url={result_url or job.result_url or 'n/a'}")
+                    on_log(f"[swap][result-check] result_ready_expected={str(result_ready).lower()}")
+                    if not result_ready and job.result_url:
+                        try:
+                            fallback_probe_status, fallback_probe_type = await self.client.probe_result(job.result_url)
+                            if fallback_probe_status == 200:
+                                fallback_result_url = job.result_url
+                                result_ready = True
+                                vendor_runtime["result_probe_http_status"] = fallback_probe_status
+                        except Exception:
+                            fallback_result_url = None
+                    if fallback_result_url:
+                        vendor_runtime["vendor_result_url"] = fallback_result_url
+                        vendor_runtime["result_ready"] = True
+                        vendor_runtime["result_ready_expected"] = True
+                        vendor_runtime["suspected_provider_stuck"] = False
+                        remote_status = "completed"
+                        resolved_result_url = fallback_result_url
+                        on_log(f"[swap][poll] remote_status={remote_status} result_ready=true")
+                        on_log(f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status}")
+                        on_log(f"[swap][poll] raw_response={remote_payload}")
+                        result_url = fallback_result_url
+                        break
+                    if faceswap_status == 3 or remote_status in success_statuses:
+                        vendor_runtime["suspected_provider_stuck"] = False
+                        remote_status = "completed"
+                        resolved_result_url = result_url
+                        on_log(f"[swap][poll] remote_status={remote_status} result_ready=true")
+                        on_log(f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status}")
+                        on_log(f"[swap][poll] raw_response={remote_payload}")
+                        break
+                    on_log(f"[swap][poll] remote_status={remote_status} result_ready=false")
+                    on_log(f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status}")
+                    on_log(f"[swap][poll] elapsed_sec={elapsed_sec}")
+                    on_log(f"[swap][poll] raw_response={remote_payload}")
+                    vendor_runtime["result_fetch"] = {
+                        "attempted": False,
+                        "reason": "remote status not completed yet",
+                    }
+                    if faceswap_status == 4 or remote_status in {"failed", "error", "cancelled"}:
+                        raise EngineRunError(f"poll failed: request_id={job.request_id or 'n/a'} status={remote_status}")
+                    if remote_status not in pending_statuses:
+                        raise EngineRunError(f"poll failed: request_id={job.request_id or 'n/a'} unexpected status={remote_status}")
+                    if faceswap_status in {1, 2} and elapsed_sec >= stuck_threshold_sec:
+                        vendor_runtime["suspected_provider_stuck"] = True
+                        on_log("[swap][poll] suspected_provider_stuck=true")
+                    await asyncio.sleep(self.poll_interval_sec)
+                    remote_payload = (
+                        await self.client.poll_faceswap_plus_video(job)
+                        if is_intelligence_route
+                        else await self.client.poll_video_faceswap(job)
+                    )
+                    remote_status = str(self.client.extract_remote_status(remote_payload) or "").strip().lower()
+                    elapsed_ms = int((time.perf_counter() - poll_started) * 1000)
+                    if elapsed_ms > self.timeout_sec * 1000:
+                        vendor_runtime["final_poll_raw"] = dict(remote_payload)
+                        on_log(f"[swap][poll] timeout provider_request_id={job.request_id or 'n/a'}")
+                        raise EngineRunError(
+                            "provider_timeout: Akool request accepted but remained in processing without terminal status"
+                        )
+            else:
+                resolved_result_url = None
+                vendor_runtime["faceswap_status"] = 3
+                vendor_runtime["faceswap_status_raw"] = 3
+                vendor_runtime["faceswap_status_label"] = "success"
+                vendor_runtime["result_ready"] = True
+                vendor_runtime["result_ready_expected"] = True
+                vendor_runtime["suspected_provider_stuck"] = False
+                vendor_runtime["first_poll_raw"] = dict(remote_payload)
                 vendor_runtime["latest_poll_raw"] = dict(remote_payload)
                 vendor_runtime["final_poll_raw"] = dict(remote_payload)
-                vendor_runtime["poll"] = {
-                    "last_remote_status": remote_status or None,
-                    "vendor_result_url": result_url or job.result_url,
-                }
-                vendor_runtime["faceswap_status"] = faceswap_status
-                vendor_runtime["faceswap_status_raw"] = faceswap_status
-                vendor_runtime["faceswap_status_label"] = faceswap_status_label
-                vendor_runtime["vendor_result_url"] = result_url or job.result_url
-                vendor_runtime["result_ready"] = result_ready
-                vendor_runtime["result_ready_expected"] = result_ready
-                on_log(f"[swap][result-check] item_found={str(item_found).lower()}")
-                on_log(f"[swap][result-check] faceswap_status_raw={faceswap_status if faceswap_status is not None else 'n/a'}")
-                on_log(f"[swap][result-check] faceswap_status_label={faceswap_status_label}")
-                on_log(f"[swap][result-check] vendor_result_url={result_url or job.result_url or 'n/a'}")
-                on_log(f"[swap][result-check] result_ready_expected={str(result_ready).lower()}")
-                if not result_ready and job.result_url:
-                    try:
-                        fallback_probe_status, fallback_probe_type = await self.client.probe_result(job.result_url)
-                        if fallback_probe_status == 200:
-                            fallback_result_url = job.result_url
-                            result_ready = True
-                            vendor_runtime["result_probe_http_status"] = fallback_probe_status
-                    except Exception:
-                        fallback_result_url = None
-                if fallback_result_url:
-                    vendor_runtime["vendor_result_url"] = fallback_result_url
-                    vendor_runtime["result_ready"] = True
-                    vendor_runtime["result_ready_expected"] = True
-                    vendor_runtime["suspected_provider_stuck"] = False
-                    remote_status = "completed"
-                    resolved_result_url = fallback_result_url
-                    on_log(f"[swap][poll] remote_status={remote_status} result_ready=true")
-                    on_log(f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status}")
-                    on_log(f"[swap][poll] raw_response={remote_payload}")
-                    result_url = fallback_result_url
-                    break
-                if faceswap_status == 3 or remote_status in success_statuses:
-                    vendor_runtime["suspected_provider_stuck"] = False
-                    remote_status = "completed"
-                    resolved_result_url = result_url
-                    on_log(f"[swap][poll] remote_status={remote_status} result_ready=true")
-                    on_log(f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status}")
-                    on_log(f"[swap][poll] raw_response={remote_payload}")
-                    break
-                on_log(f"[swap][poll] remote_status={remote_status} result_ready=false")
-                on_log(f"[swap][poll] request_id={job.request_id or 'n/a'} remote_status={remote_status}")
-                on_log(f"[swap][poll] elapsed_sec={elapsed_sec}")
-                on_log(f"[swap][poll] raw_response={remote_payload}")
-                vendor_runtime["result_fetch"] = {
-                    "attempted": False,
-                    "reason": "remote status not completed yet",
-                }
-                if faceswap_status == 4 or remote_status in {"failed", "error", "cancelled"}:
-                    raise EngineRunError(f"poll failed: request_id={job.request_id or 'n/a'} status={remote_status}")
-                if remote_status not in pending_statuses:
-                    raise EngineRunError(f"poll failed: request_id={job.request_id or 'n/a'} unexpected status={remote_status}")
-                if faceswap_status in {1, 2} and elapsed_sec >= stuck_threshold_sec:
-                    vendor_runtime["suspected_provider_stuck"] = True
-                    on_log("[swap][poll] suspected_provider_stuck=true")
-                await asyncio.sleep(self.poll_interval_sec)
-                remote_payload = (
-                    await self.client.poll_faceswap_plus_video(job)
-                    if is_intelligence_route
-                    else await self.client.poll_video_faceswap(job)
-                )
-                remote_status = str(self.client.extract_remote_status(remote_payload) or "").strip().lower()
-                elapsed_ms = int((time.perf_counter() - poll_started) * 1000)
-                if elapsed_ms > self.timeout_sec * 1000:
-                    vendor_runtime["final_poll_raw"] = dict(remote_payload)
-                    on_log(f"[swap][poll] timeout provider_request_id={job.request_id or 'n/a'}")
-                    raise EngineRunError(
-                        "provider_timeout: Akool request accepted but remained in processing without terminal status"
-                    )
+                on_log("[swap][poll] remote_status=completed result_ready=true")
 
             faceswap_status = self.client.extract_faceswap_status(remote_payload)
             faceswap_status_label = self.client.faceswap_status_label(faceswap_status)
@@ -714,38 +879,43 @@ class AkoolSwapFaceEngine:
             if faceswap_status == 3:
                 remote_status = "completed"
                 vendor_runtime["suspected_provider_stuck"] = False
-            if not result_url:
+            if harvested_content is None and not result_url:
                 raise EngineRunError("poll failed: swap provider returned no result url")
 
             result_stage = "download_start"
             finalize_stage = "harvest_start"
             vendor_runtime["result_fetch"] = {"attempted": True, "reason": None}
-            on_log(f"[swap][finalize] vendor_result_url={result_url}")
+            on_log(f"[swap][finalize] vendor_result_url={result_url or 'segment_stitched'}")
             on_log("[swap][finalize] harvest_start")
-            on_log(f"[swap][result-probe] start url={result_url}")
-            try:
-                probe_status, probe_content_type = await self.client.probe_result(result_url)
-                vendor_runtime["result_probe_http_status"] = probe_status
-                on_log(f"[swap][result-probe] http_status={probe_status}")
-                if probe_status != 200 or "video/mp4" not in probe_content_type:
+            if harvested_content is None:
+                on_log(f"[swap][result-probe] start url={result_url}")
+                try:
+                    probe_status, probe_content_type = await self.client.probe_result(result_url)
+                    vendor_runtime["result_probe_http_status"] = probe_status
+                    on_log(f"[swap][result-probe] http_status={probe_status}")
+                    if probe_status != 200 or "video/mp4" not in probe_content_type:
+                        vendor_runtime["result_fetch"] = {
+                            "attempted": True,
+                            "reason": f"probe failed: http_status={probe_status} content_type={probe_content_type or 'unknown'}",
+                        }
+                        on_log(f"[swap][result-download] failed http_status={probe_status} content_type={probe_content_type or 'unknown'}")
+                        raise EngineRunError(
+                            f"result fetch failed: probe http_status={probe_status} content_type={probe_content_type or 'unknown'}"
+                        )
+                    on_log(f"[swap][result-download] start url={result_url}")
+                    content = await self.client.download_result(result_url)
+                    vendor_runtime["result_downloaded"] = True
+                    on_log(f"[swap][result-download] ok local_file=in-memory bytes={len(content)}")
+                except Exception as exc:
                     vendor_runtime["result_fetch"] = {
                         "attempted": True,
-                        "reason": f"probe failed: http_status={probe_status} content_type={probe_content_type or 'unknown'}",
+                        "reason": str(exc),
                     }
-                    on_log(f"[swap][result-download] failed http_status={probe_status} content_type={probe_content_type or 'unknown'}")
-                    raise EngineRunError(
-                        f"result fetch failed: probe http_status={probe_status} content_type={probe_content_type or 'unknown'}"
-                    )
-                on_log(f"[swap][result-download] start url={result_url}")
-                content = await self.client.download_result(result_url)
+                    raise EngineRunError(f"result fetch failed: {exc}") from exc
+            else:
+                content = harvested_content
                 vendor_runtime["result_downloaded"] = True
-                on_log(f"[swap][result-download] ok local_file=in-memory bytes={len(content)}")
-            except Exception as exc:
-                vendor_runtime["result_fetch"] = {
-                    "attempted": True,
-                    "reason": str(exc),
-                }
-                raise EngineRunError(f"result fetch failed: {exc}") from exc
+                on_log(f"[swap][result-download] ok local_file=segment_stitched bytes={len(content)}")
             result_stage = "download_ok"
             content = self._apply_audio_strategy(content, keep_original_audio)
             if is_intelligence_route:
@@ -826,6 +996,7 @@ class AkoolSwapFaceEngine:
                     "focused_target_url": focused_target_url,
                     "face_track_summary": face_track_summary,
                     "replacement_mode": replacement_mode,
+                    "segment_summary": segment_summary,
                     "target_face_score": target_face_score,
                     "selected_target_frame_index": selected_target_frame_index,
                     "target_face_risk_tags": target_face_risk_tags,
@@ -893,6 +1064,7 @@ class AkoolSwapFaceEngine:
                     "focused_target_url": focused_target_url,
                     "face_track_summary": face_track_summary,
                     "replacement_mode": replacement_mode,
+                    "segment_summary": segment_summary,
                     "target_face_score": target_face_score,
                     "selected_target_frame_index": selected_target_frame_index,
                     "target_face_risk_tags": target_face_risk_tags,

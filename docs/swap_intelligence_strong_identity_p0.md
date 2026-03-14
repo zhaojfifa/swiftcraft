@@ -65,6 +65,14 @@ Both routes remain single-face only in v1.x.
   - `single_source_only`
   - `target_anchor_pose_match`
 
+## Segment-Based Route
+- `replacement_mode=segment_based` when focused target splitting is enabled
+- Current P0 behavior:
+  - split focused target video into 2-4 short segments
+  - run Intelligence swap per segment
+  - stitch swapped segments back together
+  - if a segment fails, fallback to the original focused segment
+
 ## Known Limitations
 - Single-face only.
 - Short-clip bias remains intentional. Recommended demo range is 4-8s.

@@ -1,5 +1,6 @@
 import asyncio
 import pytest
+import tempfile
 from pathlib import Path
 from app.engines.akool_swap_face_engine import AkoolSwapFaceEngine
 from app.models.task import TaskRecord
@@ -451,6 +452,26 @@ class _FakeR2Upload(_FakeR2):
         return None
 
 
+class _FakeSegmenter:
+    def __init__(self, *, segment_count: int = 1):
+        self.segment_count = segment_count
+        self._tmp_dir = Path(tempfile.mkdtemp(prefix="swap-segment-test-"))
+
+    async def build_segments(self, **_kwargs):
+        segment_assets = []
+        for index in range(self.segment_count):
+            path = self._tmp_dir / f"segment_{index + 1:02d}.mp4"
+            path.write_bytes(b"segment-bytes")
+            asset = _FakeBridgeAsset(f"https://vendor.example/segment-{index + 1:02d}.mp4")
+            asset.object_key = f"vendor-public/swap/segment-{index + 1:02d}.mp4"
+            segment_assets.append({"index": index, "path": path, "asset": asset, "url": asset.public_url})
+        return {"segment_count": self.segment_count, "duration_sec": 6.0, "segment_assets": segment_assets}
+
+    def concat_segments(self, segment_paths, output_path):
+        output_path.write_bytes(b"".join(Path(path).read_bytes() for path in segment_paths))
+        return output_path
+
+
 def test_swap_engine_run_submits_once_without_legacy_target_variable():
     engine = AkoolSwapFaceEngine.__new__(AkoolSwapFaceEngine)
     engine.provider = "swap_basic_akool"
@@ -463,6 +484,7 @@ def test_swap_engine_run_submits_once_without_legacy_target_variable():
     engine.vendor_bridge = _FakeBridge()
     engine.video_face_extractor = _FakeExtractor()
     engine.swap_quality_pipeline = _FakeQualityPipeline()
+    engine.swap_segmenter = _FakeSegmenter(segment_count=1)
     engine._apply_audio_strategy = lambda content, _keep: content
     engine._apply_intelligence_postprocess = lambda content, _on_log: (content, {"attempted": False, "applied": False, "reason": "not_used"})
 
@@ -511,6 +533,7 @@ def test_swap_engine_intelligence_uses_v4_submit_path():
     engine.vendor_bridge = _FakeBridge()
     engine.video_face_extractor = _FakeExtractor()
     engine.swap_quality_pipeline = _FakeQualityPipeline()
+    engine.swap_segmenter = _FakeSegmenter(segment_count=1)
     engine._apply_audio_strategy = lambda content, _keep: content
     engine._apply_intelligence_postprocess = lambda content, _on_log: (
         content,
@@ -581,6 +604,7 @@ def test_swap_engine_intelligence_selects_best_source_reference():
     engine.vendor_bridge = _FakeBridge()
     engine.video_face_extractor = _FakeExtractor()
     engine.swap_quality_pipeline = _FakeQualityPipeline()
+    engine.swap_segmenter = _FakeSegmenter(segment_count=1)
     engine._apply_audio_strategy = lambda content, _keep: content
     engine._apply_intelligence_postprocess = lambda content, _on_log: (
         content,
@@ -619,3 +643,56 @@ def test_swap_engine_intelligence_selects_best_source_reference():
     assert engine.client.last_submit_plus_kwargs["source_url"] == "https://vendor.example/canonical-source-face-2.png"
     assert result.metadata["selected_source_face_index"] == 1
     assert result.metadata["source_selection_reason"] == "target_anchor_pose_match"
+
+
+def test_swap_engine_intelligence_segment_route_stitches_and_fallbacks():
+    engine = AkoolSwapFaceEngine.__new__(AkoolSwapFaceEngine)
+    engine.provider = "swap_intelligence_akool"
+    engine.service_type = "swap"
+    engine.poll_interval_sec = 1
+    engine.timeout_sec = 30
+    engine.watchdog_timeout_sec = 30
+    engine.client = _FakeClient()
+    engine.r2 = _FakeR2Upload()
+    engine.vendor_bridge = _FakeBridge()
+    engine.video_face_extractor = _FakeExtractor()
+    engine.swap_quality_pipeline = _FakeQualityPipeline()
+    engine.swap_segmenter = _FakeSegmenter(segment_count=2)
+    engine._apply_audio_strategy = lambda content, _keep: content
+    engine._apply_intelligence_postprocess = lambda content, _on_log: (
+        content,
+        {"attempted": True, "applied": True, "reason": None, "filters": "test"},
+    )
+
+    record = TaskRecord(
+        task_id="task-v4-3",
+        service="swap",
+        mode="intelligence",
+        input_key="uploads/source.mp4",
+        input_image_key="uploads/source-face.png",
+        metadata={
+            "provider": "swap_intelligence_akool",
+            "run_config_snapshot": {
+                "provider": "swap_intelligence_akool",
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+                "keep_original_audio": True,
+                "face_enhance": True,
+            }
+        },
+    )
+
+    result = asyncio.run(
+        engine.run(
+            "task-v4-3",
+            record,
+            {},
+            on_log=lambda _message: None,
+            on_stage=lambda _stage, _progress: None,
+        )
+    )
+
+    assert engine.client.submit_plus_calls == 2
+    assert result.metadata["replacement_mode"] == "segment_based"
+    assert result.metadata["segment_summary"]["segment_count"] == 2
+    assert result.metadata["vendor_runtime"]["segment_count"] == 2
