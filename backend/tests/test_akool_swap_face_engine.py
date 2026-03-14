@@ -488,6 +488,7 @@ def test_swap_engine_intelligence_uses_v4_submit_path():
 
     assert engine.client.submit_calls == 0
     assert engine.client.submit_plus_calls == 1
+    assert result.metadata["swap_strength"] == "strong_identity"
     assert result.metadata["provider_contract"] == "akool_v4_faceswap_plus_video_single_face"
     assert result.metadata["api_version"] == "v4"
     assert result.metadata["model_style"] == "realistic"

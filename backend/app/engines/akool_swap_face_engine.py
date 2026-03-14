@@ -119,6 +119,9 @@ class AkoolSwapFaceEngine:
         swap_type = str(run_cfg.get("swap_type") or "face").strip().lower() or "face"
         provider_name = str((record.metadata or {}).get("provider") or self.provider).strip().lower() or self.provider
         is_intelligence_route = provider_name == "swap_intelligence_akool"
+        swap_strength = str(run_cfg.get("swap_strength") or ("strong_identity" if is_intelligence_route else "balanced")).strip().lower() or "balanced"
+        source_crop_policy = str(run_cfg.get("source_crop_policy") or ("tight_identity_focus" if is_intelligence_route else "standard_single_face")).strip().lower()
+        target_anchor_policy = str(run_cfg.get("target_anchor_policy") or ("strong_identity_primary" if is_intelligence_route else "primary_face")).strip().lower()
         provider_contract = (
             "akool_v4_faceswap_plus_video_single_face"
             if is_intelligence_route
@@ -177,6 +180,10 @@ class AkoolSwapFaceEngine:
         on_log(
             f"[swap][route] api_version={api_version} provider_contract={provider_contract} "
             f"submit_endpoint={provider_debug.get('submit_endpoint')} single_face_only=true"
+        )
+        on_log(
+            f"[swap][route] swap_strength={swap_strength} source_crop_policy={source_crop_policy} "
+            f"target_anchor_policy={target_anchor_policy}"
         )
         finalize_stage = "pending"
         on_log(f"[swap][input] source_video_key={source_video_key or 'n/a'}")
@@ -566,6 +573,7 @@ class AkoolSwapFaceEngine:
                     "provider": provider_name,
                     "provider_contract": provider_contract,
                     "api_version": api_version,
+                    "swap_strength": swap_strength,
                     "source_video_key": source_video_key,
                     "source_video_url": source_video_url,
                     "source_face_image_key": source_face_image_key,
@@ -577,12 +585,17 @@ class AkoolSwapFaceEngine:
                     "single_face_only": True,
                     "face_count_limit": 1,
                     "model_style": model_style,
+                    "source_crop_policy": source_crop_policy,
+                    "target_anchor_policy": target_anchor_policy,
                 },
                 extra=self._json_safe({
                     "swap_type": swap_type,
                     "provider_contract": provider_contract,
                     "api_version": api_version,
                     "model_style": model_style,
+                    "swap_strength": swap_strength,
+                    "source_crop_policy": source_crop_policy,
+                    "target_anchor_policy": target_anchor_policy,
                     "face_detect": {
                         "source_face_count": len(source_faces),
                         "target_face_count": len(target_face_runtime["target_image_payload"]),
@@ -632,6 +645,7 @@ class AkoolSwapFaceEngine:
                     "provider_contract": provider_contract,
                     "api_version": api_version,
                     "model_style": model_style,
+                    "swap_strength": swap_strength,
                     "request_id": job.request_id or None,
                     "job_id": job.job_id or None,
                     "remote_status": remote_status,
@@ -666,6 +680,8 @@ class AkoolSwapFaceEngine:
                     "resource_expire_days": 7,
                     "single_face_only": True,
                     "face_count_limit": 1,
+                    "source_crop_policy": source_crop_policy,
+                    "target_anchor_policy": target_anchor_policy,
                 }),
             )
         except VendorAssetBridgeError:

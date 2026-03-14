@@ -97,6 +97,22 @@ def test_extract_swap_run_config_normalizes_basic_mode():
     assert cfg["provider"] == "akool_swap_face"
     assert cfg["single_face_only"] is True
     assert cfg["face_count_limit"] == 1
+    assert cfg["swap_strength"] == "balanced"
+
+
+def test_extract_swap_run_config_sets_strong_identity_for_intelligence():
+    cfg = _extract_swap_run_config(
+        {
+            "inputs": {
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+            }
+        },
+        "intelligence",
+    )
+    assert cfg["mode"] == "intelligence"
+    assert cfg["provider"] == "swap_intelligence_akool"
+    assert cfg["swap_strength"] == "strong_identity"
 
 
 def test_swap_provider_validation_rejects_mismatched_provider():

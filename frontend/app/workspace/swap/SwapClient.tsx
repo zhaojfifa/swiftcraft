@@ -534,6 +534,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskSubmitStage = String(taskMetadata.submit_stage || "");
   const taskKeepOriginalAudio = String(taskMetadata.keep_original_audio ?? "");
   const taskFaceEnhance = String(taskMetadata.face_enhance ?? "");
+  const taskSwapStrength = String(taskMetadata.swap_strength || "");
   const taskSingleFaceOnly = String(taskMetadata.single_face_only ?? "");
   const taskFaceCountLimit = String(taskMetadata.face_count_limit ?? "");
   const canUseSafeDemo = Boolean(safeDemoMotionKey && safeDemoCharacterKey) && !isRunning;
@@ -1229,19 +1230,30 @@ export default function SwapClient({ service = "swap" }: Props) {
                             {swapProvider}
                           </div>
                         </div>
-                        <div className="space-y-3 mt-4">
-                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                            Face Fidelity
-                          </label>
-                          <select
-                            value={faceFidelity}
-                            onChange={(event) => setFaceFidelity(event.target.value as "high" | "balanced")}
-                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
-                          >
-                            <option value="balanced">balanced</option>
-                            <option value="high">high</option>
-                          </select>
-                        </div>
+                        {isIntelligenceMode ? (
+                          <div className="space-y-3 mt-4">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                              Swap Strategy
+                            </label>
+                            <div className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                              strong_identity
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="space-y-3 mt-4">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                              Face Fidelity
+                            </label>
+                            <select
+                              value={faceFidelity}
+                              onChange={(event) => setFaceFidelity(event.target.value as "high" | "balanced")}
+                              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                            >
+                              <option value="balanced">balanced</option>
+                              <option value="high">high</option>
+                            </select>
+                          </div>
+                        )}
                         <div className="flex justify-between items-center py-2 mt-4">
                           <span className="text-sm font-medium text-slate-700">Face Enhance</span>
                           <button
@@ -1388,6 +1400,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                       <div className="mt-1 space-y-0.5 text-[11px] text-slate-600">
                         <div>Mode: {taskModeSummary || task?.mode || "-"}</div>
                         <div>Provider: {taskProviderSummary || "-"}</div>
+                        <div>Swap Strength: {taskSwapStrength || (isIntelligenceMode ? "strong_identity" : "balanced")}</div>
                         <div>Single-Face Only: {taskSingleFaceOnly ? taskSingleFaceOnly : "true"}</div>
                         <div>Face Count Limit: {taskFaceCountLimit || "1"}</div>
                         <div>Request ID: {taskRequestId || "-"}</div>

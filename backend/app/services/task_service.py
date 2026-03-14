@@ -92,6 +92,10 @@ def _normalize_swap_provider(provider: str | None) -> str:
     return SWAP_PROVIDER_ALIASES.get(raw, raw)
 
 
+def _swap_strength_for_mode(mode: str | None) -> str:
+    return "strong_identity" if _normalize_swap_mode(mode) == "intelligence" else "balanced"
+
+
 def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, Any]:
     inputs = payload.get("inputs")
     data = dict(inputs) if isinstance(inputs, dict) else {}
@@ -151,6 +155,7 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         "subtype": swap_type,
         "mode": _normalize_swap_mode(mode),
         "provider": provider,
+        "swap_strength": _swap_strength_for_mode(mode),
         "single_face_only": SWAP_SINGLE_FACE_ONLY,
         "face_count_limit": SWAP_FACE_COUNT_LIMIT,
         "source_video_key": source_video,
@@ -162,6 +167,9 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         "keep_original_audio": bool(keep_original_audio),
         "face_fidelity": face_fidelity,
         "face_enhance": bool(face_enhance),
+        "source_crop_policy": "tight_identity_focus" if _normalize_swap_mode(mode) == "intelligence" else "standard_single_face",
+        "target_anchor_policy": "strong_identity_primary" if _normalize_swap_mode(mode) == "intelligence" else "primary_face",
+        "identity_preservation_profile": "strong_identity" if _normalize_swap_mode(mode) == "intelligence" else "balanced",
     }
 
 
