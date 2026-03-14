@@ -61,11 +61,12 @@ ACTION_REPLICA_PROVIDERS: Dict[str, Dict[str, str]] = {
     },
 }
 
-SWAP_BASIC_PROVIDER = "swap_basic_akool"
+SWAP_BASIC_PROVIDER = "akool_swap_face"
 SWAP_INTELLIGENCE_PROVIDER = "swap_intelligence_akool"
 SWAP_SINGLE_FACE_ONLY = True
 SWAP_FACE_COUNT_LIMIT = 1
 SWAP_PROVIDER_ALIASES: Dict[str, str] = {
+    "swap_basic_akool": SWAP_BASIC_PROVIDER,
     SWAP_BASIC_PROVIDER: SWAP_BASIC_PROVIDER,
     "akool_swap_face": SWAP_BASIC_PROVIDER,
     "akool_face_swap": SWAP_BASIC_PROVIDER,

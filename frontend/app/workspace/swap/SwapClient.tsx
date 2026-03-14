@@ -142,7 +142,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const modeApi = String(mode || "basic").toLowerCase() as SwapMode;
   const isIntelligenceMode = modeApi === "intelligent" || modeApi === "intelligence";
   const actionReplicaMode = isIntelligenceMode ? "intelligent" : "basic";
-  const swapProvider = isIntelligenceMode ? "swap_intelligence_akool" : "swap_basic_akool";
+  const swapProvider = isIntelligenceMode ? "swap_intelligence_akool" : "akool_swap_face";
   const presetKey = resolvePresetInputKey(serviceApi, modeApi);
   const cdnBase = (process.env.NEXT_PUBLIC_CDN_BASE_URL || "").replace(/\/+$/, "");
   const safeDemoMotionKey = (process.env.NEXT_PUBLIC_SAFE_DEMO_MOTION_KEY || "").trim();

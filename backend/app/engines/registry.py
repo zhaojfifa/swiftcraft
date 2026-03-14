@@ -29,7 +29,7 @@ def _wan26_flash():
 
 def _swap_basic_akool():
     engine = AkoolSwapFaceEngine()
-    engine.provider = "swap_basic_akool"
+    engine.provider = "akool_swap_face"
     return engine
 
 

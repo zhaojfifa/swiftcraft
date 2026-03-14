@@ -20,7 +20,7 @@ from app.services.vendor_asset_bridge import VendorAssetBridge, VendorAssetBridg
 
 class AkoolSwapFaceEngine:
     def __init__(self) -> None:
-        self.provider = "swap_basic_akool"
+        self.provider = "akool_swap_face"
         self.service_type = "swap"
         self.poll_interval_sec = max(1, int(settings.SWIFT_SWAP_POLL_INTERVAL_SEC))
         self.timeout_sec = max(30, int(settings.SWIFT_SWAP_TIMEOUT_SEC))
@@ -118,6 +118,14 @@ class AkoolSwapFaceEngine:
         face_enhance = 1 if bool(run_cfg.get("face_enhance", True)) else 0
         swap_type = str(run_cfg.get("swap_type") or "face").strip().lower() or "face"
         provider_name = str((record.metadata or {}).get("provider") or self.provider).strip().lower() or self.provider
+        is_intelligence_route = provider_name == "swap_intelligence_akool"
+        provider_contract = (
+            "akool_v4_faceswap_plus_video_single_face"
+            if is_intelligence_route
+            else "akool_v3_video_faceswap"
+        )
+        api_version = "v4" if is_intelligence_route else "v3"
+        model_style = "realistic" if is_intelligence_route else None
 
         if not source_video_url:
             raise EngineRunError("swap face requires source video url/key")
@@ -137,7 +145,7 @@ class AkoolSwapFaceEngine:
 
         started = time.perf_counter()
         on_stage("running", 5)
-        provider_debug = self.client.debug_snapshot()
+        provider_debug = self.client.debug_snapshot(provider_contract=provider_contract)
         detect_stage = "pending"
         submit_stage = "pending"
         result_stage = "pending"
@@ -166,6 +174,10 @@ class AkoolSwapFaceEngine:
             f"timeout_sec={self.timeout_sec} poll_interval_sec={self.poll_interval_sec}"
         )
         on_log(f"[swap][route] mode={str(record.mode or 'basic').lower()} provider={provider_name}")
+        on_log(
+            f"[swap][route] api_version={api_version} provider_contract={provider_contract} "
+            f"submit_endpoint={provider_debug.get('submit_endpoint')} single_face_only=true"
+        )
         finalize_stage = "pending"
         on_log(f"[swap][input] source_video_key={source_video_key or 'n/a'}")
         on_log(f"[swap][input] source_face_image_key={source_face_image_key or 'n/a'}")
@@ -209,92 +221,149 @@ class AkoolSwapFaceEngine:
             on_log(f"[swap][detect] parsed_face_count={len(source_faces)}")
             on_stage("running", 20)
 
-            detect_stage = "target_face_extraction"
-            # Lazy import avoids startup-time hard dependency failure if optional imaging deps are missing.
-            if self.video_face_extractor is None:
-                from app.services.video_face_extractor import VideoFaceExtractor
-
-                self.video_face_extractor = VideoFaceExtractor(client=self.client, bridge=self.vendor_bridge)
-            with tempfile.TemporaryDirectory(prefix=f"swap-target-{task_id[:8]}-") as tmp_dir:
-                extraction = await self.video_face_extractor.build_target_faces(
-                    source_video_url=source_video_vendor_url,
-                    work_dir=Path(tmp_dir),
-                    service="swap",
-                    max_frames=8,
-                )
-            frame_paths = extraction["frames"]
-            detected_target_faces = extraction["detected_faces"]
-            target_faces = list(extraction["target_faces"])
-            bridged_target_images = extraction["bridged_target_images"]
-            bridged_target_image_dicts = [self._serialize_bridged_asset(asset) for asset in bridged_target_images]
             source_image_payload = [{"path": source_face["path"], "opts": source_face["opts"]}]
             target_face_runtime = {
-                "frames_sampled": len(frame_paths),
-                "faces_detected": len(detected_target_faces),
-                "selected_count": len(target_faces),
-                "target_image_payload": target_faces,
-                "bridged_target_images": bridged_target_image_dicts,
-                "used_bbox_fallback": bool(extraction.get("used_bbox_fallback")),
-                "require_landmarks": bool(extraction.get("require_landmarks")),
+                "frames_sampled": 0,
+                "faces_detected": 0,
+                "selected_count": 0,
+                "target_image_payload": [],
+                "bridged_target_images": [],
+                "used_bbox_fallback": False,
+                "require_landmarks": False,
             }
-            vendor_runtime["target_face_extraction"] = {
-                "attempted": True,
-                "frames_sampled": target_face_runtime["frames_sampled"],
-                "faces_detected": target_face_runtime["faces_detected"],
-                "require_landmarks": target_face_runtime["require_landmarks"],
-                "used_bbox_fallback": target_face_runtime["used_bbox_fallback"],
-            }
-            vendor_runtime["source_video_detect"] = {
-                "attempted": True,
-                "ok": bool(target_faces),
-                "non_blocking": False,
-                "reason": None if target_faces else "no face detected in sampled frames",
-            }
-            on_log(f"[swap][target-face] frames_sampled={target_face_runtime['frames_sampled']}")
-            on_log(f"[swap][target-face] faces_detected={target_face_runtime['faces_detected']}")
-            on_log(f"[swap][target-face] used_bbox_fallback={str(target_face_runtime['used_bbox_fallback']).lower()}")
-            on_log(f"[swap][target-face] selected_count={target_face_runtime['selected_count']}")
-            if bridged_target_images:
-                on_log(f"[swap][target-face] bridged_target_image_url={bridged_target_images[0].public_url}")
-            on_stage("running", 35)
+            if is_intelligence_route:
+                detect_stage = "intelligence_single_face_validation"
+                vendor_runtime["target_face_extraction"] = {
+                    "attempted": False,
+                    "frames_sampled": 0,
+                    "faces_detected": 0,
+                    "require_landmarks": False,
+                    "used_bbox_fallback": False,
+                }
+                vendor_runtime["source_video_detect"] = {
+                    "attempted": False,
+                    "ok": True,
+                    "non_blocking": True,
+                    "reason": "not required for v4 single-face lane",
+                }
+                on_stage("running", 35)
+                submit_payload = {
+                    "source_url": source_face_vendor_url,
+                    "target_url": source_video_vendor_url,
+                    "single_face_mode": True,
+                    "model_style": model_style or "realistic",
+                    "face_enhance": bool(face_enhance),
+                }
+                vendor_runtime["submit_validation"] = {
+                    "sourceImage_count": 1,
+                    "targetImage_count": 1,
+                    "ok": True,
+                    "reason": None,
+                }
+                on_log("[swap][submit][validate] sourceImage_count=1 targetImage_count=1 ok=true")
+                on_log(f"[swap][submit] endpoint={provider_debug.get('submit_endpoint')}")
+                on_log(
+                    f"[swap][submit] payload_summary="
+                    f"{{'source_url': '{source_face_vendor_url}', 'target_url': '{source_video_vendor_url}', "
+                    f"'single_face_mode': true, 'model_style': '{model_style or 'realistic'}', 'face_enhance': {bool(face_enhance)}}}"
+                )
+                on_log(f"[swap][submit] payload={submit_payload}")
+            else:
+                detect_stage = "target_face_extraction"
+                # Lazy import avoids startup-time hard dependency failure if optional imaging deps are missing.
+                if self.video_face_extractor is None:
+                    from app.services.video_face_extractor import VideoFaceExtractor
 
-            submit_payload = {
-                "sourceImage": source_image_payload,
-                "targetImage": [{"path": face["path"], "opts": face["opts"]} for face in target_face_runtime["target_image_payload"]],
-                "modifyVideo": source_video_vendor_url,
-                "face_enhance": face_enhance,
-            }
-            vendor_runtime["submit_validation"] = {
-                "sourceImage_count": len(submit_payload["sourceImage"]),
-                "targetImage_count": len(submit_payload["targetImage"]),
-                "ok": bool(submit_payload["sourceImage"]) and bool(submit_payload["targetImage"]),
-                "reason": None,
-            }
-            if not submit_payload["targetImage"]:
-                vendor_runtime["submit_validation"]["ok"] = False
-                vendor_runtime["submit_validation"]["reason"] = "targetImage is empty after local target-face extraction"
-                on_log(f"[swap][submit][validate] sourceImage_count={len(submit_payload['sourceImage'])}")
-                on_log(f"[swap][submit][validate] targetImage_count={len(submit_payload['targetImage'])}")
-                on_log("[swap][submit][validate] ok=false reason=targetImage is empty after local target-face extraction")
-                raise EngineRunError("submit validation failed: targetImage is empty after local target-face extraction")
-            on_log(
-                f"[swap][submit][validate] sourceImage_count={len(submit_payload['sourceImage'])} "
-                f"targetImage_count={len(submit_payload['targetImage'])} ok=true"
-            )
-            on_log(f"[swap][submit] endpoint={provider_debug.get('submit_endpoint')}")
-            on_log(
-                f"[swap][submit] payload_summary="
-                f"{{'sourceImage_count': {len(submit_payload['sourceImage'])}, "
-                f"'targetImage_count': {len(submit_payload['targetImage'])}, "
-                f"'modifyVideo': '{source_video_vendor_url}', 'face_enhance': {face_enhance}}}"
-            )
-            on_log(f"[swap][submit] payload={submit_payload}")
+                    self.video_face_extractor = VideoFaceExtractor(client=self.client, bridge=self.vendor_bridge)
+                with tempfile.TemporaryDirectory(prefix=f"swap-target-{task_id[:8]}-") as tmp_dir:
+                    extraction = await self.video_face_extractor.build_target_faces(
+                        source_video_url=source_video_vendor_url,
+                        work_dir=Path(tmp_dir),
+                        service="swap",
+                        max_frames=8,
+                    )
+                frame_paths = extraction["frames"]
+                detected_target_faces = extraction["detected_faces"]
+                target_faces = list(extraction["target_faces"])
+                bridged_target_images = extraction["bridged_target_images"]
+                bridged_target_image_dicts = [self._serialize_bridged_asset(asset) for asset in bridged_target_images]
+                target_face_runtime = {
+                    "frames_sampled": len(frame_paths),
+                    "faces_detected": len(detected_target_faces),
+                    "selected_count": len(target_faces),
+                    "target_image_payload": target_faces,
+                    "bridged_target_images": bridged_target_image_dicts,
+                    "used_bbox_fallback": bool(extraction.get("used_bbox_fallback")),
+                    "require_landmarks": bool(extraction.get("require_landmarks")),
+                }
+                vendor_runtime["target_face_extraction"] = {
+                    "attempted": True,
+                    "frames_sampled": target_face_runtime["frames_sampled"],
+                    "faces_detected": target_face_runtime["faces_detected"],
+                    "require_landmarks": target_face_runtime["require_landmarks"],
+                    "used_bbox_fallback": target_face_runtime["used_bbox_fallback"],
+                }
+                vendor_runtime["source_video_detect"] = {
+                    "attempted": True,
+                    "ok": bool(target_faces),
+                    "non_blocking": False,
+                    "reason": None if target_faces else "no face detected in sampled frames",
+                }
+                on_log(f"[swap][target-face] frames_sampled={target_face_runtime['frames_sampled']}")
+                on_log(f"[swap][target-face] faces_detected={target_face_runtime['faces_detected']}")
+                on_log(f"[swap][target-face] used_bbox_fallback={str(target_face_runtime['used_bbox_fallback']).lower()}")
+                on_log(f"[swap][target-face] selected_count={target_face_runtime['selected_count']}")
+                if bridged_target_images:
+                    on_log(f"[swap][target-face] bridged_target_image_url={bridged_target_images[0].public_url}")
+                on_stage("running", 35)
+
+                submit_payload = {
+                    "sourceImage": source_image_payload,
+                    "targetImage": [{"path": face["path"], "opts": face["opts"]} for face in target_face_runtime["target_image_payload"]],
+                    "modifyVideo": source_video_vendor_url,
+                    "face_enhance": face_enhance,
+                }
+                vendor_runtime["submit_validation"] = {
+                    "sourceImage_count": len(submit_payload["sourceImage"]),
+                    "targetImage_count": len(submit_payload["targetImage"]),
+                    "ok": bool(submit_payload["sourceImage"]) and bool(submit_payload["targetImage"]),
+                    "reason": None,
+                }
+                if not submit_payload["targetImage"]:
+                    vendor_runtime["submit_validation"]["ok"] = False
+                    vendor_runtime["submit_validation"]["reason"] = "targetImage is empty after local target-face extraction"
+                    on_log(f"[swap][submit][validate] sourceImage_count={len(submit_payload['sourceImage'])}")
+                    on_log(f"[swap][submit][validate] targetImage_count={len(submit_payload['targetImage'])}")
+                    on_log("[swap][submit][validate] ok=false reason=targetImage is empty after local target-face extraction")
+                    raise EngineRunError("submit validation failed: targetImage is empty after local target-face extraction")
+                on_log(
+                    f"[swap][submit][validate] sourceImage_count={len(submit_payload['sourceImage'])} "
+                    f"targetImage_count={len(submit_payload['targetImage'])} ok=true"
+                )
+                on_log(f"[swap][submit] endpoint={provider_debug.get('submit_endpoint')}")
+                on_log(
+                    f"[swap][submit] payload_summary="
+                    f"{{'sourceImage_count': {len(submit_payload['sourceImage'])}, "
+                    f"'targetImage_count': {len(submit_payload['targetImage'])}, "
+                    f"'modifyVideo': '{source_video_vendor_url}', 'face_enhance': {face_enhance}}}"
+                )
+                on_log(f"[swap][submit] payload={submit_payload}")
             submit_stage = "submit_start"
-            job = await self.client.submit_video_faceswap(
-                source_face=source_face,
-                target_faces=target_face_runtime["target_image_payload"],
-                modify_video=source_video_vendor_url,
-                face_enhance=face_enhance,
+            job = (
+                await self.client.submit_faceswap_plus_video(
+                    source_url=source_face_vendor_url,
+                    target_url=source_video_vendor_url,
+                    single_face_mode=True,
+                    model_style=model_style or "realistic",
+                    face_enhance=bool(face_enhance),
+                )
+                if is_intelligence_route
+                else await self.client.submit_video_faceswap(
+                    source_face=source_face,
+                    target_faces=target_face_runtime["target_image_payload"],
+                    modify_video=source_video_vendor_url,
+                    face_enhance=face_enhance,
+                )
             )
             submit_stage = "submit_ok"
             vendor_runtime["submit"] = {
@@ -305,6 +374,8 @@ class AkoolSwapFaceEngine:
             vendor_runtime["vendor_request_id"] = job.request_id or None
             vendor_runtime["vendor_job_id"] = job.job_id or None
             vendor_runtime["vendor_result_url"] = job.result_url
+            vendor_runtime["provider_contract"] = provider_contract
+            vendor_runtime["api_version"] = api_version
             vendor_runtime["faceswap_status"] = None
             vendor_runtime["faceswap_status_raw"] = None
             vendor_runtime["faceswap_status_label"] = "unknown"
@@ -397,7 +468,11 @@ class AkoolSwapFaceEngine:
                     vendor_runtime["suspected_provider_stuck"] = True
                     on_log("[swap][poll] suspected_provider_stuck=true")
                 await asyncio.sleep(self.poll_interval_sec)
-                remote_payload = await self.client.poll_video_faceswap(job)
+                remote_payload = (
+                    await self.client.poll_faceswap_plus_video(job)
+                    if is_intelligence_route
+                    else await self.client.poll_video_faceswap(job)
+                )
                 remote_status = str(self.client.extract_remote_status(remote_payload) or "").strip().lower()
                 elapsed_ms = int((time.perf_counter() - poll_started) * 1000)
                 if elapsed_ms > self.timeout_sec * 1000:
@@ -489,6 +564,8 @@ class AkoolSwapFaceEngine:
                 run_config_snapshot={
                     **run_cfg,
                     "provider": provider_name,
+                    "provider_contract": provider_contract,
+                    "api_version": api_version,
                     "source_video_key": source_video_key,
                     "source_video_url": source_video_url,
                     "source_face_image_key": source_face_image_key,
@@ -497,9 +574,15 @@ class AkoolSwapFaceEngine:
                     "keep_original_audio": keep_original_audio,
                     "face_fidelity": face_fidelity,
                     "face_enhance": bool(face_enhance),
+                    "single_face_only": True,
+                    "face_count_limit": 1,
+                    "model_style": model_style,
                 },
                 extra=self._json_safe({
                     "swap_type": swap_type,
+                    "provider_contract": provider_contract,
+                    "api_version": api_version,
+                    "model_style": model_style,
                     "face_detect": {
                         "source_face_count": len(source_faces),
                         "target_face_count": len(target_face_runtime["target_image_payload"]),
@@ -546,6 +629,9 @@ class AkoolSwapFaceEngine:
                 output_url=output_url,
                 metadata=self._json_safe({
                     "provider": provider_name,
+                    "provider_contract": provider_contract,
+                    "api_version": api_version,
+                    "model_style": model_style,
                     "request_id": job.request_id or None,
                     "job_id": job.job_id or None,
                     "remote_status": remote_status,

@@ -39,7 +39,7 @@ def test_swap_face_provider_defaults_to_akool(monkeypatch):
     svc = _svc()
     monkeypatch.delenv("SWIFT_SWAP_DEFAULT_PROVIDER", raising=False)
     provider = svc._resolve_provider("swap", {"subtype": "face", "inputs": {}}, "baseline")
-    assert provider == "swap_basic_akool"
+    assert provider == "akool_swap_face"
 
 
 def test_swap_intelligence_provider_uses_internal_slot():
@@ -69,7 +69,7 @@ def test_swap_face_provider_from_record_defaults_to_akool(monkeypatch):
         mode="baseline",
         metadata={"run_config_snapshot": {"subtype": "face"}},
     )
-    assert svc._resolve_provider_from_record(record) == "swap_basic_akool"
+    assert svc._resolve_provider_from_record(record) == "akool_swap_face"
 
 
 def test_swap_intelligence_provider_from_record_uses_internal_slot():
@@ -94,7 +94,7 @@ def test_extract_swap_run_config_normalizes_basic_mode():
         "baseline",
     )
     assert cfg["mode"] == "basic"
-    assert cfg["provider"] == "swap_basic_akool"
+    assert cfg["provider"] == "akool_swap_face"
     assert cfg["single_face_only"] is True
     assert cfg["face_count_limit"] == 1
 
@@ -104,7 +104,7 @@ def test_swap_provider_validation_rejects_mismatched_provider():
     try:
         svc._validate_swap_provider_request({"provider": "swap_intelligence_akool"}, "basic")
     except Exception as exc:
-        assert "only supports provider=swap_basic_akool" in str(exc)
+        assert "only supports provider=akool_swap_face" in str(exc)
     else:
         raise AssertionError("expected provider mismatch validation error")
 

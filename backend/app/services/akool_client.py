@@ -35,6 +35,8 @@ class AkoolClient:
         self.face_detect_endpoint = str(settings.AKOOL_FACE_DETECT_ENDPOINT).strip()
         self.swap_submit_endpoint = str(settings.AKOOL_SWAP_ENDPOINT).strip()
         self.swap_result_endpoint = str(settings.AKOOL_SWAP_RESULT_ENDPOINT).strip()
+        self.swap_plus_submit_endpoint = str(settings.AKOOL_SWAP_PLUS_ENDPOINT).strip()
+        self.swap_plus_result_endpoint = str(settings.AKOOL_SWAP_PLUS_RESULT_ENDPOINT).strip()
         self.timeout = httpx.Timeout(float(settings.SWIFT_SWAP_TIMEOUT_SEC), connect=15.0)
 
     def _endpoint_url(self, name: str, path: str) -> str:
@@ -50,19 +52,35 @@ class AkoolClient:
     def build_submit_url(self) -> str:
         return self._endpoint_url("submit_url", self.swap_submit_endpoint)
 
+    def build_submit_plus_url(self) -> str:
+        return self._endpoint_url("submit_plus_url", self.swap_plus_submit_endpoint)
+
     def build_result_url(self, request_id: str) -> str:
         base = self._endpoint_url("result_url", self.swap_result_endpoint)
         separator = "&" if "?" in base else "?"
         return ensure_http_url("result_url", f"{base}{separator}_ids={request_id}")
 
-    def debug_snapshot(self) -> Dict[str, str]:
+    def build_result_plus_url(self, request_id: str) -> str:
+        base = self._endpoint_url("result_plus_url", self.swap_plus_result_endpoint)
+        separator = "&" if "?" in base else "?"
+        return ensure_http_url("result_plus_url", f"{base}{separator}_ids={request_id}")
+
+    def debug_snapshot(self, provider_contract: str = "akool_v3_video_faceswap") -> Dict[str, str]:
+        submit_endpoint = self.build_submit_plus_url() if provider_contract == "akool_v4_faceswap_plus_video_single_face" else self.build_submit_url()
+        result_endpoint = (
+            self._endpoint_url("result_plus_url", self.swap_plus_result_endpoint)
+            if provider_contract == "akool_v4_faceswap_plus_video_single_face"
+            else self._endpoint_url("result_url", self.swap_result_endpoint)
+        )
         return {
             "provider": "akool_swap_face",
             "api_base_url": ensure_http_url("api_base_url", self.base_url),
             "auth_mode": "api_key",
+            "api_version": "v4" if provider_contract == "akool_v4_faceswap_plus_video_single_face" else "v3",
+            "provider_contract": provider_contract,
             "face_detect_endpoint": self.build_face_detect_url(),
-            "submit_endpoint": self.build_submit_url(),
-            "result_endpoint": self._endpoint_url("result_url", self.swap_result_endpoint),
+            "submit_endpoint": submit_endpoint,
+            "result_endpoint": result_endpoint,
         }
 
     @staticmethod
@@ -276,10 +294,94 @@ class AkoolClient:
             raw=body,
         )
 
+    async def submit_faceswap_plus_video(
+        self,
+        *,
+        source_url: str,
+        target_url: str,
+        face_enhance: bool,
+        single_face_mode: bool = True,
+        model_style: str = "realistic",
+        webhook_url: str | None = None,
+    ) -> AkoolSwapJob:
+        payload: Dict[str, Any] = {
+            "source_url": ensure_http_url("source_url", source_url),
+            "target_url": ensure_http_url("target_url", target_url),
+            "single_face_mode": bool(single_face_mode),
+            "model_style": str(model_style or "realistic").strip().lower() or "realistic",
+            "face_enhance": bool(face_enhance),
+        }
+        if webhook_url:
+            payload["webhookUrl"] = ensure_http_url("webhook_url", webhook_url)
+        logger.info("[swap][submit] body_preview=%s", self.safe_json(payload))
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                self.build_submit_plus_url(),
+                json=payload,
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+            body = response.json()
+        logger.info("[swap][submit] raw_response=%s", self.safe_json(body))
+        code = body.get("code") if isinstance(body, dict) else None
+        msg = str(body.get("msg") or "") if isinstance(body, dict) else ""
+        root = body if isinstance(body, dict) else {}
+        data_dict = root.get("data") if isinstance(root.get("data"), dict) else root
+        request_id = str(data_dict.get("_id") or data_dict.get("id") or "").strip()
+        job_id = str(data_dict.get("job_id") or data_dict.get("jobId") or "").strip()
+        result_url = str(data_dict.get("url") or "").strip() or None
+        if code == 1000:
+            remote_status = "submitted" if msg == "OK" else "submitted_pending"
+            logger.info(
+                "[swap][submit] accepted request_id=%s job_id=%s vendor_result_url=%s",
+                request_id or "",
+                job_id or "",
+                result_url or "",
+            )
+            if request_id or job_id:
+                return AkoolSwapJob(
+                    request_id=request_id or job_id,
+                    job_id=job_id or request_id,
+                    remote_status=remote_status,
+                    result_url=result_url,
+                    raw=body,
+                )
+            raise RuntimeError(
+                f"akool submit accepted but missing _id/job_id: body={self.safe_json(body)}"
+            )
+        data = self._ensure_ok(body, "submit")
+        data_dict = data if isinstance(data, dict) else {}
+        request_id = str(data_dict.get("_id") or data_dict.get("id") or "").strip()
+        job_id = str(data_dict.get("job_id") or data_dict.get("jobId") or "").strip()
+        result_url = str(data_dict.get("url") or "").strip() or None
+        if not request_id and not job_id:
+            raise RuntimeError("akool submit stage failed: missing _id/job_id")
+        return AkoolSwapJob(
+            request_id=request_id or job_id,
+            job_id=job_id or request_id,
+            remote_status="submitted",
+            result_url=result_url,
+            raw=body,
+        )
+
     async def poll_video_faceswap(self, job: AkoolSwapJob) -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(
                 self.build_result_url(job.request_id),
+                headers=self._headers(),
+            )
+            response.raise_for_status()
+            body = response.json()
+        code = body.get("code") if isinstance(body, dict) else None
+        if code != 1000:
+            self._ensure_ok(body, "poll")
+        return body if isinstance(body, dict) else {}
+
+    async def poll_faceswap_plus_video(self, job: AkoolSwapJob) -> Dict[str, Any]:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(
+                self.build_result_plus_url(job.request_id),
                 headers=self._headers(),
             )
             response.raise_for_status()

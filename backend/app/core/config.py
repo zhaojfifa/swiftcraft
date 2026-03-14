@@ -13,7 +13,7 @@ def _get_bool(value: str | None, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     USE_MOCK_AI: bool = _get_bool(os.getenv("USE_MOCK_AI"), True)
-    SWIFT_SWAP_DEFAULT_PROVIDER: str = os.getenv("SWIFT_SWAP_DEFAULT_PROVIDER", "swap_basic_akool")
+    SWIFT_SWAP_DEFAULT_PROVIDER: str = os.getenv("SWIFT_SWAP_DEFAULT_PROVIDER", "akool_swap_face")
     SWIFT_SWAP_ENABLE_FACE: bool = _get_bool(os.getenv("SWIFT_SWAP_ENABLE_FACE"), True)
     SWIFT_SWAP_ENABLE_SCENE: bool = _get_bool(os.getenv("SWIFT_SWAP_ENABLE_SCENE"), False)
     SWIFT_SWAP_TIMEOUT_SEC: int = int(os.getenv("SWIFT_SWAP_TIMEOUT_SEC", "1800"))
@@ -31,6 +31,8 @@ class Settings:
     AKOOL_FACE_DETECT_ENDPOINT: str = os.getenv("AKOOL_FACE_DETECT_ENDPOINT", "https://openapi.akool.com/interface/detect-api/detect_faces")
     AKOOL_SWAP_ENDPOINT: str = os.getenv("AKOOL_SWAP_ENDPOINT", "/api/open/v3/faceswap/highquality/specifyvideo")
     AKOOL_SWAP_RESULT_ENDPOINT: str = os.getenv("AKOOL_SWAP_RESULT_ENDPOINT", "/api/open/v3/faceswap/result/listbyids")
+    AKOOL_SWAP_PLUS_ENDPOINT: str = os.getenv("AKOOL_SWAP_PLUS_ENDPOINT", "/api/open/v4/faceswap/faceswapPlusByImage")
+    AKOOL_SWAP_PLUS_RESULT_ENDPOINT: str = os.getenv("AKOOL_SWAP_PLUS_RESULT_ENDPOINT", os.getenv("AKOOL_SWAP_RESULT_ENDPOINT", "/api/open/v3/faceswap/result/listbyids"))
     AKOOL_AVATAR_ENDPOINT: str = os.getenv("AKOOL_AVATAR_ENDPOINT", "")
     AKOOL_POLL_INTERVAL_SEC: int = int(os.getenv("AKOOL_POLL_INTERVAL_SEC", "3"))
     AKOOL_TIMEOUT_SEC: int = int(os.getenv("AKOOL_TIMEOUT_SEC", "180"))

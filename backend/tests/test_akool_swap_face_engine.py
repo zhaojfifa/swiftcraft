@@ -38,8 +38,11 @@ def test_akool_client_builds_official_swap_urls():
     client.face_detect_endpoint = "https://openapi.akool.com/interface/detect-api/detect_faces"
     client.swap_submit_endpoint = "/api/open/v3/faceswap/highquality/specifyvideo"
     client.swap_result_endpoint = "/api/open/v3/faceswap/result/listbyids"
+    client.swap_plus_submit_endpoint = "/api/open/v4/faceswap/faceswapPlusByImage"
+    client.swap_plus_result_endpoint = "/api/open/v3/faceswap/result/listbyids"
     assert client.build_face_detect_url() == "https://openapi.akool.com/interface/detect-api/detect_faces"
     assert client.build_submit_url() == "https://openapi.akool.com/api/open/v3/faceswap/highquality/specifyvideo"
+    assert client.build_submit_plus_url() == "https://openapi.akool.com/api/open/v4/faceswap/faceswapPlusByImage"
     assert client.build_result_url("abc123") == "https://openapi.akool.com/api/open/v3/faceswap/result/listbyids?_ids=abc123"
 
 
@@ -162,6 +165,55 @@ def test_submit_video_faceswap_soft_accepted_returns_pending(monkeypatch):
     assert job.remote_status == "submitted_pending"
 
 
+def test_submit_faceswap_plus_video_returns_pending(monkeypatch):
+    client = AkoolClient.__new__(AkoolClient)
+    client.timeout = None
+    client.build_submit_plus_url = lambda: "https://openapi.akool.com/api/open/v4/faceswap/faceswapPlusByImage"
+    client._headers = lambda: {"x-api-key": "test", "Content-Type": "application/json", "Accept": "application/json"}
+    client.safe_json = lambda payload: str(payload)
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "code": 1000,
+                "msg": "OK",
+                "data": {
+                    "_id": "req-v4-1",
+                    "job_id": "job-v4-1",
+                    "url": "https://vendor.example/result-v4.mp4",
+                },
+            }
+
+    class _AsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return _Response()
+
+    monkeypatch.setattr("app.services.akool_client.httpx.AsyncClient", lambda *args, **kwargs: _AsyncClient())
+
+    job = asyncio.run(
+        client.submit_faceswap_plus_video(
+            source_url="https://vendor.example/source-face.jpg",
+            target_url="https://vendor.example/source-video.mp4",
+            single_face_mode=True,
+            model_style="realistic",
+            face_enhance=True,
+        )
+    )
+
+    assert job.request_id == "req-v4-1"
+    assert job.job_id == "job-v4-1"
+    assert job.remote_status == "submitted"
+
+
 def test_poll_video_faceswap_reads_official_result_list(monkeypatch):
     client = AkoolClient.__new__(AkoolClient)
     client.timeout = None
@@ -245,12 +297,15 @@ class _FakeBridge:
 class _FakeClient:
     def __init__(self):
         self.submit_calls = 0
+        self.submit_plus_calls = 0
         self.poll_calls = 0
 
-    def debug_snapshot(self):
+    def debug_snapshot(self, provider_contract="akool_v3_video_faceswap"):
         return {
             "face_detect_endpoint": "https://openapi.akool.com/interface/detect-api/detect_faces",
-            "submit_endpoint": "https://openapi.akool.com/api/open/v3/faceswap/highquality/specifyvideo",
+            "submit_endpoint": "https://openapi.akool.com/api/open/v4/faceswap/faceswapPlusByImage"
+            if provider_contract == "akool_v4_faceswap_plus_video_single_face"
+            else "https://openapi.akool.com/api/open/v3/faceswap/highquality/specifyvideo",
             "result_endpoint": "https://openapi.akool.com/api/open/v3/faceswap/result/listbyids",
         }
 
@@ -269,14 +324,35 @@ class _FakeClient:
 
         return _Job()
 
+    async def submit_faceswap_plus_video(self, **kwargs):
+        self.submit_plus_calls += 1
+
+        class _Job:
+            request_id = "req-v4-1"
+            job_id = "job-v4-1"
+            remote_status = "submitted"
+            result_url = "https://vendor.example/result-v4.mp4"
+            raw = {"code": 1000, "msg": "OK", "data": {"_id": "req-v4-1", "job_id": "job-v4-1", "url": "https://vendor.example/result-v4.mp4"}}
+
+        return _Job()
+
     async def poll_video_faceswap(self, _job):
         self.poll_calls += 1
         return {"result": [{"faceswap_status": 3, "url": "https://vendor.example/result.mp4"}]}
+
+    async def poll_faceswap_plus_video(self, _job):
+        self.poll_calls += 1
+        return {"data": {"result": [{"faceswap_status": 3, "url": "https://vendor.example/result-v4.mp4"}]}}
 
     def extract_result_item(self, payload):
         result = payload.get("result")
         if isinstance(result, list) and result:
             return result[0]
+        data = payload.get("data")
+        if isinstance(data, dict):
+            nested_result = data.get("result")
+            if isinstance(nested_result, list) and nested_result:
+                return nested_result[0]
         return None
 
     def extract_remote_status(self, payload):
@@ -364,5 +440,54 @@ def test_swap_engine_run_submits_once_without_legacy_target_variable():
     )
 
     assert engine.client.submit_calls == 1
+    assert engine.client.submit_plus_calls == 0
     assert engine.client.poll_calls in {0, 1}
     assert result.output_url == "https://cdn.example/outputs/task-1/result.mp4"
+
+
+def test_swap_engine_intelligence_uses_v4_submit_path():
+    engine = AkoolSwapFaceEngine.__new__(AkoolSwapFaceEngine)
+    engine.provider = "swap_intelligence_akool"
+    engine.service_type = "swap"
+    engine.poll_interval_sec = 1
+    engine.timeout_sec = 30
+    engine.watchdog_timeout_sec = 30
+    engine.client = _FakeClient()
+    engine.r2 = _FakeR2Upload()
+    engine.vendor_bridge = _FakeBridge()
+    engine.video_face_extractor = None
+    engine._apply_audio_strategy = lambda content, _keep: content
+
+    record = TaskRecord(
+        task_id="task-v4-1",
+        service="swap",
+        mode="intelligence",
+        input_key="uploads/source.mp4",
+        input_image_key="uploads/source-face.png",
+        metadata={
+            "provider": "swap_intelligence_akool",
+            "run_config_snapshot": {
+                "provider": "swap_intelligence_akool",
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+                "keep_original_audio": True,
+                "face_enhance": True,
+            }
+        },
+    )
+
+    result = asyncio.run(
+        engine.run(
+            "task-v4-1",
+            record,
+            {},
+            on_log=lambda _message: None,
+            on_stage=lambda _stage, _progress: None,
+        )
+    )
+
+    assert engine.client.submit_calls == 0
+    assert engine.client.submit_plus_calls == 1
+    assert result.metadata["provider_contract"] == "akool_v4_faceswap_plus_video_single_face"
+    assert result.metadata["api_version"] == "v4"
+    assert result.metadata["model_style"] == "realistic"
