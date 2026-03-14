@@ -27,12 +27,12 @@
 ## Routing Behavior
 - `mode=basic`
   - provider: `akool_swap_face`
-  - route summary: `basic_v3_single_face_balanced`
+  - route summary: `basic_v3_simplified_single_face_balanced`
   - route intent: `simplified_route_allowed`
   - execution style: `simplified_single_face`
 - `mode=intelligence`
   - provider: `swap_intelligence_akool`
-  - route summary: `intelligence_v3_single_face_strong_identity`
+  - route summary: `intelligence_v3_explicit_replacement_strong_identity`
   - route intent: `explicit_replacement_preferred`
   - execution style: `explicit_replacement`
 

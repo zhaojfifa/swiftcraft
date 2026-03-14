@@ -1034,7 +1034,7 @@ class AkoolSwapFaceEngine:
                 "selected_source_face_index": selected_source_face_index,
                 "selected_target_frame_index": selected_target_frame_index,
                 "risk_tags": risk_tags,
-                "route_summary": f"{str(record.mode or 'basic').lower()}_{api_version}_single_face_{swap_strength}",
+                "route_summary": f"{str(record.mode or 'basic').lower()}_{api_version}_{route_execution_style}_{swap_strength}",
             }
             outputs = {
                 "video_key": output_key,
@@ -1085,6 +1085,7 @@ class AkoolSwapFaceEngine:
                     "swap_strength": swap_strength,
                     "route_intent": route_intent,
                     "route_execution_style": route_execution_style,
+                    "route_summary": quality_summary["route_summary"],
                     "source_face_score": source_face_score,
                     "source_face_risk_tags": source_face_risk_tags,
                     "selected_source_face_index": selected_source_face_index,
@@ -1160,6 +1161,7 @@ class AkoolSwapFaceEngine:
                     "swap_strength": swap_strength,
                     "route_intent": route_intent,
                     "route_execution_style": route_execution_style,
+                    "route_summary": quality_summary["route_summary"],
                     "source_face_score": source_face_score,
                     "source_face_risk_tags": source_face_risk_tags,
                     "selected_source_face_index": selected_source_face_index,

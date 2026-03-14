@@ -665,7 +665,7 @@ def test_swap_engine_intelligence_uses_v4_submit_path():
     assert result.metadata["quality_summary"]["source_face_score"] == 84
     assert result.metadata["quality_summary"]["target_face_score"] == 78
     assert result.metadata["quality_summary"]["selected_target_frame_index"] == 5
-    assert result.metadata["manifest_preview"]["quality_summary"]["route_summary"] == "intelligence_v3_single_face_strong_identity"
+    assert result.metadata["manifest_preview"]["quality_summary"]["route_summary"] == "intelligence_v3_explicit_replacement_strong_identity"
     assert result.metadata["manifest_preview"]["risk_tags"] == ["face_small", "lighting_gap"]
     assert result.metadata["manifest_preview"]["replacement_mode"] == "focused_clip"
     assert result.metadata["manifest_preview"]["focus_crop_valid"] is True
