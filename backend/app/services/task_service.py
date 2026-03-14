@@ -96,6 +96,14 @@ def _swap_strength_for_mode(mode: str | None) -> str:
     return "strong_identity" if _normalize_swap_mode(mode) == "intelligence" else "balanced"
 
 
+def _swap_route_intent_for_mode(mode: str | None) -> str:
+    return "explicit_replacement_preferred" if _normalize_swap_mode(mode) == "intelligence" else "simplified_route_allowed"
+
+
+def _swap_route_execution_style_for_mode(mode: str | None) -> str:
+    return "explicit_replacement" if _normalize_swap_mode(mode) == "intelligence" else "simplified_single_face"
+
+
 def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, Any]:
     inputs = payload.get("inputs")
     data = dict(inputs) if isinstance(inputs, dict) else {}
@@ -184,6 +192,8 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         "mode": _normalize_swap_mode(mode),
         "provider": provider,
         "swap_strength": _swap_strength_for_mode(mode),
+        "route_intent": _swap_route_intent_for_mode(mode),
+        "route_execution_style": _swap_route_execution_style_for_mode(mode),
         "single_face_only": SWAP_SINGLE_FACE_ONLY,
         "face_count_limit": SWAP_FACE_COUNT_LIMIT,
         "source_video_key": source_video,

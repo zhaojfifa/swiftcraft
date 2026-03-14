@@ -535,6 +535,9 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskKeepOriginalAudio = String(taskMetadata.keep_original_audio ?? "");
   const taskFaceEnhance = String(taskMetadata.face_enhance ?? "");
   const taskSwapStrength = String(taskMetadata.swap_strength || "");
+  const taskRouteIntent = String(taskMetadata.route_intent || "");
+  const taskRouteExecutionStyle = String(taskMetadata.route_execution_style || "");
+  const taskRouteSummary = String((taskMetadata.quality_summary as { route_summary?: string } | undefined)?.route_summary || taskMetadata.route_summary || "");
   const taskSingleFaceOnly = String(taskMetadata.single_face_only ?? "");
   const taskFaceCountLimit = String(taskMetadata.face_count_limit ?? "");
   const taskSourceFaceScore = String(taskMetadata.source_face_score ?? "");
@@ -1407,6 +1410,8 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Mode: {taskModeSummary || task?.mode || "-"}</div>
                         <div>Provider: {taskProviderSummary || "-"}</div>
                         <div>Swap Strength: {taskSwapStrength || (isIntelligenceMode ? "strong_identity" : "balanced")}</div>
+                        <div>Route Intent: {taskRouteIntent || "-"}</div>
+                        <div>Execution Style: {taskRouteExecutionStyle || "-"}</div>
                         <div>Single-Face Only: {taskSingleFaceOnly ? taskSingleFaceOnly : "true"}</div>
                         <div>Face Count Limit: {taskFaceCountLimit || "1"}</div>
                         <div>Request ID: {taskRequestId || "-"}</div>
@@ -1502,6 +1507,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                     <div className="grid gap-1 text-xs text-slate-600 sm:grid-cols-2">
                       <div>Mode: {taskModeSummary || task?.mode || "-"}</div>
                       <div>Swap Strength: {taskSwapStrength || "-"}</div>
+                      <div>Route Summary: {taskRouteSummary || "-"}</div>
                       <div>Source Face Score: {taskSourceFaceScore || "-"}</div>
                       <div>Target Face Score: {taskTargetFaceScore || "-"}</div>
                       <div>Selected Anchor Frame: {taskSelectedTargetFrameIndex || "-"}</div>

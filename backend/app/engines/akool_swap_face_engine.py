@@ -251,6 +251,14 @@ class AkoolSwapFaceEngine:
         provider_name = str((record.metadata or {}).get("provider") or self.provider).strip().lower() or self.provider
         is_intelligence_route = provider_name == "swap_intelligence_akool"
         swap_strength = str(run_cfg.get("swap_strength") or ("strong_identity" if is_intelligence_route else "balanced")).strip().lower() or "balanced"
+        route_intent = str(
+            run_cfg.get("route_intent")
+            or ("explicit_replacement_preferred" if is_intelligence_route else "simplified_route_allowed")
+        ).strip().lower() or "simplified_route_allowed"
+        route_execution_style = str(
+            run_cfg.get("route_execution_style")
+            or ("explicit_replacement" if is_intelligence_route else "simplified_single_face")
+        ).strip().lower() or "simplified_single_face"
         source_crop_policy = str(run_cfg.get("source_crop_policy") or ("tight_identity_focus" if is_intelligence_route else "standard_single_face")).strip().lower()
         target_anchor_policy = str(run_cfg.get("target_anchor_policy") or ("strong_identity_primary" if is_intelligence_route else "primary_face")).strip().lower()
         provider_contract = (
@@ -336,6 +344,9 @@ class AkoolSwapFaceEngine:
         on_log(
             f"[swap][route] swap_strength={swap_strength} source_crop_policy={source_crop_policy} "
             f"target_anchor_policy={target_anchor_policy}"
+        )
+        on_log(
+            f"[swap][route] route_intent={route_intent} route_execution_style={route_execution_style}"
         )
         finalize_stage = "pending"
         on_log(f"[swap][input] source_video_key={source_video_key or 'n/a'}")
@@ -1016,6 +1027,8 @@ class AkoolSwapFaceEngine:
             risk_tags = sorted({*source_face_risk_tags, *target_face_risk_tags})
             quality_summary = {
                 "swap_strength": swap_strength,
+                "route_intent": route_intent,
+                "route_execution_style": route_execution_style,
                 "source_face_score": source_face_score,
                 "target_face_score": target_face_score,
                 "selected_source_face_index": selected_source_face_index,
@@ -1047,6 +1060,8 @@ class AkoolSwapFaceEngine:
                     "provider_contract": provider_contract,
                     "api_version": api_version,
                     "swap_strength": swap_strength,
+                    "route_intent": route_intent,
+                    "route_execution_style": route_execution_style,
                     "source_video_key": source_video_key,
                     "source_video_url": source_video_url,
                     "source_face_image_key": source_face_image_key,
@@ -1068,6 +1083,8 @@ class AkoolSwapFaceEngine:
                     "api_version": api_version,
                     "model_style": model_style,
                     "swap_strength": swap_strength,
+                    "route_intent": route_intent,
+                    "route_execution_style": route_execution_style,
                     "source_face_score": source_face_score,
                     "source_face_risk_tags": source_face_risk_tags,
                     "selected_source_face_index": selected_source_face_index,
@@ -1141,6 +1158,8 @@ class AkoolSwapFaceEngine:
                     "api_version": api_version,
                     "model_style": model_style,
                     "swap_strength": swap_strength,
+                    "route_intent": route_intent,
+                    "route_execution_style": route_execution_style,
                     "source_face_score": source_face_score,
                     "source_face_risk_tags": source_face_risk_tags,
                     "selected_source_face_index": selected_source_face_index,

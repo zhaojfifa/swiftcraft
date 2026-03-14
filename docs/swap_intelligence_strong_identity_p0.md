@@ -9,6 +9,8 @@
 
 ## New Fields
 - `swap_strength`
+- `route_intent`
+- `route_execution_style`
 - `source_face_score`
 - `source_face_risk_tags`
 - `canonical_source_face_url`
@@ -26,9 +28,13 @@
 - `mode=basic`
   - provider: `akool_swap_face`
   - route summary: `basic_v3_single_face_balanced`
+  - route intent: `simplified_route_allowed`
+  - execution style: `simplified_single_face`
 - `mode=intelligence`
   - provider: `swap_intelligence_akool`
   - route summary: `intelligence_v3_single_face_strong_identity`
+  - route intent: `explicit_replacement_preferred`
+  - execution style: `explicit_replacement`
 
 Both routes remain single-face only in v1.x.
 
