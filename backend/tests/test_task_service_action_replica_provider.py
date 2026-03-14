@@ -39,13 +39,13 @@ def test_swap_face_provider_defaults_to_akool(monkeypatch):
     svc = _svc()
     monkeypatch.delenv("SWIFT_SWAP_DEFAULT_PROVIDER", raising=False)
     provider = svc._resolve_provider("swap", {"subtype": "face", "inputs": {}}, "baseline")
-    assert provider == "akool_swap_face"
+    assert provider == "swap_basic_akool"
 
 
 def test_swap_intelligence_provider_uses_internal_slot():
     svc = _svc()
     provider = svc._resolve_provider("swap", {"subtype": "face", "inputs": {}}, "intelligence")
-    assert provider == "swap_intelligence"
+    assert provider == "swap_intelligence_akool"
 
 
 def test_swap_scene_provider_from_record(monkeypatch):
@@ -69,7 +69,7 @@ def test_swap_face_provider_from_record_defaults_to_akool(monkeypatch):
         mode="baseline",
         metadata={"run_config_snapshot": {"subtype": "face"}},
     )
-    assert svc._resolve_provider_from_record(record) == "akool_swap_face"
+    assert svc._resolve_provider_from_record(record) == "swap_basic_akool"
 
 
 def test_swap_intelligence_provider_from_record_uses_internal_slot():
@@ -80,7 +80,7 @@ def test_swap_intelligence_provider_from_record_uses_internal_slot():
         mode="intelligence",
         metadata={"run_config_snapshot": {"subtype": "face", "mode": "intelligence"}},
     )
-    assert svc._resolve_provider_from_record(record) == "swap_intelligence"
+    assert svc._resolve_provider_from_record(record) == "swap_intelligence_akool"
 
 
 def test_extract_swap_run_config_normalizes_basic_mode():
@@ -94,6 +94,29 @@ def test_extract_swap_run_config_normalizes_basic_mode():
         "baseline",
     )
     assert cfg["mode"] == "basic"
+    assert cfg["provider"] == "swap_basic_akool"
+    assert cfg["single_face_only"] is True
+    assert cfg["face_count_limit"] == 1
+
+
+def test_swap_provider_validation_rejects_mismatched_provider():
+    svc = _svc()
+    try:
+        svc._validate_swap_provider_request({"provider": "swap_intelligence_akool"}, "basic")
+    except Exception as exc:
+        assert "only supports provider=swap_basic_akool" in str(exc)
+    else:
+        raise AssertionError("expected provider mismatch validation error")
+
+
+def test_swap_single_face_validation_rejects_face_arrays():
+    svc = _svc()
+    try:
+        svc._validate_swap_single_face_inputs({"inputs": {"source_face_images": ["a.png", "b.png"]}})
+    except Exception as exc:
+        assert "single-face only" in str(exc)
+    else:
+        raise AssertionError("expected single-face validation error")
 
 
 def test_action_replica_default_provider_mapping(monkeypatch):

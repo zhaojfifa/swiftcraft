@@ -61,6 +61,19 @@ ACTION_REPLICA_PROVIDERS: Dict[str, Dict[str, str]] = {
     },
 }
 
+SWAP_BASIC_PROVIDER = "swap_basic_akool"
+SWAP_INTELLIGENCE_PROVIDER = "swap_intelligence_akool"
+SWAP_SINGLE_FACE_ONLY = True
+SWAP_FACE_COUNT_LIMIT = 1
+SWAP_PROVIDER_ALIASES: Dict[str, str] = {
+    SWAP_BASIC_PROVIDER: SWAP_BASIC_PROVIDER,
+    "akool_swap_face": SWAP_BASIC_PROVIDER,
+    "akool_face_swap": SWAP_BASIC_PROVIDER,
+    SWAP_INTELLIGENCE_PROVIDER: SWAP_INTELLIGENCE_PROVIDER,
+    "swap_intelligence": SWAP_INTELLIGENCE_PROVIDER,
+    "akool_swap_face_intelligence": SWAP_INTELLIGENCE_PROVIDER,
+}
+
 
 def _normalize_swap_mode(mode: str | None) -> str:
     value = str(mode or "").strip().lower()
@@ -69,18 +82,28 @@ def _normalize_swap_mode(mode: str | None) -> str:
     return "basic"
 
 
+def _swap_provider_for_mode(mode: str | None) -> str:
+    return SWAP_INTELLIGENCE_PROVIDER if _normalize_swap_mode(mode) == "intelligence" else SWAP_BASIC_PROVIDER
+
+
+def _normalize_swap_provider(provider: str | None) -> str:
+    raw = str(provider or "").strip().lower()
+    return SWAP_PROVIDER_ALIASES.get(raw, raw)
+
+
 def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, Any]:
     inputs = payload.get("inputs")
     data = dict(inputs) if isinstance(inputs, dict) else {}
     swap_type = str(payload.get("swap_type") or payload.get("subtype") or "face").strip().lower() or "face"
     if swap_type != "face":
         swap_type = "face"
-    provider = str(
+    provider = _normalize_swap_provider(
         data.get("provider")
         or payload.get("provider")
+        or _swap_provider_for_mode(mode)
         or settings.SWIFT_SWAP_DEFAULT_PROVIDER
-        or "akool_swap_face"
-    ).strip().lower() or "akool_swap_face"
+        or SWAP_BASIC_PROVIDER
+    ) or _swap_provider_for_mode(mode)
     source_video = str(
         data.get("source_video")
         or data.get("source_video_key")
@@ -127,6 +150,8 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         "subtype": swap_type,
         "mode": _normalize_swap_mode(mode),
         "provider": provider,
+        "single_face_only": SWAP_SINGLE_FACE_ONLY,
+        "face_count_limit": SWAP_FACE_COUNT_LIMIT,
         "source_video_key": source_video,
         "source_video_url": source_video,
         "source_face_image_url": source_face_image,
@@ -467,6 +492,37 @@ class TaskService:
     def _avatar_enabled(self) -> bool:
         return os.getenv("SWIFT_AVATAR_ENABLED", "0").strip().lower() in ("1", "true", "yes")
 
+    def _validate_swap_single_face_inputs(self, payload: Dict[str, Any]) -> None:
+        inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+        multi_face_fields = (
+            "source_face_images",
+            "source_face_image_urls",
+            "source_face_image_keys",
+            "target_faces",
+            "target_face_images",
+            "face_mapping",
+        )
+        for field in multi_face_fields:
+            raw = payload.get(field)
+            if raw is None:
+                raw = inputs.get(field) if isinstance(inputs, dict) else None
+            if isinstance(raw, list) and raw:
+                raise HTTPException(
+                    status_code=400,
+                    detail="swap is single-face only for v1.x; multiple face inputs are not supported",
+                )
+
+    def _validate_swap_provider_request(self, payload: Dict[str, Any], mode: str) -> str:
+        expected_provider = _swap_provider_for_mode(mode)
+        inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+        requested = _normalize_swap_provider((inputs or {}).get("provider") or payload.get("provider"))
+        if requested and requested != expected_provider:
+            raise HTTPException(
+                status_code=400,
+                detail=f"swap mode={_normalize_swap_mode(mode)} only supports provider={expected_provider}",
+            )
+        return expected_provider
+
     def _resolve_provider(self, service: str, payload: Dict[str, Any], mode: str) -> str:
         if service in {"avatar", "action_replica"}:
             if not self._avatar_enabled():
@@ -501,13 +557,13 @@ class TaskService:
                 if requested in {"fal_pixverse_swap", "pixverse_swap"}:
                     return "fal_pixverse_swap"
                 return (os.getenv("SWIFT_SWAP_SCENE_PROVIDER", "fal_pixverse_swap").strip() or "fal_pixverse_swap")
-            if mode_norm == "intelligence":
-                return "swap_intelligence"
-            if requested in {"akool", "akool_swap_face", "akool_face_swap"}:
-                return "akool_swap_face"
-            if requested:
-                return requested
-            return settings.SWIFT_SWAP_DEFAULT_PROVIDER or "akool_swap_face"
+            normalized_requested = _normalize_swap_provider(requested)
+            expected_provider = _swap_provider_for_mode(mode_norm)
+            if normalized_requested in {SWAP_BASIC_PROVIDER, SWAP_INTELLIGENCE_PROVIDER}:
+                return normalized_requested
+            if normalized_requested:
+                return expected_provider
+            return expected_provider or settings.SWIFT_SWAP_DEFAULT_PROVIDER or SWAP_BASIC_PROVIDER
         return str(payload.get("provider") or self._default_provider()).strip().lower()
 
     def _public_url_from_key(self, key: str) -> str:
@@ -529,10 +585,12 @@ class TaskService:
         input_key = None
 
         if "service_type" in payload:
+            service_type_raw = str(payload.get("service_type") or "").strip().lower()
+            if service_type_raw in {"swap", "face_swap"}:
+                self._validate_swap_single_face_inputs(payload)
             try:
                 parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
             except ValidationError as exc:
-                service_type_raw = str(payload.get("service_type") or "").strip().lower()
                 swap_source_video = str(
                     payload.get("source_video_key")
                     or payload.get("source_video_url")
@@ -608,6 +666,8 @@ class TaskService:
             service = legacy.service
             mode = legacy.mode
             input_key = legacy.input_key
+            if (service or "").strip().lower() == "swap":
+                self._validate_swap_single_face_inputs(payload)
 
         resolved_service = (service or "swap").lower()
         resolved_mode = _normalize_swap_mode(mode) if resolved_service == "swap" else (mode or "baseline").lower()
@@ -631,6 +691,7 @@ class TaskService:
             localization_contract = _extract_localization_intelligence_contract(localization_inputs, resolved_mode)
             payload["inputs"] = localization_inputs
         if resolved_service == "swap":
+            expected_swap_provider = self._validate_swap_provider_request(payload, resolved_mode)
             if not settings.SWIFT_SWAP_ENABLE_FACE:
                 raise HTTPException(status_code=400, detail="swap face is disabled by configuration")
             if swap_subtype == "scene" or not settings.SWIFT_SWAP_ENABLE_SCENE and swap_subtype != "face":
@@ -644,6 +705,8 @@ class TaskService:
                 )
             payload["swap_type"] = "face"
             payload["subtype"] = "face"
+            payload["provider"] = expected_swap_provider
+            swap_cfg["provider"] = expected_swap_provider
 
         if video_file or image_file:
             if video_file and not video_file.filename:
@@ -709,9 +772,13 @@ class TaskService:
                     metadata_dict["intelligence_contract"] = localization_contract
             if resolved_service == "swap":
                 swap_cfg["provider"] = provider
+                swap_cfg["single_face_only"] = SWAP_SINGLE_FACE_ONLY
+                swap_cfg["face_count_limit"] = SWAP_FACE_COUNT_LIMIT
                 swap_cfg["source_video_key"] = input_key or swap_cfg.get("source_video_key")
                 if swap_face_image_key:
                     swap_cfg["source_face_image_key"] = swap_face_image_key
+                metadata_dict["single_face_only"] = SWAP_SINGLE_FACE_ONLY
+                metadata_dict["face_count_limit"] = SWAP_FACE_COUNT_LIMIT
                 metadata_dict["run_config_snapshot"] = swap_cfg
             if face_enhancer is not None:
                 metadata_dict["face_enhancer"] = face_enhancer
@@ -745,6 +812,8 @@ class TaskService:
                     "prompt": avatar_prompt,
                     "provider": provider,
                     "mode": resolved_mode,
+                    "single_face_only": SWAP_SINGLE_FACE_ONLY if resolved_service == "swap" else None,
+                    "face_count_limit": SWAP_FACE_COUNT_LIMIT if resolved_service == "swap" else None,
                     "preserve_camera": action_replica_cfg.get("preserve_camera"),
                     "preserve_motion": action_replica_cfg.get("preserve_motion"),
                     "preserve_timing": action_replica_cfg.get("preserve_timing"),
@@ -796,6 +865,8 @@ class TaskService:
             if not input_image_url and swap_face_image_key:
                 input_image_url = self._public_url_from_key(swap_face_image_key)
             swap_cfg["source_video_key"] = input_key
+            swap_cfg["single_face_only"] = SWAP_SINGLE_FACE_ONLY
+            swap_cfg["face_count_limit"] = SWAP_FACE_COUNT_LIMIT
             if input_video_url:
                 swap_cfg["source_video_url"] = input_video_url
             if input_image_url:
@@ -808,6 +879,14 @@ class TaskService:
             resolved_mode,
             {
                 "provider": provider,
+                **(
+                    {
+                        "single_face_only": SWAP_SINGLE_FACE_ONLY,
+                        "face_count_limit": SWAP_FACE_COUNT_LIMIT,
+                    }
+                    if resolved_service == "swap"
+                    else {}
+                ),
                 **(
                     {
                         "engine": ACTION_REPLICA_PROVIDERS.get(provider, {}).get("engine"),
@@ -840,6 +919,8 @@ class TaskService:
                         "run_config_snapshot": {
                             **swap_cfg,
                             "provider": provider,
+                            "single_face_only": SWAP_SINGLE_FACE_ONLY,
+                            "face_count_limit": SWAP_FACE_COUNT_LIMIT,
                             "source_video_key": input_key,
                             "source_video_url": input_video_url or swap_cfg.get("source_video_url"),
                             "source_face_image_url": input_image_url or swap_cfg.get("source_face_image_url"),
@@ -871,6 +952,8 @@ class TaskService:
                 "prompt": avatar_prompt,
                 "provider": provider,
                 "mode": resolved_mode,
+                "single_face_only": SWAP_SINGLE_FACE_ONLY if resolved_service == "swap" else None,
+                "face_count_limit": SWAP_FACE_COUNT_LIMIT if resolved_service == "swap" else None,
                 "preserve_camera": action_replica_cfg.get("preserve_camera"),
                 "preserve_motion": action_replica_cfg.get("preserve_motion"),
                 "preserve_timing": action_replica_cfg.get("preserve_timing"),
@@ -892,6 +975,8 @@ class TaskService:
     def _resolve_provider_from_record(self, record: TaskRecord) -> str:
         provider = str((record.metadata or {}).get("provider") or "").strip().lower()
         if provider:
+            if record.service == "swap":
+                return _normalize_swap_provider(provider) or _swap_provider_for_mode(record.mode)
             if provider in {"fal_kling_action_replica", "kling_action_replica", "kling", "kling_reference_v2v_pro"}:
                 return "kling_motioncontrol_v3_pro"
             return provider
@@ -916,9 +1001,7 @@ class TaskService:
                 mode_norm = _normalize_swap_mode(record.mode)
             if subtype == "scene":
                 return (os.getenv("SWIFT_SWAP_SCENE_PROVIDER", "fal_pixverse_swap").strip() or "fal_pixverse_swap")
-            if mode_norm == "intelligence":
-                return "swap_intelligence"
-            return settings.SWIFT_SWAP_DEFAULT_PROVIDER or "akool_swap_face"
+            return _swap_provider_for_mode(mode_norm)
         return self._default_provider()
 
     def _engine_watchdog_timeout_sec(self, engine: Any | None = None) -> int:
@@ -1215,6 +1298,23 @@ class TaskService:
             meta["engine"] = engine_name
             self.store.save(record.copy(update={"metadata": meta}))
             record = self.store.get_task(task_id) or record
+        elif record.service == "swap":
+            snapshot = (record.metadata or {}).get("run_config_snapshot")
+            mode_name = str(record.mode or "").strip().lower() or "basic"
+            single_face_only = bool((record.metadata or {}).get("single_face_only", True))
+            face_count_limit = int((record.metadata or {}).get("face_count_limit") or 1)
+            if isinstance(snapshot, dict):
+                mode_name = str(snapshot.get("mode") or mode_name).strip().lower() or mode_name
+                single_face_only = bool(snapshot.get("single_face_only", single_face_only))
+                try:
+                    face_count_limit = int(snapshot.get("face_count_limit") or face_count_limit)
+                except Exception:
+                    face_count_limit = 1
+            self.store.append_log(
+                task_id,
+                f"[swap][route] mode={mode_name} provider={provider} single_face_only={str(single_face_only).lower()} "
+                f"face_count_limit={face_count_limit} engine={engine_name}",
+            )
         self.store.append_log(task_id, f"[dispatch] provider={provider or 'default'} engine={engine_name}")
         self.store.set_stage(task_id, "running", 1)
 
@@ -1383,6 +1483,17 @@ class TaskService:
     def _to_response(self, record: TaskRecord, service_type: ServiceType) -> TaskResponseOut:
         metadata = dict(record.metadata or {})
         metadata.setdefault("service_type", public_service_type(record.service))
+        if record.service == "swap":
+            snapshot = metadata.get("run_config_snapshot")
+            snapshot_dict = dict(snapshot) if isinstance(snapshot, dict) else {}
+            metadata.setdefault("mode", str(snapshot_dict.get("mode") or record.mode or "basic").strip().lower() or "basic")
+            metadata.setdefault("provider", _normalize_swap_provider(metadata.get("provider")) or _swap_provider_for_mode(record.mode))
+            metadata.setdefault("single_face_only", bool(snapshot_dict.get("single_face_only", metadata.get("single_face_only", True))))
+            try:
+                face_count_limit = int(snapshot_dict.get("face_count_limit") or metadata.get("face_count_limit") or 1)
+            except Exception:
+                face_count_limit = 1
+            metadata.setdefault("face_count_limit", face_count_limit)
         return TaskResponseOut(
             task_id=record.task_id,
             service_type=service_type,

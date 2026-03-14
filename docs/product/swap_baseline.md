@@ -83,6 +83,9 @@ Current v1.x scope for both tiers:
 
 Basic is the production baseline.
 Intelligence is the enhanced comparison tier and must reuse the same external task contract.
+Product provider identities:
+- `swap_basic_akool`
+- `swap_intelligence_akool`
 
 ### 4.1 Basic
 
@@ -192,8 +195,8 @@ Reason:
 {
   "service_type": "swap",
   "subtype": "face",
-  "mode": "basic|intelligent",
-  "provider": "reserved_face_swap",
+  "mode": "basic|intelligence",
+  "provider": "swap_basic_akool|swap_intelligence_akool",
   "inputs": {
     "source_video_url": "",
     "reference_image_url": "",
@@ -203,6 +206,8 @@ Reason:
     "video_url": ""
   },
   "metadata": {
+    "single_face_only": true,
+    "face_count_limit": 1,
     "run_config_snapshot": {},
     "metrics": {}
   }
@@ -229,4 +234,5 @@ The formal baseline decision is:
   - Swap Scene
   - Swap Face
 - scene replacement has a current provider baseline
-- face replacement has a reserved contract baseline pending final provider selection
+- face replacement baseline is `swap_basic_akool`
+- face replacement intelligence route is `swap_intelligence_akool`

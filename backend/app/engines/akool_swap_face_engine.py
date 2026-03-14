@@ -20,7 +20,7 @@ from app.services.vendor_asset_bridge import VendorAssetBridge, VendorAssetBridg
 
 class AkoolSwapFaceEngine:
     def __init__(self) -> None:
-        self.provider = "akool_swap_face"
+        self.provider = "swap_basic_akool"
         self.service_type = "swap"
         self.poll_interval_sec = max(1, int(settings.SWIFT_SWAP_POLL_INTERVAL_SEC))
         self.timeout_sec = max(30, int(settings.SWIFT_SWAP_TIMEOUT_SEC))
@@ -165,6 +165,7 @@ class AkoolSwapFaceEngine:
             f"[swap][preflight] provider={provider_name} mode={record.mode} swap_type={swap_type} "
             f"timeout_sec={self.timeout_sec} poll_interval_sec={self.poll_interval_sec}"
         )
+        on_log(f"[swap][route] mode={str(record.mode or 'basic').lower()} provider={provider_name}")
         finalize_stage = "pending"
         on_log(f"[swap][input] source_video_key={source_video_key or 'n/a'}")
         on_log(f"[swap][input] source_face_image_key={source_face_image_key or 'n/a'}")
@@ -526,6 +527,8 @@ class AkoolSwapFaceEngine:
                     "source_video_vendor_url": source_video_vendor_url,
                     "vendor_provider": provider_name,
                     "resource_expire_days": 7,
+                    "single_face_only": True,
+                    "face_count_limit": 1,
                 }),
             )
             self.r2.put_json(manifest_key, manifest)
@@ -575,6 +578,8 @@ class AkoolSwapFaceEngine:
                     "source_video_vendor_url": source_video_vendor_url,
                     "vendor_provider": provider_name,
                     "resource_expire_days": 7,
+                    "single_face_only": True,
+                    "face_count_limit": 1,
                 }),
             )
         except VendorAssetBridgeError:

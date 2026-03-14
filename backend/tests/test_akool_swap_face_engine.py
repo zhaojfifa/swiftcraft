@@ -326,7 +326,7 @@ class _FakeR2Upload(_FakeR2):
 
 def test_swap_engine_run_submits_once_without_legacy_target_variable():
     engine = AkoolSwapFaceEngine.__new__(AkoolSwapFaceEngine)
-    engine.provider = "akool_swap_face"
+    engine.provider = "swap_basic_akool"
     engine.service_type = "swap"
     engine.poll_interval_sec = 1
     engine.timeout_sec = 30

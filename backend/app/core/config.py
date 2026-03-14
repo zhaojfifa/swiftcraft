@@ -13,7 +13,7 @@ def _get_bool(value: str | None, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     USE_MOCK_AI: bool = _get_bool(os.getenv("USE_MOCK_AI"), True)
-    SWIFT_SWAP_DEFAULT_PROVIDER: str = os.getenv("SWIFT_SWAP_DEFAULT_PROVIDER", "akool_swap_face")
+    SWIFT_SWAP_DEFAULT_PROVIDER: str = os.getenv("SWIFT_SWAP_DEFAULT_PROVIDER", "swap_basic_akool")
     SWIFT_SWAP_ENABLE_FACE: bool = _get_bool(os.getenv("SWIFT_SWAP_ENABLE_FACE"), True)
     SWIFT_SWAP_ENABLE_SCENE: bool = _get_bool(os.getenv("SWIFT_SWAP_ENABLE_SCENE"), False)
     SWIFT_SWAP_TIMEOUT_SEC: int = int(os.getenv("SWIFT_SWAP_TIMEOUT_SEC", "1800"))

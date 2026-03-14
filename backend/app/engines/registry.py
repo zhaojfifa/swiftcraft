@@ -27,9 +27,15 @@ def _wan26_flash():
     return FalWan26FlashEngine()
 
 
-def _swap_intelligence():
+def _swap_basic_akool():
     engine = AkoolSwapFaceEngine()
-    engine.provider = "swap_intelligence"
+    engine.provider = "swap_basic_akool"
+    return engine
+
+
+def _swap_intelligence_akool():
+    engine = AkoolSwapFaceEngine()
+    engine.provider = "swap_intelligence_akool"
     return engine
 
 
@@ -51,9 +57,12 @@ PROVIDER_ADAPTERS: Dict[str, Callable[[], object]] = {
     "fal_pixverse_swap": MockEngine,
     "pixverse_swap": MockEngine,
     "akool": AkoolEngine,
-    "akool_swap_face": AkoolSwapFaceEngine,
-    "akool_face_swap": AkoolSwapFaceEngine,
-    "swap_intelligence": _swap_intelligence,
+    "swap_basic_akool": _swap_basic_akool,
+    "swap_intelligence_akool": _swap_intelligence_akool,
+    "akool_swap_face": _swap_basic_akool,
+    "akool_face_swap": _swap_basic_akool,
+    "swap_intelligence": _swap_intelligence_akool,
+    "akool_swap_face_intelligence": _swap_intelligence_akool,
     "real": RealEngine,
     "mock": MockEngine,
 }

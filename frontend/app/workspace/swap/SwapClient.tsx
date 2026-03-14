@@ -41,7 +41,6 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [inputVideoUrl, setInputVideoUrl] = useState<string | null>(null);
   const [inputImageUrl, setInputImageUrl] = useState<string | null>(null);
-  const [swapProvider, setSwapProvider] = useState<"akool_swap_face">("akool_swap_face");
   const [keepOriginalAudio, setKeepOriginalAudio] = useState(true);
   const [faceFidelity, setFaceFidelity] = useState<"high" | "balanced">("balanced");
   const [faceEnhance, setFaceEnhance] = useState(true);
@@ -143,6 +142,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const modeApi = String(mode || "basic").toLowerCase() as SwapMode;
   const isIntelligenceMode = modeApi === "intelligent" || modeApi === "intelligence";
   const actionReplicaMode = isIntelligenceMode ? "intelligent" : "basic";
+  const swapProvider = isIntelligenceMode ? "swap_intelligence_akool" : "swap_basic_akool";
   const presetKey = resolvePresetInputKey(serviceApi, modeApi);
   const cdnBase = (process.env.NEXT_PUBLIC_CDN_BASE_URL || "").replace(/\/+$/, "");
   const safeDemoMotionKey = (process.env.NEXT_PUBLIC_SAFE_DEMO_MOTION_KEY || "").trim();
@@ -426,7 +426,6 @@ export default function SwapClient({ service = "swap" }: Props) {
           service_type: "swap",
           mode: isIntelligenceMode ? "intelligence" : "basic",
           swap_type: "face",
-          provider: swapProvider,
           source_video_key: sourceVideoKey,
           source_face_image_key: sourceFaceImageKey,
           keep_original_audio: keepOriginalAudio,
@@ -516,7 +515,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     : {};
   const taskRequestId = String(taskMetadata.request_id || "");
   const taskModeSummary = String(taskMetadata.mode || (task?.mode || "") || "");
-  const taskProviderSummary = String(taskMetadata.provider || "");
+  const taskProviderSummary = String(taskMetadata.provider || (isSwap ? swapProvider : ""));
   const taskEngineSummary = String(taskMetadata.engine || "");
   const taskModelIdSummary = String(taskMetadata.model_id || "");
   const taskPromptSource = String(taskMetadata.prompt_source || "");
@@ -535,6 +534,8 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskSubmitStage = String(taskMetadata.submit_stage || "");
   const taskKeepOriginalAudio = String(taskMetadata.keep_original_audio ?? "");
   const taskFaceEnhance = String(taskMetadata.face_enhance ?? "");
+  const taskSingleFaceOnly = String(taskMetadata.single_face_only ?? "");
+  const taskFaceCountLimit = String(taskMetadata.face_count_limit ?? "");
   const canUseSafeDemo = Boolean(safeDemoMotionKey && safeDemoCharacterKey) && !isRunning;
   const canRun = isAvatar
     ? Boolean(videoFile && imageFile) && !isRunning
@@ -574,12 +575,13 @@ export default function SwapClient({ service = "swap" }: Props) {
         service_type: "swap",
         mode: isIntelligenceMode ? "intelligence" : "basic",
         swap_type: "face",
-        provider: swapProvider,
         source_video_key: "(source video key)",
         source_face_image_key: "(source face image key)",
         keep_original_audio: keepOriginalAudio,
         face_fidelity: faceFidelity,
         face_enhance: faceEnhance,
+        single_face_only: true,
+        face_count_limit: 1,
       };
   const jsonPreview = {
     request: payloadPreview,
@@ -595,7 +597,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"swap\",\"mode\":\"${isIntelligenceMode ? "intelligence" : "basic"}\",\"swap_type\":\"face\",\"provider\":\"${swapProvider}\",\"source_video_key\":\"<source_video_key>\",\"source_face_image_key\":\"<source_face_key>\",\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${faceFidelity}\",\"face_enhance\":${faceEnhance}}'`
+        `  -d '{\"service_type\":\"swap\",\"mode\":\"${isIntelligenceMode ? "intelligence" : "basic"}\",\"swap_type\":\"face\",\"source_video_key\":\"<source_video_key>\",\"source_face_image_key\":\"<source_face_key>\",\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${faceFidelity}\",\"face_enhance\":${faceEnhance}}'`
       ].join(" \\\n");
 
   const handleRetrySafeSlicing = async () => {
@@ -1226,13 +1228,9 @@ export default function SwapClient({ service = "swap" }: Props) {
                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                             Provider
                           </label>
-                          <select
-                            value={swapProvider}
-                            onChange={(event) => setSwapProvider(event.target.value as "akool_swap_face")}
-                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
-                          >
-                            <option value="akool_swap_face">akool_swap_face</option>
-                          </select>
+                          <div className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                            {swapProvider}
+                          </div>
                         </div>
                         <div className="space-y-3 mt-4">
                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -1280,7 +1278,19 @@ export default function SwapClient({ service = "swap" }: Props) {
                           </button>
                         </div>
                         <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                          Basic is fixed to <span className="font-semibold">akool_swap_face</span>. Intelligence reuses the same single-face contract through its own internal slot, with the same one-face input shape.
+                          {isIntelligenceMode ? (
+                            <>
+                              Intelligence uses the enhanced single-face comparison route.
+                              <br />
+                              Single-face input only.
+                            </>
+                          ) : (
+                            <>
+                              Basic uses the stable single-face baseline route.
+                              <br />
+                              Single-face input only.
+                            </>
+                          )}
                         </div>
                       </div>
                     ) : null}
@@ -1381,6 +1391,8 @@ export default function SwapClient({ service = "swap" }: Props) {
                       <div className="mt-1 space-y-0.5 text-[11px] text-slate-600">
                         <div>Mode: {taskModeSummary || task?.mode || "-"}</div>
                         <div>Provider: {taskProviderSummary || "-"}</div>
+                        <div>Single-Face Only: {taskSingleFaceOnly ? taskSingleFaceOnly : "true"}</div>
+                        <div>Face Count Limit: {taskFaceCountLimit || "1"}</div>
                         <div>Request ID: {taskRequestId || "-"}</div>
                         <div>Face Enhance: {taskFaceEnhance ? taskFaceEnhance : "-"}</div>
                         <div>Keep Original Audio: {taskKeepOriginalAudio ? taskKeepOriginalAudio : "-"}</div>

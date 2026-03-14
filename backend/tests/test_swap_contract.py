@@ -11,7 +11,7 @@ def test_swap_request_accepts_swap_service_with_subtype():
         "mode": "baseline",
         "source_video_key": "uploads/source.mp4",
         "source_face_image_key": "uploads/source-face.png",
-        "provider": "akool_swap_face",
+        "provider": "swap_basic_akool",
         "keep_original_audio": True,
         "face_fidelity": "balanced",
         "face_enhance": True,
@@ -23,7 +23,7 @@ def test_swap_request_accepts_swap_service_with_subtype():
     assert parsed.inputs.source_video == "uploads/source.mp4"
     assert parsed.inputs.source_face_image == "uploads/source-face.png"
     assert parsed.source_video_key == "uploads/source.mp4"
-    assert parsed.provider == "akool_swap_face"
+    assert parsed.provider == "swap_basic_akool"
     assert parsed.face_enhance is True
 
 
