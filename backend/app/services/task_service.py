@@ -62,6 +62,13 @@ ACTION_REPLICA_PROVIDERS: Dict[str, Dict[str, str]] = {
 }
 
 
+def _normalize_swap_mode(mode: str | None) -> str:
+    value = str(mode or "").strip().lower()
+    if value in {"intelligence", "intelligent"}:
+        return "intelligence"
+    return "basic"
+
+
 def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, Any]:
     inputs = payload.get("inputs")
     data = dict(inputs) if isinstance(inputs, dict) else {}
@@ -118,7 +125,7 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         "service_type": "swap",
         "swap_type": swap_type,
         "subtype": swap_type,
-        "mode": "baseline" if str(mode or "").strip().lower() != "intelligent" else "intelligent",
+        "mode": _normalize_swap_mode(mode),
         "provider": provider,
         "source_video_key": source_video,
         "source_video_url": source_video,
@@ -489,10 +496,13 @@ class TaskService:
             inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
             requested = str((inputs or {}).get("provider") or payload.get("provider") or "").strip().lower()
             subtype = str(payload.get("swap_type") or payload.get("subtype") or "face").strip().lower()
+            mode_norm = _normalize_swap_mode(mode)
             if subtype == "scene":
                 if requested in {"fal_pixverse_swap", "pixverse_swap"}:
                     return "fal_pixverse_swap"
                 return (os.getenv("SWIFT_SWAP_SCENE_PROVIDER", "fal_pixverse_swap").strip() or "fal_pixverse_swap")
+            if mode_norm == "intelligence":
+                return "swap_intelligence"
             if requested in {"akool", "akool_swap_face", "akool_face_swap"}:
                 return "akool_swap_face"
             if requested:
@@ -600,7 +610,7 @@ class TaskService:
             input_key = legacy.input_key
 
         resolved_service = (service or "swap").lower()
-        resolved_mode = (mode or "baseline").lower()
+        resolved_mode = _normalize_swap_mode(mode) if resolved_service == "swap" else (mode or "baseline").lower()
         resolved_service_type = _service_type_from_legacy(resolved_service)
         # Runtime service key stays `avatar` for engine/store compatibility.
         if resolved_service == "action_replica":
@@ -901,8 +911,13 @@ class TaskService:
             subtype = ""
             if isinstance(snapshot, dict):
                 subtype = str(snapshot.get("swap_type") or snapshot.get("subtype") or "").strip().lower()
+                mode_norm = _normalize_swap_mode(snapshot.get("mode"))
+            else:
+                mode_norm = _normalize_swap_mode(record.mode)
             if subtype == "scene":
                 return (os.getenv("SWIFT_SWAP_SCENE_PROVIDER", "fal_pixverse_swap").strip() or "fal_pixverse_swap")
+            if mode_norm == "intelligence":
+                return "swap_intelligence"
             return settings.SWIFT_SWAP_DEFAULT_PROVIDER or "akool_swap_face"
         return self._default_provider()
 

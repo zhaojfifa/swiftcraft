@@ -34,7 +34,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const isSwap = serviceType === "swap";
   const isAvatar = serviceType === "action_replica" || serviceType === "avatar";
 
-  const [mode, setMode] = useState<SwapMode>("baseline");
+  const [mode, setMode] = useState<SwapMode>("basic");
   const [swapSubtype, setSwapSubtype] = useState<"scene" | "face">("face");
   const [inputSource, setInputSource] = useState<"preset" | "upload">("upload");
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -91,7 +91,7 @@ export default function SwapClient({ service = "swap" }: Props) {
       setInputSource("upload");
       return;
     }
-    setMode("baseline");
+    setMode("basic");
     setSwapSubtype("face");
     setInputSource("upload");
   }, [isSwap]);
@@ -140,8 +140,9 @@ export default function SwapClient({ service = "swap" }: Props) {
   }, [imageFile]);
 
   const serviceApi = String(serviceType || "swap").toLowerCase();
-  const modeApi = String(mode || "baseline").toLowerCase() as SwapMode;
-  const actionReplicaMode = modeApi === "intelligent" ? "intelligent" : "basic";
+  const modeApi = String(mode || "basic").toLowerCase() as SwapMode;
+  const isIntelligenceMode = modeApi === "intelligent" || modeApi === "intelligence";
+  const actionReplicaMode = isIntelligenceMode ? "intelligent" : "basic";
   const presetKey = resolvePresetInputKey(serviceApi, modeApi);
   const cdnBase = (process.env.NEXT_PUBLIC_CDN_BASE_URL || "").replace(/\/+$/, "");
   const safeDemoMotionKey = (process.env.NEXT_PUBLIC_SAFE_DEMO_MOTION_KEY || "").trim();
@@ -422,7 +423,7 @@ export default function SwapClient({ service = "swap" }: Props) {
         const sourceFaceImageKey = await uploadFileToR2(imageFile as File);
         result = await createTask({
           service_type: "swap",
-          mode: "baseline",
+          mode: "basic",
           swap_type: "face",
           provider: swapProvider,
           source_video_key: sourceVideoKey,
@@ -570,7 +571,7 @@ export default function SwapClient({ service = "swap" }: Props) {
       }
     : {
         service_type: "swap",
-        mode: "baseline",
+        mode: "basic",
         swap_type: "face",
         provider: swapProvider,
         source_video_key: "(source video key)",
@@ -593,7 +594,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"swap\",\"mode\":\"baseline\",\"swap_type\":\"face\",\"provider\":\"${swapProvider}\",\"source_video_key\":\"<source_video_key>\",\"source_face_image_key\":\"<source_face_key>\",\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${faceFidelity}\",\"face_enhance\":${faceEnhance}}'`
+        `  -d '{\"service_type\":\"swap\",\"mode\":\"basic\",\"swap_type\":\"face\",\"provider\":\"${swapProvider}\",\"source_video_key\":\"<source_video_key>\",\"source_face_image_key\":\"<source_face_key>\",\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${faceFidelity}\",\"face_enhance\":${faceEnhance}}'`
       ].join(" \\\n");
 
   const handleRetrySafeSlicing = async () => {
@@ -656,27 +657,27 @@ export default function SwapClient({ service = "swap" }: Props) {
 
         <div className="bg-slate-100 p-1 rounded-lg border border-slate-200 flex relative">
           <button
-            onClick={() => setMode("baseline")}
+            onClick={() => setMode("basic")}
             className={`px-6 py-1.5 rounded-md text-sm font-medium transition-all duration-200 z-10 ${
-              mode === "baseline"
+              (mode === "baseline" || mode === "basic")
                 ? "bg-white text-slate-900 shadow-sm border border-slate-200 ring-1 ring-black/5"
                 : "text-slate-500 hover:text-slate-700"
             }`}
           >
-            Baseline
+            Basic
           </button>
           <button
-            onClick={() => !isSwap && setMode("intelligent")}
+            onClick={() => !isSwap && setMode("intelligence")}
             disabled={isSwap}
             className={`px-6 py-1.5 rounded-md text-sm font-medium transition-all duration-200 z-10 ${
-              mode === "intelligent"
+              (mode === "intelligent" || mode === "intelligence")
                 ? "bg-white text-blue-600 shadow-sm border border-slate-200 ring-1 ring-black/5"
                 : isSwap
                   ? "text-slate-300 cursor-not-allowed"
                   : "text-slate-500 hover:text-slate-700"
             }`}
           >
-            {isSwap ? "Intelligent Coming Soon" : "Intelligent"}
+            {isSwap ? "Intelligence Coming Soon" : "Intelligence"}
           </button>
         </div>
 
@@ -769,7 +770,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                       </button>
                     </div>
                     <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-                      Baseline only: single person, front face, under 60 seconds. Scene swap and intelligent path stay disabled.
+                      Single-face only for v1.x. Basic is the production baseline. Intelligence stays the enhanced comparison tier.
                     </div>
                   </div>
                 ) : null}
@@ -1278,7 +1279,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                           </button>
                         </div>
                         <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                          Provider is fixed to <span className="font-semibold">akool_swap_face</span> for the baseline demo.
+                          Basic is fixed to <span className="font-semibold">akool_swap_face</span>. Intelligence reuses the same single-face contract through its own internal slot.
                         </div>
                       </div>
                     ) : null}
@@ -1399,16 +1400,16 @@ export default function SwapClient({ service = "swap" }: Props) {
               onClick={handleRun}
               disabled={!canRun}
               className={`w-full py-3.5 rounded-xl font-bold text-white flex items-center justify-center gap-2 shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all ${
-                mode === "intelligent"
+                isIntelligenceMode
                   ? "bg-blue-600 hover:bg-blue-700 shadow-blue-200"
                   : "bg-slate-800 hover:bg-slate-900 shadow-slate-200"
               } ${!canRun ? "opacity-60 cursor-not-allowed" : ""}`}
             >
               <Play className="w-4 h-4" />
-              {isRunning ? "Running..." : isSwap ? "Run Basic" : `Run ${mode === "intelligent" ? "Intelligent" : "Basic"}`}
+              {isRunning ? "Running..." : isSwap ? "Run Basic" : `Run ${isIntelligenceMode ? "Intelligence" : "Basic"}`}
             </button>
             <div className="text-center mt-3 text-[10px] text-slate-400 font-medium">
-              Estimated Cost: {mode === "intelligent" ? "$0.15" : "$0.05"}
+              Estimated Cost: {isIntelligenceMode ? "$0.15" : "$0.05"}
             </div>
           </div>
         </div>

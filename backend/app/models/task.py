@@ -14,7 +14,7 @@ class TaskRecord(BaseModel):
     task_id: str
     id: Optional[str] = None
     service: Literal["swap", "avatar", "localization"] = "swap"
-    mode: Literal["baseline", "intelligent"] = "baseline"
+    mode: Literal["baseline", "intelligent", "basic", "intelligence"] = "baseline"
 
     status: Literal["queued", "running", "done", "failed"] = "queued"
     stage: str = "queued"

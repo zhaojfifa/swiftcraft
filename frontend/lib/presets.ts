@@ -1,11 +1,13 @@
 ﻿export type ServiceName = 'swap';
 
-export type SwapMode = 'baseline' | 'intelligent';
+export type SwapMode = 'baseline' | 'intelligent' | 'basic' | 'intelligence';
 
 export const PRESETS: Record<ServiceName, Record<string, string>> = {
   swap: {
     baseline: 'presets/swap/baseline.mp4',
+    basic: 'presets/swap/baseline.mp4',
     intelligent: 'presets/swap/intelligent.mp4',
+    intelligence: 'presets/swap/intelligent.mp4',
   },
 };
 

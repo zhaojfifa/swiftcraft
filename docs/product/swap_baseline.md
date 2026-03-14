@@ -72,7 +72,17 @@ Therefore, SwiftCraft formally defines two swap subtypes:
 Both subtypes may support:
 
 - `basic`
-- `intelligent`
+- `intelligence`
+
+Current v1.x scope for both tiers:
+- single-face only
+- one source face image
+- one source video
+- no face mapping UI
+- no multi-character orchestration
+
+Basic is the production baseline.
+Intelligence is the enhanced comparison tier and must reuse the same external task contract.
 
 ### 4.1 Basic
 
@@ -220,4 +230,3 @@ The formal baseline decision is:
   - Swap Face
 - scene replacement has a current provider baseline
 - face replacement has a reserved contract baseline pending final provider selection
-

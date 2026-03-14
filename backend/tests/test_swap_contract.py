@@ -46,3 +46,16 @@ def test_swap_request_accepts_target_face_alias():
 
 def test_service_type_from_legacy_swap_is_swap():
     assert _service_type_from_legacy("swap") == ServiceType.swap
+
+
+def test_swap_request_accepts_basic_mode_alias():
+    payload = {
+        "service_type": "swap",
+        "swap_type": "face",
+        "mode": "basic",
+        "source_video_key": "uploads/source.mp4",
+        "source_face_image_key": "uploads/source-face.png",
+    }
+    parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
+    assert isinstance(parsed, SwapRequest)
+    assert parsed.mode == "basic"

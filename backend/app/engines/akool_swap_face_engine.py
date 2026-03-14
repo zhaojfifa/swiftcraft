@@ -82,6 +82,20 @@ class AkoolSwapFaceEngine:
             "size_bytes": getattr(asset, "size_bytes", None),
         }
 
+    @classmethod
+    def _json_safe(cls, value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, dict):
+            return {str(key): cls._json_safe(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [cls._json_safe(item) for item in value]
+        if hasattr(value, "to_dict") and callable(value.to_dict):
+            return cls._json_safe(value.to_dict())
+        if hasattr(value, "__dict__"):
+            return cls._json_safe(dict(vars(value)))
+        return str(value)
+
     async def run(
         self,
         task_id: str,
@@ -103,6 +117,7 @@ class AkoolSwapFaceEngine:
         face_fidelity = str(run_cfg.get("face_fidelity") or settings.SWIFT_SWAP_FACE_FIDELITY_DEFAULT).strip().lower() or "balanced"
         face_enhance = 1 if bool(run_cfg.get("face_enhance", True)) else 0
         swap_type = str(run_cfg.get("swap_type") or "face").strip().lower() or "face"
+        provider_name = str((record.metadata or {}).get("provider") or self.provider).strip().lower() or self.provider
 
         if not source_video_url:
             raise EngineRunError("swap face requires source video url/key")
@@ -147,9 +162,10 @@ class AkoolSwapFaceEngine:
             "suspected_provider_stuck": False,
         }
         on_log(
-            f"[swap][preflight] provider={self.provider} mode={record.mode} swap_type={swap_type} "
+            f"[swap][preflight] provider={provider_name} mode={record.mode} swap_type={swap_type} "
             f"timeout_sec={self.timeout_sec} poll_interval_sec={self.poll_interval_sec}"
         )
+        finalize_stage = "pending"
         on_log(f"[swap][input] source_video_key={source_video_key or 'n/a'}")
         on_log(f"[swap][input] source_face_image_key={source_face_image_key or 'n/a'}")
 
@@ -411,6 +427,7 @@ class AkoolSwapFaceEngine:
                 raise EngineRunError("poll failed: swap provider returned no result url")
 
             result_stage = "download_start"
+            finalize_stage = "harvest_start"
             vendor_runtime["result_fetch"] = {"attempted": True, "reason": None}
             on_log(f"[swap][finalize] vendor_result_url={result_url}")
             on_log("[swap][finalize] harvest_start")
@@ -443,6 +460,7 @@ class AkoolSwapFaceEngine:
             output_key = f"outputs/{task_id}/result.mp4"
             on_log(f"[swap][result-upload] start output_key={output_key}")
             on_stage("finalizing", 90)
+            finalize_stage = "uploading"
             output_url = self.r2.upload_bytes(output_key, content, content_type="video/mp4")
             vendor_runtime["result_uploaded"] = True
             on_log(f"[swap][result-upload] ok cdn_url={output_url}")
@@ -457,8 +475,8 @@ class AkoolSwapFaceEngine:
             manifest = build_manifest(
                 task_id=task_id,
                 service_type="swap",
-                mode="baseline",
-                provider=self.provider,
+                mode=str(record.mode or "basic").lower(),
+                provider=provider_name,
                 input_snapshot={
                     **input_snapshot,
                     "source_video_url": source_video_url,
@@ -469,7 +487,7 @@ class AkoolSwapFaceEngine:
                 qa_summary={},
                 run_config_snapshot={
                     **run_cfg,
-                    "provider": self.provider,
+                    "provider": provider_name,
                     "source_video_key": source_video_key,
                     "source_video_url": source_video_url,
                     "source_face_image_key": source_face_image_key,
@@ -479,7 +497,7 @@ class AkoolSwapFaceEngine:
                     "face_fidelity": face_fidelity,
                     "face_enhance": bool(face_enhance),
                 },
-                extra={
+                extra=self._json_safe({
                     "swap_type": swap_type,
                     "face_detect": {
                         "source_face_count": len(source_faces),
@@ -501,12 +519,14 @@ class AkoolSwapFaceEngine:
                     "vendor_result_url": job.result_url,
                     "provider_request_id": job.request_id,
                     "output_video_url": output_url,
+                    "output_key": output_key,
+                    "finalize_stage": finalize_stage,
                     "vendor_bridge_enabled": True,
                     "source_face_vendor_url": source_face_vendor_url,
                     "source_video_vendor_url": source_video_vendor_url,
-                    "vendor_provider": self.provider,
+                    "vendor_provider": provider_name,
                     "resource_expire_days": 7,
-                },
+                }),
             )
             self.r2.put_json(manifest_key, manifest)
             manifest_url = self.r2.public_url(manifest_key)
@@ -515,19 +535,23 @@ class AkoolSwapFaceEngine:
             on_log(f"[swap][manifest] manifest_url={manifest_url}")
             on_log(f"[swap][finalize] status=succeeded output_key={output_key} output_url={output_url}")
             on_log("[swap][finalize] task_completed status=success progress=100")
+            finalize_stage = "completed"
             on_stage("DONE", 100)
 
             return EngineResult(
                 output_key=output_key,
                 output_url=output_url,
-                metadata={
-                    "provider": self.provider,
+                metadata=self._json_safe({
+                    "provider": provider_name,
                     "request_id": job.request_id or None,
                     "job_id": job.job_id or None,
                     "remote_status": remote_status,
                     "elapsed_ms": elapsed_ms,
                     "detect_stage": detect_stage,
                     "submit_stage": submit_stage,
+                    "finalize_stage": finalize_stage,
+                    "output_key": output_key,
+                    "output_url": output_url,
                     "outputs": outputs,
                     "metrics": {"total_latency_ms": elapsed_ms},
                     "run_config_snapshot": manifest["run_config_snapshot"],
@@ -549,9 +573,9 @@ class AkoolSwapFaceEngine:
                     "vendor_bridge_enabled": True,
                     "source_face_vendor_url": source_face_vendor_url,
                     "source_video_vendor_url": source_video_vendor_url,
-                    "vendor_provider": self.provider,
+                    "vendor_provider": provider_name,
                     "resource_expire_days": 7,
-                },
+                }),
             )
         except VendorAssetBridgeError:
             raise

@@ -1,4 +1,4 @@
-from app.services.task_service import TaskService, _extract_action_replica_run_config
+from app.services.task_service import TaskService, _extract_action_replica_run_config, _extract_swap_run_config
 from app.models.task import TaskRecord
 
 
@@ -42,6 +42,12 @@ def test_swap_face_provider_defaults_to_akool(monkeypatch):
     assert provider == "akool_swap_face"
 
 
+def test_swap_intelligence_provider_uses_internal_slot():
+    svc = _svc()
+    provider = svc._resolve_provider("swap", {"subtype": "face", "inputs": {}}, "intelligence")
+    assert provider == "swap_intelligence"
+
+
 def test_swap_scene_provider_from_record(monkeypatch):
     svc = _svc()
     monkeypatch.setenv("SWIFT_SWAP_SCENE_PROVIDER", "fal_pixverse_swap")
@@ -64,6 +70,30 @@ def test_swap_face_provider_from_record_defaults_to_akool(monkeypatch):
         metadata={"run_config_snapshot": {"subtype": "face"}},
     )
     assert svc._resolve_provider_from_record(record) == "akool_swap_face"
+
+
+def test_swap_intelligence_provider_from_record_uses_internal_slot():
+    svc = _svc()
+    record = TaskRecord(
+        task_id="swap-face-2",
+        service="swap",
+        mode="intelligence",
+        metadata={"run_config_snapshot": {"subtype": "face", "mode": "intelligence"}},
+    )
+    assert svc._resolve_provider_from_record(record) == "swap_intelligence"
+
+
+def test_extract_swap_run_config_normalizes_basic_mode():
+    cfg = _extract_swap_run_config(
+        {
+            "inputs": {
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+            }
+        },
+        "baseline",
+    )
+    assert cfg["mode"] == "basic"
 
 
 def test_action_replica_default_provider_mapping(monkeypatch):

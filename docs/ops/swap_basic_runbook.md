@@ -1,9 +1,18 @@
 # Swap Basic
 
+## Scope
+- `mode=basic`
+- single-face only for v1.x
+- one source face image
+- one source video
+- no multi-face mapping
+- no multi-character orchestration
+
 ## Input / Output
 - Input:
   - `service_type=swap`
   - `swap_type=face`
+  - `mode=basic`
   - `input_key`
   - `source_face_image_key`
   - `provider`
@@ -19,7 +28,7 @@
 {
   "task_id": "swap_demo_001",
   "service_type": "swap",
-  "mode": "baseline",
+  "mode": "basic",
   "swap_type": "face",
   "provider": "akool_swap_face",
   "input_snapshot": {
@@ -40,7 +49,7 @@
   "run_config_snapshot": {
     "service_type": "swap",
     "swap_type": "face",
-    "mode": "baseline",
+    "mode": "basic",
     "keep_original_audio": true,
     "face_fidelity": "balanced"
   },
@@ -52,12 +61,13 @@
 ## Manual Acceptance
 1. Open Swap Playground.
 2. Upload one source face image and one source video.
-3. Submit `swap face baseline` with provider `akool_swap_face`.
+3. Submit `swap face basic` with provider `akool_swap_face`.
 4. Verify result video keeps original audio by default.
-5. Verify manifest contains `swap_type`, `keep_original_audio`, `provider`, `outputs.video_url`.
+5. Verify final user-facing result uses SwiftCraft CDN `output_url`.
+6. Verify manifest contains `swap_type`, `keep_original_audio`, `provider`, `outputs.video_url`.
 
 ## Risks / Constraints
 - Phase 1 only supports single person, front face, 5-10 seconds.
 - No scenes.
-- No intelligent mode.
+- Intelligence exists only as a single-face comparison skeleton.
 - No multi-person or heavy occlusion guarantee.

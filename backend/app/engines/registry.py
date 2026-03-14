@@ -27,6 +27,12 @@ def _wan26_flash():
     return FalWan26FlashEngine()
 
 
+def _swap_intelligence():
+    engine = AkoolSwapFaceEngine()
+    engine.provider = "swap_intelligence"
+    return engine
+
+
 PROVIDER_ADAPTERS: Dict[str, Callable[[], object]] = {
     "wan26_r2v": _wan26_r2v,
     "wan26-r2v": _wan26_r2v,
@@ -47,6 +53,7 @@ PROVIDER_ADAPTERS: Dict[str, Callable[[], object]] = {
     "akool": AkoolEngine,
     "akool_swap_face": AkoolSwapFaceEngine,
     "akool_face_swap": AkoolSwapFaceEngine,
+    "swap_intelligence": _swap_intelligence,
     "real": RealEngine,
     "mock": MockEngine,
 }
