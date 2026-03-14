@@ -10,13 +10,15 @@ import httpx
 
 from app.engines.base import EngineRunError
 from app.services.akool_client import AkoolClient
+from app.services.swap_quality import SwapQualityPipeline
 from app.services.vendor_asset_bridge import VendorAssetBridge
 
 
 class VideoFaceExtractor:
-    def __init__(self, *, client: AkoolClient, bridge: VendorAssetBridge) -> None:
+    def __init__(self, *, client: AkoolClient, bridge: VendorAssetBridge, quality: SwapQualityPipeline | None = None) -> None:
         self.client = client
         self.bridge = bridge
+        self.quality = quality or SwapQualityPipeline(bridge=bridge)
 
     async def _download_video(self, source_url: str, destination: Path) -> None:
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=15.0), follow_redirects=True) as http:
@@ -50,8 +52,7 @@ class VideoFaceExtractor:
 
     async def detect_faces_from_frames(self, frame_paths: List[Path], service: str = "swap") -> List[Dict[str, Any]]:
         detections: List[Dict[str, Any]] = []
-        used_bbox_fallback = False
-        for frame_path in frame_paths:
+        for index, frame_path in enumerate(frame_paths):
             bridged = await self.bridge.bridge_asset(source_path=str(frame_path), service=service, asset_kind="target-frame")
             try:
                 detected = await self.client.detect_faces(
@@ -62,6 +63,7 @@ class VideoFaceExtractor:
                 for face in list(detected.get("faces") or []):
                     detections.append(
                         {
+                            "frame_index": index,
                             "frame_path": str(frame_path),
                             "frame_vendor_url": bridged.public_url,
                             "used_bbox_fallback": False,
@@ -72,10 +74,10 @@ class VideoFaceExtractor:
                 text = str(exc)
                 if "returned no crop_landmarks" not in text:
                     continue
-                used_bbox_fallback = True
                 width, height = self._image_size(frame_path)
                 detections.append(
                     {
+                        "frame_index": index,
                         "frame_path": str(frame_path),
                         "frame_vendor_url": bridged.public_url,
                         "face_id": f"bbox-{frame_path.stem}",
@@ -118,7 +120,7 @@ class VideoFaceExtractor:
     def select_primary_face(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not candidates:
             return []
-        return [max(candidates, key=self._face_area)]
+        return [max(candidates, key=lambda candidate: (candidate.get("quality_score") or 0, self._face_area(candidate)))]
 
     def export_target_face_images(self, selected_faces: List[Dict[str, Any]], output_dir: Path) -> List[Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -139,14 +141,34 @@ class VideoFaceExtractor:
         work_dir: Path,
         service: str = "swap",
         max_frames: int = 8,
+        on_log: Any | None = None,
     ) -> Dict[str, Any]:
         video_path = work_dir / "source_video.mp4"
         await self._download_video(source_video_url, video_path)
         frames = self.extract_candidate_frames(video_path, max_frames=max_frames)
+        if on_log is not None:
+            on_log(f"[swap][target-sample] frames_sampled={len(frames)}")
         detected_faces = await self.detect_faces_from_frames(frames, service=service)
         if not detected_faces:
             raise EngineRunError("target_face_extraction failed: no face detected in sampled frames")
+        for detected in detected_faces:
+            frame_path = Path(str(detected.get("frame_path") or ""))
+            score = self.quality.score_target_face(frame_path, detected)
+            detected["quality_score"] = score["score"]
+            detected["risk_tags"] = score["risk_tags"]
+            detected["quality_breakdown"] = score["breakdown"]
+            if on_log is not None:
+                on_log(
+                    f"[swap][target-score] frame={detected.get('frame_index', 0)} "
+                    f"score={score['score']} risk_tags={score['risk_tags']}"
+                )
         selected_faces = self.select_primary_face(detected_faces)
+        if on_log is not None and selected_faces:
+            selected = selected_faces[0]
+            on_log(
+                f"[swap][target-anchor] selected_frame={selected.get('frame_index', 0)} "
+                f"score={selected.get('quality_score', 0)}"
+            )
         exported_paths = self.export_target_face_images(selected_faces, work_dir / "target_faces")
         bridged_target_images = [
             await self.bridge.bridge_asset(source_path=str(path), service=service, asset_kind="target-face")
@@ -174,6 +196,9 @@ class VideoFaceExtractor:
                     "frame_time": standardized_face.get("frame_time") or selected_face.get("frame_time"),
                     "bridged_target_image_url": bridged.public_url,
                     "used_bbox_fallback": bool(selected_face.get("used_bbox_fallback")),
+                    "quality_score": selected_face.get("quality_score"),
+                    "risk_tags": list(selected_face.get("risk_tags") or []),
+                    "frame_index": selected_face.get("frame_index"),
                 }
             )
         return {
@@ -185,4 +210,7 @@ class VideoFaceExtractor:
             "bridged_target_images": bridged_target_images,
             "used_bbox_fallback": any(bool(face.get("used_bbox_fallback")) for face in detected_faces),
             "require_landmarks": False,
+            "target_face_score": selected_faces[0].get("quality_score") if selected_faces else None,
+            "selected_target_frame_index": selected_faces[0].get("frame_index") if selected_faces else None,
+            "target_face_risk_tags": list(selected_faces[0].get("risk_tags") or []) if selected_faces else [],
         }

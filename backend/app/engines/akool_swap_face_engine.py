@@ -29,6 +29,7 @@ class AkoolSwapFaceEngine:
         self.r2 = R2Client()
         self.vendor_bridge = VendorAssetBridge()
         self.video_face_extractor = None
+        self.swap_quality_pipeline = None
 
     def resolve_public_url(self, value: str | None) -> str | None:
         raw = str(value or "").strip()
@@ -172,6 +173,12 @@ class AkoolSwapFaceEngine:
             "final_poll_raw": None,
             "suspected_provider_stuck": False,
         }
+        source_face_score = None
+        source_face_risk_tags: list[str] = []
+        canonical_source_face_url = source_face_vendor_url = source_video_vendor_url = None
+        target_face_score = None
+        target_face_risk_tags: list[str] = []
+        selected_target_frame_index = None
         on_log(
             f"[swap][preflight] provider={provider_name} mode={record.mode} swap_type={swap_type} "
             f"timeout_sec={self.timeout_sec} poll_interval_sec={self.poll_interval_sec}"
@@ -226,6 +233,30 @@ class AkoolSwapFaceEngine:
             source_face = source_faces[0]
             vendor_runtime["source_face_detect"] = {"ok": True, "face_count": len(source_faces)}
             on_log(f"[swap][detect] parsed_face_count={len(source_faces)}")
+            if is_intelligence_route:
+                if self.swap_quality_pipeline is None:
+                    from app.services.swap_quality import SwapQualityPipeline
+
+                    self.swap_quality_pipeline = SwapQualityPipeline(bridge=self.vendor_bridge)
+                with tempfile.TemporaryDirectory(prefix=f"swap-source-{task_id[:8]}-") as tmp_dir:
+                    canonicalized = await self.swap_quality_pipeline.canonicalize_source_face(
+                        source_face_url=source_face["path"],
+                        service="swap",
+                        output_dir=Path(tmp_dir),
+                    )
+                    canonical_source_face_url = canonicalized["canonical_source_face_url"]
+                    source_score = self.swap_quality_pipeline.score_source_face(
+                        canonicalized["canonical_path"],
+                        source_face,
+                    )
+                source_face_score = source_score["score"]
+                source_face_risk_tags = list(source_score["risk_tags"])
+                on_log(
+                    f"[swap][source-canonicalize] canonical_source_face_url={canonical_source_face_url}"
+                )
+                on_log(
+                    f"[swap][source-score] score={source_face_score} risk_tags={source_face_risk_tags}"
+                )
             on_stage("running", 20)
 
             source_image_payload = [{"path": source_face["path"], "opts": source_face["opts"]}]
@@ -240,22 +271,56 @@ class AkoolSwapFaceEngine:
             }
             if is_intelligence_route:
                 detect_stage = "intelligence_single_face_validation"
+                # Intelligence still scores the target video locally, but does not submit V3 targetImage payloads.
+                if self.video_face_extractor is None:
+                    from app.services.video_face_extractor import VideoFaceExtractor
+
+                    self.video_face_extractor = VideoFaceExtractor(
+                        client=self.client,
+                        bridge=self.vendor_bridge,
+                        quality=self.swap_quality_pipeline,
+                    )
+                with tempfile.TemporaryDirectory(prefix=f"swap-target-{task_id[:8]}-") as tmp_dir:
+                    extraction = await self.video_face_extractor.build_target_faces(
+                        source_video_url=source_video_vendor_url,
+                        work_dir=Path(tmp_dir),
+                        service="swap",
+                        max_frames=8,
+                        on_log=on_log,
+                    )
+                frame_paths = extraction["frames"]
+                detected_target_faces = extraction["detected_faces"]
+                target_faces = list(extraction["target_faces"])
+                bridged_target_images = extraction["bridged_target_images"]
+                bridged_target_image_dicts = [self._serialize_bridged_asset(asset) for asset in bridged_target_images]
+                target_face_runtime = {
+                    "frames_sampled": len(frame_paths),
+                    "faces_detected": len(detected_target_faces),
+                    "selected_count": len(target_faces),
+                    "target_image_payload": target_faces,
+                    "bridged_target_images": bridged_target_image_dicts,
+                    "used_bbox_fallback": bool(extraction.get("used_bbox_fallback")),
+                    "require_landmarks": bool(extraction.get("require_landmarks")),
+                }
                 vendor_runtime["target_face_extraction"] = {
-                    "attempted": False,
-                    "frames_sampled": 0,
-                    "faces_detected": 0,
-                    "require_landmarks": False,
-                    "used_bbox_fallback": False,
+                    "attempted": True,
+                    "frames_sampled": target_face_runtime["frames_sampled"],
+                    "faces_detected": target_face_runtime["faces_detected"],
+                    "require_landmarks": target_face_runtime["require_landmarks"],
+                    "used_bbox_fallback": target_face_runtime["used_bbox_fallback"],
                 }
                 vendor_runtime["source_video_detect"] = {
-                    "attempted": False,
-                    "ok": True,
+                    "attempted": True,
+                    "ok": bool(target_faces),
                     "non_blocking": True,
-                    "reason": "not required for v4 single-face lane",
+                    "reason": None if target_faces else "no face detected in sampled frames",
                 }
+                target_face_score = extraction.get("target_face_score")
+                target_face_risk_tags = list(extraction.get("target_face_risk_tags") or [])
+                selected_target_frame_index = extraction.get("selected_target_frame_index")
                 on_stage("running", 35)
                 submit_payload = {
-                    "source_url": source_face_vendor_url,
+                    "source_url": canonical_source_face_url or source_face_vendor_url,
                     "target_url": source_video_vendor_url,
                     "single_face_mode": True,
                     "model_style": model_style or "realistic",
@@ -271,7 +336,7 @@ class AkoolSwapFaceEngine:
                 on_log(f"[swap][submit] endpoint={provider_debug.get('submit_endpoint')}")
                 on_log(
                     f"[swap][submit] payload_summary="
-                    f"{{'source_url': '{source_face_vendor_url}', 'target_url': '{source_video_vendor_url}', "
+                    f"{{'source_url': '{canonical_source_face_url or source_face_vendor_url}', 'target_url': '{source_video_vendor_url}', "
                     f"'single_face_mode': true, 'model_style': '{model_style or 'realistic'}', 'face_enhance': {bool(face_enhance)}}}"
                 )
                 on_log(f"[swap][submit] payload={submit_payload}")
@@ -288,6 +353,7 @@ class AkoolSwapFaceEngine:
                         work_dir=Path(tmp_dir),
                         service="swap",
                         max_frames=8,
+                        on_log=on_log,
                     )
                 frame_paths = extraction["frames"]
                 detected_target_faces = extraction["detected_faces"]
@@ -303,6 +369,9 @@ class AkoolSwapFaceEngine:
                     "used_bbox_fallback": bool(extraction.get("used_bbox_fallback")),
                     "require_landmarks": bool(extraction.get("require_landmarks")),
                 }
+                target_face_score = extraction.get("target_face_score")
+                target_face_risk_tags = list(extraction.get("target_face_risk_tags") or [])
+                selected_target_frame_index = extraction.get("selected_target_frame_index")
                 vendor_runtime["target_face_extraction"] = {
                     "attempted": True,
                     "frames_sampled": target_face_runtime["frames_sampled"],
@@ -594,6 +663,12 @@ class AkoolSwapFaceEngine:
                     "api_version": api_version,
                     "model_style": model_style,
                     "swap_strength": swap_strength,
+                    "source_face_score": source_face_score,
+                    "source_face_risk_tags": source_face_risk_tags,
+                    "canonical_source_face_url": canonical_source_face_url,
+                    "target_face_score": target_face_score,
+                    "selected_target_frame_index": selected_target_frame_index,
+                    "target_face_risk_tags": target_face_risk_tags,
                     "source_crop_policy": source_crop_policy,
                     "target_anchor_policy": target_anchor_policy,
                     "face_detect": {
@@ -646,6 +721,12 @@ class AkoolSwapFaceEngine:
                     "api_version": api_version,
                     "model_style": model_style,
                     "swap_strength": swap_strength,
+                    "source_face_score": source_face_score,
+                    "source_face_risk_tags": source_face_risk_tags,
+                    "canonical_source_face_url": canonical_source_face_url,
+                    "target_face_score": target_face_score,
+                    "selected_target_frame_index": selected_target_frame_index,
+                    "target_face_risk_tags": target_face_risk_tags,
                     "request_id": job.request_id or None,
                     "job_id": job.job_id or None,
                     "remote_status": remote_status,
