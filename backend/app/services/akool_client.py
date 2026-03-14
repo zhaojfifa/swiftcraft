@@ -305,6 +305,11 @@ class AkoolClient:
         face_mapping: List[Dict[str, Any]] | None = None,
         webhook_url: str | None = None,
     ) -> AkoolSwapJob:
+        mapping_count = len(face_mapping or [])
+        if not bool(single_face_mode) and mapping_count <= 1:
+            raise RuntimeError(
+                "Akool v4 face_mapping currently requires multi-pair mapping and cannot be used for single-pair single-face video replacement"
+            )
         payload: Dict[str, Any] = {
             "source_url": ensure_http_url("source_url", source_url),
             "target_url": ensure_http_url("target_url", target_url),

@@ -211,6 +211,10 @@ def test_submit_faceswap_plus_video_returns_pending(monkeypatch):
                 {
                     "source_face_info": {"face_url": "https://vendor.example/source-detected.jpg"},
                     "target_face_info": {"face_url": "https://vendor.example/target-detected.jpg"},
+                },
+                {
+                    "source_face_info": {"face_url": "https://vendor.example/source-detected-2.jpg"},
+                    "target_face_info": {"face_url": "https://vendor.example/target-detected-2.jpg"},
                 }
             ],
         )
@@ -219,6 +223,31 @@ def test_submit_faceswap_plus_video_returns_pending(monkeypatch):
     assert job.request_id == "req-v4-1"
     assert job.job_id == "job-v4-1"
     assert job.remote_status == "submitted"
+
+
+def test_submit_faceswap_plus_video_blocks_single_pair_mapping():
+    client = AkoolClient.__new__(AkoolClient)
+    client.timeout = None
+
+    with pytest.raises(
+        RuntimeError,
+        match="Akool v4 face_mapping currently requires multi-pair mapping and cannot be used for single-pair single-face video replacement",
+    ):
+        asyncio.run(
+            client.submit_faceswap_plus_video(
+                source_url="https://vendor.example/source-face.jpg",
+                target_url="https://vendor.example/source-video.mp4",
+                single_face_mode=False,
+                model_style="realistic",
+                face_enhance=True,
+                face_mapping=[
+                    {
+                        "source_face_info": {"face_url": "https://vendor.example/source-detected.jpg"},
+                        "target_face_info": {"face_url": "https://vendor.example/target-detected.jpg"},
+                    }
+                ],
+            )
+        )
 
 
 def test_poll_video_faceswap_reads_official_result_list(monkeypatch):
