@@ -120,6 +120,7 @@ class AkoolSwapFaceEngine:
         target_url: str,
         model_style: str,
         face_enhance: bool,
+        face_mapping: list[Dict[str, Any]] | None,
         on_log: Callable[[str], None],
         segment_label: str | None = None,
     ) -> tuple[bytes, Dict[str, Any]]:
@@ -127,9 +128,10 @@ class AkoolSwapFaceEngine:
         job = await self.client.submit_faceswap_plus_video(
             source_url=source_url,
             target_url=target_url,
-            single_face_mode=True,
+            single_face_mode=False,
             model_style=model_style or "realistic",
             face_enhance=bool(face_enhance),
+            face_mapping=face_mapping,
         )
         on_log(f"{prefix} request_id={job.request_id or 'n/a'} remote_status={job.remote_status or 'submitted'}")
         remote_payload = dict(job.raw)
@@ -203,6 +205,27 @@ class AkoolSwapFaceEngine:
         if hasattr(value, "__dict__"):
             return cls._json_safe(dict(vars(value)))
         return str(value)
+
+    async def _detect_mapping_face_url(
+        self,
+        *,
+        image_url: str,
+        on_log: Callable[[str], None],
+        stage_label: str,
+    ) -> str:
+        detected = await self.client.detect_faces(
+            image_url,
+            single_face=True,
+            return_face_url=True,
+        )
+        faces = list(detected.get("faces") or [])
+        if not faces:
+            raise EngineRunError(f"{stage_label} failed: no face detected")
+        mapping_face_url = str(faces[0].get("path") or "").strip()
+        if not mapping_face_url:
+            raise EngineRunError(f"{stage_label} failed: detected face_url missing")
+        on_log(f"[swap][{stage_label}] face_url={mapping_face_url}")
+        return mapping_face_url
 
     async def run(
         self,
@@ -287,6 +310,9 @@ class AkoolSwapFaceEngine:
         source_score_breakdown: Dict[str, Any] = {}
         source_face_risk_tags: list[str] = []
         canonical_source_face_url = source_face_vendor_url = source_video_vendor_url = None
+        source_face_mapping_url = None
+        target_face_mapping_url = None
+        target_anchor_valid = False
         selected_source_face_index = 0
         source_selection_reason = "single_source_only"
         target_face_score = None
@@ -575,13 +601,42 @@ class AkoolSwapFaceEngine:
                         f"[swap][source-select] selected_index={selected_source_face_index} "
                         f"reason={source_selection_reason} score={selected_candidate.get('selection_score') or source_face_score}"
                     )
+                source_face_mapping_url = await self._detect_mapping_face_url(
+                    image_url=canonical_source_face_url or source_face_vendor_url,
+                    on_log=on_log,
+                    stage_label="source-anchor-detect",
+                )
+                target_anchor_image_url = None
+                if target_faces:
+                    target_anchor_image_url = str(
+                        target_faces[0].get("bridged_target_image_url")
+                        or target_faces[0].get("path")
+                        or ""
+                    ).strip() or None
+                if not target_anchor_image_url:
+                    raise EngineRunError("target_anchor_detect failed: missing target anchor image url")
+                target_face_mapping_url = await self._detect_mapping_face_url(
+                    image_url=target_anchor_image_url,
+                    on_log=on_log,
+                    stage_label="target-anchor-detect",
+                )
+                target_anchor_valid = True
+                replacement_mode = "segment_based" if segment_summary and int(segment_summary.get("segment_count") or 0) > 1 else "mapped_anchor"
+                on_log(f"[swap][mapping] source_face_url={source_face_mapping_url}")
+                on_log(f"[swap][mapping] target_face_url={target_face_mapping_url}")
                 on_stage("running", 35)
                 submit_payload = {
                     "source_url": canonical_source_face_url or source_face_vendor_url,
                     "target_url": focused_target_url or source_video_vendor_url,
-                    "single_face_mode": True,
+                    "single_face_mode": False,
                     "model_style": model_style or "realistic",
                     "face_enhance": bool(face_enhance),
+                    "face_mapping": [
+                        {
+                            "source_face_info": {"face_url": source_face_mapping_url},
+                            "target_face_info": {"face_url": target_face_mapping_url},
+                        }
+                    ],
                 }
                 vendor_runtime["submit_validation"] = {
                     "sourceImage_count": 1,
@@ -591,10 +646,11 @@ class AkoolSwapFaceEngine:
                 }
                 on_log("[swap][submit][validate] sourceImage_count=1 targetImage_count=1 ok=true")
                 on_log(f"[swap][submit] endpoint={provider_debug.get('submit_endpoint')}")
+                on_log("[swap][submit] single_face_mode=false face_mapping_count=1")
                 on_log(
                     f"[swap][submit] payload_summary="
                     f"{{'source_url': '{canonical_source_face_url or source_face_vendor_url}', 'target_url': '{focused_target_url or source_video_vendor_url}', "
-                    f"'single_face_mode': true, 'model_style': '{model_style or 'realistic'}', 'face_enhance': {bool(face_enhance)}}}"
+                    f"'single_face_mode': false, 'model_style': '{model_style or 'realistic'}', 'face_enhance': {bool(face_enhance)}, 'face_mapping_count': 1}}"
                 )
                 on_log(f"[swap][submit] payload={submit_payload}")
             else:
@@ -724,6 +780,12 @@ class AkoolSwapFaceEngine:
                             target_url=str(segment.get("url") or ""),
                             model_style=model_style or "realistic",
                             face_enhance=bool(face_enhance),
+                            face_mapping=[
+                                {
+                                    "source_face_info": {"face_url": source_face_mapping_url},
+                                    "target_face_info": {"face_url": target_face_mapping_url},
+                                }
+                            ],
                             on_log=on_log,
                             segment_label=segment_label,
                         )
@@ -768,9 +830,15 @@ class AkoolSwapFaceEngine:
                     await self.client.submit_faceswap_plus_video(
                         source_url=canonical_source_face_url or source_face_vendor_url,
                         target_url=focused_target_url or source_video_vendor_url,
-                        single_face_mode=True,
+                        single_face_mode=False,
                         model_style=model_style or "realistic",
                         face_enhance=bool(face_enhance),
+                        face_mapping=[
+                            {
+                                "source_face_info": {"face_url": source_face_mapping_url},
+                                "target_face_info": {"face_url": target_face_mapping_url},
+                            }
+                        ],
                     )
                     if is_intelligence_route
                     else await self.client.submit_video_faceswap(
@@ -1045,6 +1113,9 @@ class AkoolSwapFaceEngine:
                     "face_track_summary": face_track_summary,
                     "target_anchor_summary": target_anchor_summary,
                     "replacement_mode": replacement_mode,
+                    "target_anchor_valid": target_anchor_valid,
+                    "source_face_mapping_url": source_face_mapping_url,
+                    "target_face_mapping_url": target_face_mapping_url,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,
                     "focus_face_ratio": focus_face_ratio,
@@ -1118,6 +1189,9 @@ class AkoolSwapFaceEngine:
                     "face_track_summary": face_track_summary,
                     "target_anchor_summary": target_anchor_summary,
                     "replacement_mode": replacement_mode,
+                    "target_anchor_valid": target_anchor_valid,
+                    "source_face_mapping_url": source_face_mapping_url,
+                    "target_face_mapping_url": target_face_mapping_url,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,
                     "focus_face_ratio": focus_face_ratio,

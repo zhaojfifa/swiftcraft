@@ -302,6 +302,7 @@ class AkoolClient:
         face_enhance: bool,
         single_face_mode: bool = True,
         model_style: str = "realistic",
+        face_mapping: List[Dict[str, Any]] | None = None,
         webhook_url: str | None = None,
     ) -> AkoolSwapJob:
         payload: Dict[str, Any] = {
@@ -311,6 +312,8 @@ class AkoolClient:
             "model_style": str(model_style or "realistic").strip().lower() or "realistic",
             "face_enhance": bool(face_enhance),
         }
+        if face_mapping:
+            payload["face_mapping"] = face_mapping
         if webhook_url:
             payload["webhookUrl"] = ensure_http_url("webhook_url", webhook_url)
         logger.info("[swap][submit] body_preview=%s", self.safe_json(payload))
