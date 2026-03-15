@@ -136,15 +136,24 @@ class VideoFaceExtractor:
 
     @staticmethod
     def _face_area(candidate: Dict[str, Any]) -> float:
-        box = candidate.get("region")
-        if isinstance(box, dict):
+        region = candidate.get("region")
+        if isinstance(region, dict):
             try:
-                return float(box.get("width") or box.get("w") or 0) * float(box.get("height") or box.get("h") or 0)
+                return float(region.get("width") or region.get("w") or 0) * float(region.get("height") or region.get("h") or 0)
             except Exception:
                 return 0.0
-        if isinstance(box, list) and len(box) >= 4:
+        if isinstance(region, list) and len(region) >= 4:
             try:
-                return abs(float(box[2]) - float(box[0])) * abs(float(box[3]) - float(box[1]))
+                return abs(float(region[2]) - float(region[0])) * abs(float(region[3]) - float(region[1]))
+            except Exception:
+                return 0.0
+        opts_box = VideoFaceExtractor._opts_to_box(candidate.get("opts"))
+        if opts_box is not None:
+            return float(opts_box[2]) * float(opts_box[3])
+        raw_box = candidate.get("raw_box")
+        if isinstance(raw_box, (list, tuple)) and len(raw_box) >= 4:
+            try:
+                return float(raw_box[2]) * float(raw_box[3])
             except Exception:
                 return 0.0
         return 0.0
@@ -247,7 +256,7 @@ class VideoFaceExtractor:
         frames: List[int] = []
         fallback_frames = 0
         for candidate in candidates:
-            box = self._region_to_box(candidate.get("region"))
+            box = self._region_to_box(candidate.get("region")) or self._opts_to_box(candidate.get("opts"))
             if box is None:
                 frame_path = Path(str(candidate.get("frame_path") or ""))
                 if frame_path.exists():
@@ -274,10 +283,14 @@ class VideoFaceExtractor:
         for candidate in candidates:
             frame_index = int(candidate.get("frame_index") or 0)
             if anchor_index is not None and abs(frame_index - anchor_index) <= 1:
-                neighbor_box = self._region_to_box(candidate.get("region"))
+                neighbor_box = self._region_to_box(candidate.get("region")) or self._opts_to_box(candidate.get("opts"))
                 if neighbor_box is not None:
                     anchor_neighbors.append(neighbor_box)
-        anchor_box = self._region_to_box(selected_face.get("region")) if selected_face else None
+        anchor_box = (
+            self._region_to_box(selected_face.get("region")) or self._opts_to_box(selected_face.get("opts"))
+            if selected_face
+            else None
+        )
         smoothed_anchor_box = None
         if anchor_neighbors:
             smoothed_anchor_box = {
@@ -398,7 +411,7 @@ class VideoFaceExtractor:
     def _candidate_face_box(self, face: Dict[str, Any]) -> tuple[float, float, float, float] | None:
         return (
             tuple(face.get("crop_box") or ()) if isinstance(face.get("crop_box"), (list, tuple)) else None
-        ) or self._region_to_box(face.get("region")) or tuple(face.get("raw_box") or ())
+        ) or self._region_to_box(face.get("region")) or self._opts_to_box(face.get("opts")) or tuple(face.get("raw_box") or ())
 
     def _crop_face_image(self, src: Path, dst: Path, face: Dict[str, Any]) -> tuple[Path, tuple[int, int, int, int] | None]:
         box = self._candidate_face_box(face)
@@ -686,7 +699,9 @@ class VideoFaceExtractor:
                 "quality_score": selected_faces[0].get("quality_score") if selected_faces else None,
                 "risk_tags": list(selected_faces[0].get("risk_tags") or []) if selected_faces else [],
                 "region": selected_faces[0].get("region") if selected_faces else None,
+                "opts": selected_faces[0].get("opts") if selected_faces else None,
                 "raw_box": selected_faces[0].get("raw_box") if selected_faces else None,
+                "crop_box": (target_faces[0] if target_faces else {}).get("crop_box"),
                 "quality_breakdown": dict(selected_faces[0].get("quality_breakdown") or {}) if selected_faces else {},
                 "rank_reason": "best_for_identity_overwrite" if selection_mode == "aggressive_mapping" else "highest_quality_primary_face",
             },
