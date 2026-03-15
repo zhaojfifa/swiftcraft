@@ -9,7 +9,6 @@ fal-client>=0.13.0
 ctranslate2>=4.6,<4.8
 faster-whisper==1.0.3
 onnxruntime
-av==12.3.0
 requests
 huggingface-hub
 tokenizers
