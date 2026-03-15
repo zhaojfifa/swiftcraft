@@ -94,6 +94,17 @@ class FalWan26R2VEngine:
         self.prepare_timeout_sec = max(5, int(os.getenv("SWIFT_R2V_PREPARE_TIMEOUT_SEC", "120")))
         self.r2 = R2Client()
 
+    def _resolve_character_image_url(self, record: TaskRecord, inputs: Dict[str, Any]) -> str:
+        return str(
+            inputs.get("character_image_url")
+            or inputs.get("input_image_url")
+            or record.input_image_url
+            or ""
+        ).strip()
+
+    def _summarize_payload_keys(self, payload: Dict[str, Any]) -> str:
+        return ",".join(sorted(str(key) for key in payload.keys()))
+
     async def _run_step(
         self,
         step: str,
@@ -182,6 +193,9 @@ class FalWan26R2VEngine:
             fal_client = _get_fal_client()
             if not record.input_video_url:
                 raise EngineRunError(f"task_id={task_id} missing required field: input_video_url")
+            character_image_url = self._resolve_character_image_url(record, inputs)
+            if not character_image_url:
+                raise EngineRunError(f"task_id={task_id} missing required field: character_image_url")
             on_stage("running", 5)
 
             prompt_source_raw = str(inputs.get("prompt_source") or "default").strip().lower() or "default"
@@ -287,6 +301,7 @@ class FalWan26R2VEngine:
 
             def build_args(video_url: str) -> Dict[str, Any]:
                 return {
+                    "image_url": character_image_url,
                     "prompt": prompt,
                     "negative_prompt": final_negative_prompt,
                     "video_urls": [video_url],
@@ -299,8 +314,20 @@ class FalWan26R2VEngine:
                     "enable_safety_checker": self.enable_safety_checker,
                 }
 
+            def log_payload_summary(args: Dict[str, Any]) -> None:
+                on_log(f"[ar][payload] source_video_url_present={str(bool(video_url_for_log)).lower()}")
+                on_log(f"[ar][payload] character_image_url_present={str(bool(character_image_url)).lower()}")
+                on_log(f"[ar][payload] request_keys={self._summarize_payload_keys(args)}")
+                on_log("[ar][payload] reference_image_field=image_url")
+                on_log(
+                    f"[ar][payload] prompt_len={len(prompt)} negative_prompt_len={len(final_negative_prompt)} "
+                    f"video_input_keys={'video_urls' if 'video_urls' in args else 'missing'} "
+                    f"image_input_keys={'image_url' if 'image_url' in args else 'missing'}"
+                )
+
             result: Dict[str, Any] | None = None
             last_request_id: Optional[str] = None
+            video_url_for_log = submit_video_url
 
             def extract_submit_request_id(submit_info: Dict[str, Any]) -> str:
                 rid = str(
@@ -343,6 +370,8 @@ class FalWan26R2VEngine:
                     }
                     on_log(f"[slice] start={offset} dur={duration_sec} ref_clip_1_url={ref_clip_url}")
                     args = build_args(submit_video_url)
+                    video_url_for_log = submit_video_url
+                    log_payload_summary(args)
                     on_log(
                         f"[r2v][args] videos={len(args['video_urls'])} aspect={self.aspect_ratio} res={self.resolution} duration={self.duration}"
                     )
@@ -433,6 +462,8 @@ class FalWan26R2VEngine:
                     f"[slice] start={self.fixed_slice_start_sec} dur={duration_sec} ref_clip_1_url={ref_clip_url}"
                 )
                 args = build_args(submit_video_url)
+                video_url_for_log = submit_video_url
+                log_payload_summary(args)
                 on_log(
                     f"[r2v][args] videos={len(args['video_urls'])} aspect={self.aspect_ratio} res={self.resolution} duration={self.duration}"
                 )
@@ -454,6 +485,8 @@ class FalWan26R2VEngine:
                     )
             else:
                 args = build_args(submit_video_url)
+                video_url_for_log = submit_video_url
+                log_payload_summary(args)
                 on_log(
                     f"[r2v][args] videos={len(args['video_urls'])} aspect={self.aspect_ratio} res={self.resolution} duration={self.duration}"
                 )
@@ -578,6 +611,22 @@ class FalWan26R2VEngine:
                     "download_elapsed_ms": download_elapsed_ms,
                     "upload_elapsed_ms": upload_elapsed_ms,
                     "risk_hints": risk_hints,
+                    "source_video_url": record.input_video_url,
+                    "character_image_url": character_image_url,
+                    "reference_image_field": "image_url",
+                    "request_payload_keys": [
+                        "image_url",
+                        "prompt",
+                        "negative_prompt",
+                        "video_urls",
+                        "aspect_ratio",
+                        "resolution",
+                        "duration",
+                        "keep_original_sound",
+                        "enable_prompt_expansion",
+                        "multi_shots",
+                        "enable_safety_checker",
+                    ],
                     **slice_meta,
                 },
             )
