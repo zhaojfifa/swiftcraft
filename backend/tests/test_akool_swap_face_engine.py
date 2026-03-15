@@ -422,6 +422,40 @@ class _FakeClient:
         return b"video"
 
 
+class _RetryTempFileClient(_FakeClient):
+    async def submit_video_faceswap(self, **kwargs):
+        self.submit_calls += 1
+        self.last_submit_kwargs = kwargs
+        request_id = f"req-retry-{self.submit_calls}"
+        job_id = f"job-retry-{self.submit_calls}"
+
+        class _Job:
+            remote_status = "submitted_pending"
+
+        _Job.request_id = request_id
+        _Job.job_id = job_id
+        _Job.result_url = "https://vendor.example/result.mp4"
+        _Job.raw = {"status": "submitted_pending", "url": "https://vendor.example/result.mp4"}
+        return _Job()
+
+    async def poll_video_faceswap(self, _job):
+        self.poll_calls += 1
+        if self.submit_calls == 1:
+            return {"result": [{"faceswap_status": 4, "alg_msg": "generate temp file error", "url": "https://vendor.example/result.mp4"}]}
+        return {"result": [{"faceswap_status": 3, "url": "https://vendor.example/result.mp4"}]}
+
+    async def poll_faceswap_plus_video(self, _job):
+        self.poll_calls += 1
+        if self.submit_calls == 1:
+            return {"data": {"result": [{"faceswap_status": 4, "alg_msg": "generate temp file error", "url": "https://vendor.example/result-v4.mp4"}]}}
+        return {"data": {"result": [{"faceswap_status": 3, "url": "https://vendor.example/result-v4.mp4"}]}}
+
+    async def probe_result(self, _url):
+        if self.submit_calls == 1:
+            return 403, "text/plain"
+        return 200, "video/mp4"
+
+
 class _FakeExtractor:
     async def build_target_faces(self, **_kwargs):
         return {
@@ -1026,3 +1060,64 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert result.metadata["target_anchor_quality"]["valid_for_extreme"] is False
     assert result.metadata["extreme_replace_selected"] is True
     assert result.metadata["fallback_reason"] == "full_frame_target"
+
+
+def test_swap_engine_retries_provider_temp_file_error_with_raw_target_reason():
+    engine = AkoolSwapFaceEngine.__new__(AkoolSwapFaceEngine)
+    engine.provider = "swap_intelligence_akool"
+    engine.service_type = "swap"
+    engine.poll_interval_sec = 1
+    engine.timeout_sec = 30
+    engine.watchdog_timeout_sec = 30
+    engine.client = _RetryTempFileClient()
+    engine.r2 = _FakeR2Upload()
+    engine.vendor_bridge = _FakeBridge()
+    engine.video_face_extractor = _InvalidFocusExtractor()
+    engine.swap_quality_pipeline = _FakeQualityPipeline()
+    engine.swap_segmenter = _FakeSegmenter(segment_count=1)
+    engine._apply_audio_strategy = lambda content, _keep: content
+    engine._apply_intelligence_postprocess = lambda content, _on_log: (
+        content,
+        {"attempted": True, "applied": True, "reason": None, "filters": "test"},
+    )
+
+    record = TaskRecord(
+        task_id="task-v4-retry-temp",
+        service="swap",
+        mode="intelligence",
+        input_key="uploads/source.mp4",
+        input_image_key="uploads/source-face.png",
+        metadata={
+            "provider": "swap_intelligence_akool",
+            "run_config_snapshot": {
+                "provider": "swap_intelligence_akool",
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+                "face_fidelity": "extreme_replace",
+                "replacement_intensity": "extreme_replace",
+                "swap_strength": "extreme_replace",
+                "source_crop_policy": "extreme_identity_core",
+                "target_anchor_policy": "extreme_mapping_primary",
+                "keep_original_audio": True,
+                "face_enhance": False,
+            }
+        },
+    )
+
+    result = asyncio.run(
+        engine.run(
+            "task-v4-retry-temp",
+            record,
+            {},
+            on_log=lambda _message: None,
+            on_stage=lambda _stage, _progress: None,
+        )
+    )
+
+    assert engine.client.submit_calls == 2
+    assert result.metadata["provider_failure_reason"] == "generate_temp_file_error"
+    assert result.metadata["failure_stage"] == "provider_render"
+    assert result.metadata["retry_attempt"] == 1
+    assert result.metadata["retry_reason"] == "raw_target_provider_temp_error"
+    assert result.metadata["modify_video_source"] == "raw_target"
+    assert result.metadata["output_url"] == "https://cdn.example/outputs/task-v4-retry-temp/result.mp4"

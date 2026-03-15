@@ -118,6 +118,35 @@ class AkoolSwapFaceEngine:
                 on_log(f"[swap][postprocess] failed reason={reason}")
                 return content, {"attempted": True, "applied": False, "reason": reason, "filters": filters}
 
+    def _extract_provider_alg_msg(self, payload: Dict[str, Any] | None) -> str:
+        body = dict(payload or {})
+        item = self.client.extract_result_item(body) if hasattr(self.client, "extract_result_item") else {}
+        if not isinstance(item, dict):
+            item = {}
+        data = body.get("data")
+        candidates = [
+            item.get("alg_msg"),
+            item.get("error_msg"),
+            item.get("message"),
+            body.get("alg_msg"),
+            body.get("error_msg"),
+            body.get("msg"),
+            data.get("alg_msg") if isinstance(data, dict) else None,
+            data.get("error_msg") if isinstance(data, dict) else None,
+        ]
+        for value in candidates:
+            text = str(value or "").strip()
+            if text:
+                return text
+        return ""
+
+    def _classify_provider_failure(self, payload: Dict[str, Any] | None) -> tuple[str | None, str | None]:
+        alg_msg = self._extract_provider_alg_msg(payload)
+        normalized = alg_msg.lower()
+        if "generate temp file error" in normalized or "temp file error" in normalized:
+            return "provider_render", "generate_temp_file_error"
+        return "provider_render", "provider_failed" if alg_msg else (None, None)
+
     async def _run_intelligence_vendor_job(
         self,
         *,
@@ -316,6 +345,10 @@ class AkoolSwapFaceEngine:
             "latest_poll_raw": None,
             "final_poll_raw": None,
             "suspected_provider_stuck": False,
+            "provider_failure_reason": None,
+            "failure_stage": None,
+            "retry_attempt": 0,
+            "retry_reason": None,
         }
         source_face_score = None
         source_score_breakdown: Dict[str, Any] = {}
@@ -337,6 +370,10 @@ class AkoolSwapFaceEngine:
         proxy_clip_valid = False
         proxy_clip_reason: str | None = None
         modify_video_source = "raw_target"
+        provider_failure_reason: str | None = None
+        failure_stage: str | None = None
+        retry_attempt = 0
+        retry_reason: str | None = None
         requested_replacement_intensity = replacement_intensity
         selected_target_frame_index = None
         original_target_url = None
@@ -353,6 +390,8 @@ class AkoolSwapFaceEngine:
         quality_summary: Dict[str, Any] | None = None
         degraded_fallback_used = False
         target_mapping_face_rank_reason = None
+        submit_modify_video = source_video_url or ""
+        submit_face_enhance = bool(face_enhance)
         on_log(
             f"[swap][preflight] provider={provider_name} mode={record.mode} swap_type={swap_type} "
             f"timeout_sec={self.timeout_sec} poll_interval_sec={self.poll_interval_sec}"
@@ -881,6 +920,9 @@ class AkoolSwapFaceEngine:
                     f"'modifyVideo': '{source_video_vendor_url}', 'face_enhance': {face_enhance}}}"
                 )
                 on_log(f"[swap][submit] payload={submit_payload}")
+                submit_modify_video = source_video_vendor_url
+                submit_face_enhance = bool(face_enhance)
+                modify_video_source = "raw_target"
             submit_stage = "submit_start"
             harvested_content: bytes | None = None
             if is_intelligence_route and segment_build and int(segment_summary.get("segment_count") or 0) > 1:
@@ -960,21 +1002,15 @@ class AkoolSwapFaceEngine:
                     raw={"segment_results": segment_results},
                 )
             else:
-                job = (
-                    await self.client.submit_video_faceswap(
+                async def _submit_current_job() -> Any:
+                    return await self.client.submit_video_faceswap(
                         source_face=source_face,
                         target_faces=target_face_runtime["target_image_payload"],
-                        modify_video=focused_target_url or source_video_vendor_url,
-                        face_enhance=face_enhance,
+                        modify_video=submit_modify_video,
+                        face_enhance=1 if bool(submit_face_enhance) else 0,
                     )
-                    if is_intelligence_route
-                    else await self.client.submit_video_faceswap(
-                        source_face=source_face,
-                        target_faces=target_face_runtime["target_image_payload"],
-                        modify_video=source_video_vendor_url,
-                        face_enhance=face_enhance,
-                    )
-                )
+
+                job = await _submit_current_job()
             submit_stage = "submit_ok"
             vendor_runtime["submit"] = {
                 "soft_accepted": job.remote_status == "submitted_pending",
@@ -1072,7 +1108,68 @@ class AkoolSwapFaceEngine:
                         "reason": "remote status not completed yet",
                     }
                     if faceswap_status == 4 or remote_status in {"failed", "error", "cancelled"}:
-                        raise EngineRunError(f"poll failed: request_id={job.request_id or 'n/a'} status={remote_status}")
+                        failure_stage, provider_failure_reason = self._classify_provider_failure(remote_payload)
+                        alg_msg = self._extract_provider_alg_msg(remote_payload)
+                        vendor_runtime["failure_stage"] = failure_stage
+                        vendor_runtime["provider_failure_reason"] = provider_failure_reason
+                        vendor_runtime["retry_attempt"] = retry_attempt
+                        vendor_runtime["retry_reason"] = retry_reason
+                        on_log(
+                            f"[swap][provider-failure] stage={failure_stage or 'n/a'} "
+                            f"reason={provider_failure_reason or 'unknown'} alg_msg={alg_msg or 'n/a'}"
+                        )
+                        should_retry_temp_file = provider_failure_reason == "generate_temp_file_error" and harvested_content is None
+                        if should_retry_temp_file and retry_attempt < 2:
+                            retry_attempt += 1
+                            next_modify_video = submit_modify_video
+                            if retry_attempt == 1:
+                                retry_reason = "provider_temp_file_error"
+                                if (
+                                    requested_replacement_intensity == "extreme_replace"
+                                    and modify_video_source == "raw_target"
+                                ):
+                                    retry_reason = "raw_target_provider_temp_error"
+                                    if proxy_target_url:
+                                        next_modify_video = proxy_target_url
+                                    elif focused_target_url:
+                                        next_modify_video = focused_target_url
+                                if next_modify_video == proxy_target_url and proxy_target_url:
+                                    modify_video_source = "proxy_target"
+                                    proxy_clip_used = True
+                                    proxy_clip_valid = True
+                                elif next_modify_video == focused_target_url and focused_target_url:
+                                    modify_video_source = "focused_target"
+                                else:
+                                    modify_video_source = "raw_target"
+                            else:
+                                retry_reason = "rebuild_bridged_assets"
+                                rebuilt = await self.vendor_bridge.bridge_asset(
+                                    source_url=original_target_url or source_video_url or source_video_vendor_url,
+                                    service="swap",
+                                    asset_kind="source-video-retry",
+                                )
+                                next_modify_video = rebuilt.public_url
+                                source_video_vendor_url = rebuilt.public_url
+                                modify_video_source = "raw_target_rebridged"
+                            submit_modify_video = next_modify_video
+                            vendor_runtime["retry_attempt"] = retry_attempt
+                            vendor_runtime["retry_reason"] = retry_reason
+                            on_log(
+                                f"[swap][retry] attempt={retry_attempt} reason={retry_reason} modifyVideoSource={modify_video_source}"
+                            )
+                            job = await _submit_current_job()
+                            vendor_runtime["request_id"] = job.request_id or None
+                            vendor_runtime["vendor_request_id"] = job.request_id or None
+                            vendor_runtime["vendor_job_id"] = job.job_id or None
+                            vendor_runtime["vendor_result_url"] = job.result_url
+                            vendor_runtime["submit_raw"] = dict(job.raw)
+                            remote_payload = dict(job.raw)
+                            remote_status = str(job.remote_status or self.client.extract_remote_status(remote_payload)).strip().lower()
+                            continue
+                        raise EngineRunError(
+                            f"provider_render failed: request_id={job.request_id or 'n/a'} "
+                            f"reason={provider_failure_reason or remote_status} alg_msg={alg_msg or 'n/a'}"
+                        )
                     if remote_status not in pending_statuses:
                         raise EngineRunError(f"poll failed: request_id={job.request_id or 'n/a'} unexpected status={remote_status}")
                     if faceswap_status in {1, 2} and elapsed_sec >= stuck_threshold_sec:
@@ -1219,6 +1316,10 @@ class AkoolSwapFaceEngine:
                 "proxy_clip_used": proxy_clip_used,
                 "proxy_clip_reason": proxy_clip_reason,
                 "modify_video_source": modify_video_source,
+                "provider_failure_reason": provider_failure_reason,
+                "failure_stage": failure_stage,
+                "retry_attempt": retry_attempt,
+                "retry_reason": retry_reason,
                 "degraded_fallback_used": degraded_fallback_used,
                 "risk_tags": risk_tags,
                 "route_summary": route_summary,
@@ -1296,6 +1397,10 @@ class AkoolSwapFaceEngine:
                     "fallback_reason": fallback_reason,
                     "replacement_mode": replacement_mode,
                     "modify_video_source": modify_video_source,
+                    "provider_failure_reason": provider_failure_reason,
+                    "failure_stage": failure_stage,
+                    "retry_attempt": retry_attempt,
+                    "retry_reason": retry_reason,
                     "proxy_clip_valid": proxy_clip_valid,
                     "proxy_clip_used": proxy_clip_used,
                     "proxy_clip_reason": proxy_clip_reason,
@@ -1393,6 +1498,10 @@ class AkoolSwapFaceEngine:
                     "fallback_reason": fallback_reason,
                     "replacement_mode": replacement_mode,
                     "modify_video_source": modify_video_source,
+                    "provider_failure_reason": provider_failure_reason,
+                    "failure_stage": failure_stage,
+                    "retry_attempt": retry_attempt,
+                    "retry_reason": retry_reason,
                     "proxy_clip_valid": proxy_clip_valid,
                     "proxy_clip_used": proxy_clip_used,
                     "proxy_clip_reason": proxy_clip_reason,
