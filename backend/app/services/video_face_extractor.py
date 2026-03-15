@@ -189,6 +189,23 @@ class VideoFaceExtractor:
         return None
 
     @staticmethod
+    def _opts_to_box(opts: Any) -> tuple[float, float, float, float] | None:
+        if not isinstance(opts, str):
+            return None
+        parts = [part.strip() for part in opts.split(",")]
+        if len(parts) < 4:
+            return None
+        try:
+            x1, y1, x2, y2 = [float(part) for part in parts[:4]]
+        except Exception:
+            return None
+        width = abs(x2 - x1)
+        height = abs(y2 - y1)
+        if width <= 0 or height <= 0:
+            return None
+        return min(x1, x2), min(y1, y2), width, height
+
+    @staticmethod
     def _even_int(value: float, *, minimum: int = 2) -> int:
         result = max(minimum, int(round(value)))
         return result if result % 2 == 0 else result + 1
@@ -400,7 +417,11 @@ class VideoFaceExtractor:
     ) -> tuple[Path | None, Dict[str, Any]]:
         if selected_face is None or video_size is None:
             return None, {"proxy_clip_valid": False, "proxy_reason": "missing_selected_face"}
-        proxy_box = self._region_to_box(selected_face.get("region")) or tuple(selected_face.get("raw_box") or ())
+        proxy_box = (
+            self._region_to_box(selected_face.get("region"))
+            or self._opts_to_box(selected_face.get("opts"))
+            or tuple(selected_face.get("raw_box") or ())
+        )
         if not proxy_box or len(proxy_box) < 4:
             return None, {"proxy_clip_valid": False, "proxy_reason": "missing_face_box"}
         video_width, video_height = int(video_size[0]), int(video_size[1])

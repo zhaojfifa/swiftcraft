@@ -780,6 +780,7 @@ def test_swap_engine_intelligence_selects_best_source_reference():
     assert result.metadata["source_selection_reason"] == "target_anchor_pose_match"
     assert result.metadata["source_pack_size"] == 3
     assert len(result.metadata["selected_source_refs"]) >= 1
+    assert result.metadata["selected_source_bucket"] == "primary"
 
 
 def test_swap_engine_intelligence_segment_route_stitches_and_fallbacks():
@@ -957,6 +958,7 @@ def test_swap_engine_intelligence_extreme_replace_sets_route_and_face_enhance_fl
     assert result.metadata["extreme_replace_effective"] is True
     assert result.metadata["proxy_clip_used"] is True
     assert result.metadata["target_anchor_quality"]["valid_for_extreme"] is True
+    assert result.metadata["extreme_replace_selected"] is True
     assert engine.client.last_submit_kwargs["modify_video"] == "https://vendor.example/focused-target.mp4"
 
 
@@ -1017,4 +1019,5 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert result.metadata["downgrade_reason"] == "target_mapping_face_below_extreme_threshold"
     assert result.metadata["proxy_clip_used"] is False
     assert result.metadata["target_anchor_quality"]["valid_for_extreme"] is False
+    assert result.metadata["extreme_replace_selected"] is True
     assert result.metadata["fallback_reason"] == "target_mapping_face_below_extreme_threshold"

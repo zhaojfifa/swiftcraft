@@ -322,6 +322,7 @@ class AkoolSwapFaceEngine:
         source_face_risk_tags: list[str] = []
         canonical_source_face_url = source_face_vendor_url = source_video_vendor_url = None
         selected_source_face_index = 0
+        selected_source_bucket = "primary"
         source_selection_reason = "single_source_only"
         source_pack_size = 1
         selected_source_refs: list[dict[str, Any]] = []
@@ -333,6 +334,7 @@ class AkoolSwapFaceEngine:
         downgrade_reason: str | None = None
         fallback_reason: str | None = None
         proxy_clip_used = False
+        requested_replacement_intensity = replacement_intensity
         selected_target_frame_index = None
         original_target_url = None
         focused_target_url = None
@@ -668,6 +670,7 @@ class AkoolSwapFaceEngine:
                             "selection_score": source_face_score,
                         }
                     ]
+                    selected_source_bucket = "primary"
                 if replacement_intensity == "extreme_replace":
                     target_anchor_valid = bool((target_anchor_quality or {}).get("valid_for_extreme"))
                     if not target_anchor_valid:
@@ -718,6 +721,7 @@ class AkoolSwapFaceEngine:
                     else replacement_intensity
                 )
                 submit_face_enhance = face_enhance if downgrade_reason is None else True
+                selected_source_bucket = "primary"
                 submit_payload = {
                     "sourceImage": [{"path": source_face["path"], "opts": source_face["opts"]}],
                     "targetImage": [{"path": face["path"], "opts": face["opts"]} for face in target_face_runtime["target_image_payload"]],
@@ -883,6 +887,7 @@ class AkoolSwapFaceEngine:
                             selected_source_face_index if segment_index == anchor_segment_index else support_source_index,
                             source_face,
                         )
+                        segment_source_bucket = "primary" if segment_index == anchor_segment_index else "support"
                         segment_content, segment_runtime = await self._run_intelligence_vendor_job(
                             source_face=segment_source_face,
                             target_faces=target_face_runtime["target_image_payload"],
@@ -898,6 +903,7 @@ class AkoolSwapFaceEngine:
                             "status": "succeeded",
                             "fallback_used": False,
                             "selected_source_face_index": selected_source_face_index if segment_index == anchor_segment_index else support_source_index,
+                            "selected_source_bucket": segment_source_bucket,
                             **segment_runtime,
                         }
                     except Exception as exc:
@@ -1155,22 +1161,25 @@ class AkoolSwapFaceEngine:
                 if is_intelligence_route
                 else f"{str(record.mode or 'basic').lower()}_{api_version}_{route_execution_style}_{swap_strength}"
             )
+            extreme_replace_selected = requested_replacement_intensity == "extreme_replace"
             extreme_replace_effective = (
-                replacement_intensity == "extreme_replace" and not degraded_fallback_used
+                extreme_replace_selected and proxy_clip_used and not degraded_fallback_used
             )
-            if downgrade_reason or (replacement_intensity == "extreme_replace" and not focus_crop_valid and not proxy_clip_used and degraded_fallback_used):
+            if downgrade_reason or (extreme_replace_selected and not focus_crop_valid and not proxy_clip_used and degraded_fallback_used):
                 extreme_replace_effective = False
-            if replacement_intensity == "extreme_replace" and not extreme_replace_effective and not fallback_reason:
+            if extreme_replace_selected and not extreme_replace_effective and not fallback_reason:
                 fallback_reason = downgrade_reason or "full_frame_target_fallback"
             quality_summary = {
                 "swap_strength": swap_strength,
                 "replacement_intensity": replacement_intensity,
+                "extreme_replace_selected": extreme_replace_selected,
                 "route_intent": route_intent,
                 "route_execution_style": route_execution_style,
                 "source_face_score": source_face_score,
                 "target_track_face_score": target_track_face_score,
                 "target_mapping_face_score": target_mapping_face_score,
                 "selected_source_face_index": selected_source_face_index,
+                "selected_source_bucket": selected_source_bucket,
                 "source_pack_size": source_pack_size,
                 "selected_source_face_reason": source_selection_reason,
                 "selected_source_refs": selected_source_refs,
@@ -1212,6 +1221,7 @@ class AkoolSwapFaceEngine:
                     "api_version": api_version,
                     "swap_strength": swap_strength,
                     "replacement_intensity": replacement_intensity,
+                    "extreme_replace_selected": extreme_replace_selected,
                     "route_intent": route_intent,
                     "route_execution_style": route_execution_style,
                     "source_video_key": source_video_key,
@@ -1244,6 +1254,7 @@ class AkoolSwapFaceEngine:
                     "source_face_risk_tags": source_face_risk_tags,
                     "source_pack_size": source_pack_size,
                     "selected_source_face_index": selected_source_face_index,
+                    "selected_source_bucket": selected_source_bucket,
                     "source_selection_reason": source_selection_reason,
                     "selected_source_refs": selected_source_refs,
                     "canonical_source_face_url": canonical_source_face_url,
@@ -1327,6 +1338,7 @@ class AkoolSwapFaceEngine:
                     "model_style": model_style,
                     "swap_strength": swap_strength,
                     "replacement_intensity": replacement_intensity,
+                    "extreme_replace_selected": extreme_replace_selected,
                     "route_intent": route_intent,
                     "route_execution_style": route_execution_style,
                     "route_summary": quality_summary["route_summary"],
@@ -1335,6 +1347,7 @@ class AkoolSwapFaceEngine:
                     "source_face_risk_tags": source_face_risk_tags,
                     "source_pack_size": source_pack_size,
                     "selected_source_face_index": selected_source_face_index,
+                    "selected_source_bucket": selected_source_bucket,
                     "source_selection_reason": source_selection_reason,
                     "selected_source_refs": selected_source_refs,
                     "canonical_source_face_url": canonical_source_face_url,
