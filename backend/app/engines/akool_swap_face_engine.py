@@ -238,7 +238,7 @@ class AkoolSwapFaceEngine:
         on_stage: Callable[[str, int], None],
     ) -> EngineResult:
         run_cfg = dict((record.metadata or {}).get("run_config_snapshot") or {})
-        source_face_candidates_raw = list(run_cfg.get("source_face_images") or run_cfg.get("source_face_image_keys") or [])
+        source_face_candidates_raw = list(run_cfg.get("source_face_images") or run_cfg.get("source_face_image_keys") or [])[:5]
         source_video_key = str(run_cfg.get("source_video_key") or run_cfg.get("input_key") or record.input_key or "").strip()
         source_face_image_key = str(
             run_cfg.get("source_face_image_key") or run_cfg.get("source_face_image_url") or record.input_image_key or ""
@@ -323,10 +323,14 @@ class AkoolSwapFaceEngine:
         canonical_source_face_url = source_face_vendor_url = source_video_vendor_url = None
         selected_source_face_index = 0
         source_selection_reason = "single_source_only"
+        source_pack_size = 1
         target_track_face_score = None
         target_track_face_risk_tags: list[str] = []
         target_mapping_face_score = None
         target_mapping_face_risk_tags: list[str] = []
+        target_anchor_quality: Dict[str, Any] | None = None
+        downgrade_reason: str | None = None
+        proxy_clip_used = False
         selected_target_frame_index = None
         original_target_url = None
         focused_target_url = None
@@ -544,9 +548,11 @@ class AkoolSwapFaceEngine:
                 target_track_face_risk_tags = list(extraction.get("target_track_face_risk_tags") or [])
                 target_mapping_face_score = extraction.get("target_mapping_face_score")
                 target_mapping_face_risk_tags = list(extraction.get("target_mapping_face_risk_tags") or [])
+                target_anchor_quality = dict(extraction.get("target_anchor_quality") or {})
                 selected_target_frame_index = extraction.get("selected_target_frame_index")
                 original_target_url = extraction.get("original_target_url") or source_video_vendor_url
                 focused_target_url = extraction.get("focused_target_url")
+                proxy_target_url = extraction.get("proxy_target_url")
                 face_track_summary = extraction.get("face_track_summary")
                 target_anchor_summary = extraction.get("target_anchor_summary")
                 target_mapping_face_rank_reason = (
@@ -627,6 +633,7 @@ class AkoolSwapFaceEngine:
                     ]
                     for source_index, raw_value in enumerate(source_face_candidates_raw[1:], start=1):
                         source_candidates_prepared.append(await _prepare_source_candidate(raw_value, source_index))
+                    source_pack_size = len(source_candidates_prepared)
                     selection = self.swap_quality_pipeline.select_best_source_reference(
                         source_candidates=source_candidates_prepared,
                         target_anchor=target_anchor_summary or (target_faces[0] if target_faces else None),
@@ -644,6 +651,18 @@ class AkoolSwapFaceEngine:
                         f"[swap][source-select] selected_index={selected_source_face_index} "
                         f"reason={source_selection_reason} score={selected_candidate.get('selection_score') or source_face_score}"
                     )
+                else:
+                    source_pack_size = max(1, len(source_face_candidates_raw) or 1)
+                if replacement_intensity == "extreme_replace":
+                    target_anchor_valid = bool((target_anchor_quality or {}).get("valid_for_extreme"))
+                    if not target_anchor_valid:
+                        downgrade_reason = "target_mapping_face_below_extreme_threshold"
+                        on_log("[swap][target-map] extreme gate failed; downgrade to strong_identity")
+                    proxy_clip_used = bool(proxy_target_url and target_anchor_valid)
+                    if proxy_clip_used:
+                        on_log(f"[swap][target-proxy] proxy_clip_used=true url={proxy_target_url}")
+                    else:
+                        on_log(f"[swap][target-proxy] proxy_clip_used=false")
                 intelligence_source_detect = await self.client.detect_faces(
                     canonical_source_face_url or source_face_vendor_url,
                     single_face=True,
@@ -655,11 +674,18 @@ class AkoolSwapFaceEngine:
                 source_face = dict(intelligence_source_faces[0])
                 replacement_mode = "explicit_mapping_enhanced"
                 on_stage("running", 35)
+                effective_replacement_intensity = (
+                    "extreme_replace"
+                    if replacement_intensity == "extreme_replace" and downgrade_reason is None
+                    else "strong_identity" if replacement_intensity == "extreme_replace"
+                    else replacement_intensity
+                )
+                submit_face_enhance = face_enhance if downgrade_reason is None else True
                 submit_payload = {
                     "sourceImage": [{"path": source_face["path"], "opts": source_face["opts"]}],
                     "targetImage": [{"path": face["path"], "opts": face["opts"]} for face in target_face_runtime["target_image_payload"]],
-                    "modifyVideo": focused_target_url or source_video_vendor_url,
-                    "face_enhance": face_enhance,
+                    "modifyVideo": proxy_target_url or focused_target_url or source_video_vendor_url,
+                    "face_enhance": submit_face_enhance,
                 }
                 vendor_runtime["submit_validation"] = {
                     "sourceImage_count": 1,
@@ -677,9 +703,11 @@ class AkoolSwapFaceEngine:
                 on_log(
                     f"[swap][submit] payload_summary="
                     f"{{'sourceImage_count': 1, 'targetImage_count': {len(submit_payload['targetImage'])}, "
-                    f"'modifyVideo': '{focused_target_url or source_video_vendor_url}', 'face_enhance': {face_enhance}}}"
+                    f"'modifyVideo': '{proxy_target_url or focused_target_url or source_video_vendor_url}', 'face_enhance': {submit_face_enhance}}}"
                 )
                 on_log(f"[swap][submit] payload={submit_payload}")
+                replacement_intensity = effective_replacement_intensity
+                face_enhance = submit_face_enhance
             else:
                 detect_stage = "target_face_extraction"
                 # Lazy import avoids startup-time hard dependency failure if optional imaging deps are missing.
@@ -1080,6 +1108,8 @@ class AkoolSwapFaceEngine:
             extreme_replace_effective = (
                 replacement_intensity == "extreme_replace" and not degraded_fallback_used
             )
+            if downgrade_reason:
+                extreme_replace_effective = False
             quality_summary = {
                 "swap_strength": swap_strength,
                 "replacement_intensity": replacement_intensity,
@@ -1089,11 +1119,16 @@ class AkoolSwapFaceEngine:
                 "target_track_face_score": target_track_face_score,
                 "target_mapping_face_score": target_mapping_face_score,
                 "selected_source_face_index": selected_source_face_index,
+                "source_pack_size": source_pack_size,
+                "selected_source_face_reason": source_selection_reason,
                 "selected_target_frame_index": selected_target_frame_index,
                 "face_enhance_used": bool(face_enhance),
                 "target_mapping_face_rank_reason": target_mapping_face_rank_reason,
                 "target_rank_reason": target_mapping_face_rank_reason,
                 "extreme_replace_effective": extreme_replace_effective,
+                "downgrade_reason": downgrade_reason,
+                "target_anchor_quality": target_anchor_quality,
+                "proxy_clip_used": proxy_clip_used,
                 "degraded_fallback_used": degraded_fallback_used,
                 "risk_tags": risk_tags,
                 "route_summary": route_summary,
@@ -1153,6 +1188,7 @@ class AkoolSwapFaceEngine:
                     "face_enhance_used": bool(face_enhance),
                     "source_face_score": source_face_score,
                     "source_face_risk_tags": source_face_risk_tags,
+                    "source_pack_size": source_pack_size,
                     "selected_source_face_index": selected_source_face_index,
                     "source_selection_reason": source_selection_reason,
                     "canonical_source_face_url": canonical_source_face_url,
@@ -1163,7 +1199,9 @@ class AkoolSwapFaceEngine:
                     "target_mapping_face_rank_reason": target_mapping_face_rank_reason,
                     "target_rank_reason": target_mapping_face_rank_reason,
                     "extreme_replace_effective": extreme_replace_effective,
+                    "downgrade_reason": downgrade_reason,
                     "replacement_mode": replacement_mode,
+                    "proxy_clip_used": proxy_clip_used,
                     "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,
@@ -1239,6 +1277,7 @@ class AkoolSwapFaceEngine:
                     "face_enhance_used": bool(face_enhance),
                     "source_face_score": source_face_score,
                     "source_face_risk_tags": source_face_risk_tags,
+                    "source_pack_size": source_pack_size,
                     "selected_source_face_index": selected_source_face_index,
                     "source_selection_reason": source_selection_reason,
                     "canonical_source_face_url": canonical_source_face_url,
@@ -1248,8 +1287,11 @@ class AkoolSwapFaceEngine:
                     "target_anchor_summary": target_anchor_summary,
                     "target_mapping_face_rank_reason": target_mapping_face_rank_reason,
                     "target_rank_reason": target_mapping_face_rank_reason,
+                    "target_anchor_quality": target_anchor_quality,
                     "extreme_replace_effective": extreme_replace_effective,
+                    "downgrade_reason": downgrade_reason,
                     "replacement_mode": replacement_mode,
+                    "proxy_clip_used": proxy_clip_used,
                     "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,

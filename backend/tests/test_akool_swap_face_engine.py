@@ -451,8 +451,15 @@ class _FakeExtractor:
                 "region": [40, 20, 220, 200],
                 "raw_box": (40.0, 20.0, 180.0, 180.0),
                 "quality_breakdown": {"frontalness": 17},
+                "rank_reason": "best_for_identity_overwrite",
+            },
+            "target_anchor_quality": {
+                "score": 86,
+                "risk_tags": ["lighting_gap"],
+                "valid_for_extreme": True,
             },
             "focused_target_url": "https://vendor.example/focused-target.mp4",
+            "proxy_target_url": "https://vendor.example/focused-target.mp4",
             "replacement_mode": "explicit_mapping_enhanced",
             "focus_crop_valid": True,
             "focus_mode": "focused_crop",
@@ -475,6 +482,12 @@ class _InvalidFocusExtractor(_FakeExtractor):
         payload["target_mapping_face_score"] = 24
         payload["target_track_face_risk_tags"] = ["bbox_suspicious", "full_frame_fallback"]
         payload["target_mapping_face_risk_tags"] = ["bbox_suspicious", "full_frame_fallback"]
+        payload["target_anchor_quality"] = {
+            "score": 24,
+            "risk_tags": ["bbox_suspicious", "full_frame_fallback"],
+            "valid_for_extreme": False,
+        }
+        payload["proxy_target_url"] = None
         payload["face_track_summary"] = {
             **dict(payload["face_track_summary"]),
             "full_frame_fallback": True,
@@ -715,7 +728,11 @@ def test_swap_engine_intelligence_selects_best_source_reference():
                 "provider": "swap_intelligence_akool",
                 "source_video_key": "uploads/source.mp4",
                 "source_face_image_key": "uploads/source-face-a.png",
-                "source_face_images": ["uploads/source-face-a.png", "uploads/source-face-b.png"],
+                "source_face_images": [
+                    "uploads/source-face-a.png",
+                    "uploads/source-face-b.png",
+                    "uploads/source-face-c.png",
+                ],
                 "keep_original_audio": True,
                 "face_enhance": True,
             }
@@ -735,6 +752,7 @@ def test_swap_engine_intelligence_selects_best_source_reference():
     assert engine.client.last_submit_kwargs["source_face"]["path"] == "https://vendor.example/detected-face.jpg"
     assert result.metadata["selected_source_face_index"] == 1
     assert result.metadata["source_selection_reason"] == "target_anchor_pose_match"
+    assert result.metadata["source_pack_size"] == 3
 
 
 def test_swap_engine_intelligence_segment_route_stitches_and_fallbacks():
@@ -910,6 +928,9 @@ def test_swap_engine_intelligence_extreme_replace_sets_route_and_face_enhance_fl
     assert result.metadata["target_mapping_face_rank_reason"] == "best_for_identity_overwrite"
     assert result.metadata["target_rank_reason"] == "best_for_identity_overwrite"
     assert result.metadata["extreme_replace_effective"] is True
+    assert result.metadata["proxy_clip_used"] is True
+    assert result.metadata["target_anchor_quality"]["valid_for_extreme"] is True
+    assert engine.client.last_submit_kwargs["modify_video"] == "https://vendor.example/focused-target.mp4"
 
 
 def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_degraded():
@@ -966,3 +987,6 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
 
     assert result.metadata["degraded_fallback_used"] is True
     assert result.metadata["extreme_replace_effective"] is False
+    assert result.metadata["downgrade_reason"] == "target_mapping_face_below_extreme_threshold"
+    assert result.metadata["proxy_clip_used"] is False
+    assert result.metadata["target_anchor_quality"]["valid_for_extreme"] is False

@@ -303,6 +303,7 @@ class VideoFaceExtractor:
         source_video_path: Path,
         output_path: Path,
         face_track_summary: Dict[str, Any],
+        crop_profile: str = "standard",
     ) -> tuple[Path | None, Dict[str, Any]]:
         video_width = int(face_track_summary.get("video_width") or 0)
         video_height = int(face_track_summary.get("video_height") or 0)
@@ -313,8 +314,12 @@ class VideoFaceExtractor:
         height = float(anchor_box.get("height") or video_height or 0.0)
         if video_width <= 0 or video_height <= 0:
             raise EngineRunError("target_face_extraction failed: focused clip missing video dimensions")
-        margin_x_scale = 1.2
-        margin_y_scale = 1.3
+        if crop_profile == "proxy_extreme":
+            margin_x_scale = 1.05
+            margin_y_scale = 1.12
+        else:
+            margin_x_scale = 1.2
+            margin_y_scale = 1.3
         crop_w = min(video_width, self._even_int(width * margin_x_scale))
         crop_h = min(video_height, self._even_int(height * margin_y_scale))
         center_x = x + width / 2.0
@@ -344,6 +349,7 @@ class VideoFaceExtractor:
             "focus_face_ratio": round(focus_face_ratio, 4),
             "focus_crop_area_ratio": round(crop_area_ratio, 4),
             "crop_filter": crop_filter,
+            "crop_profile": crop_profile,
         }
         face_track_summary["focused_crop"] = focus_meta
         face_track_summary["focus_crop_valid"] = focus_crop_valid
@@ -435,6 +441,7 @@ class VideoFaceExtractor:
             for path in exported_paths
         ]
         focused_clip_asset = None
+        proxy_clip_asset = None
         focus_crop_valid = False
         focus_mode = "not_attempted"
         focus_face_ratio = None
@@ -444,6 +451,7 @@ class VideoFaceExtractor:
                 source_video_path=video_path,
                 output_path=work_dir / "focused_target.mp4",
                 face_track_summary=face_track_summary,
+                crop_profile="proxy_extreme" if selection_mode == "aggressive_mapping" else "standard",
             )
             focus_crop_valid = bool(focus_meta.get("focus_crop_valid"))
             focus_mode = str(focus_meta.get("focus_mode") or "unknown")
@@ -459,6 +467,10 @@ class VideoFaceExtractor:
                 on_log(f"[swap][target-focus] focused_target_url={focused_clip_asset.public_url}")
             if on_log is not None and focused_clip_asset is None:
                 on_log(f"[swap][target-focus] focus_crop_valid=false focus_mode={focus_mode}")
+            if focused_clip_path is not None and selection_mode == "aggressive_mapping":
+                proxy_clip_asset = focused_clip_asset
+                if on_log is not None and proxy_clip_asset is not None:
+                    on_log(f"[swap][target-proxy] proxy_target_url={proxy_clip_asset.public_url}")
         target_faces: List[Dict[str, Any]] = []
         target_mapping_face_score = None
         target_mapping_face_risk_tags: List[str] = []
@@ -514,6 +526,15 @@ class VideoFaceExtractor:
             "target_track_face_risk_tags": list(selected_faces[0].get("risk_tags") or []) if selected_faces else [],
             "target_mapping_face_risk_tags": list(target_mapping_face_risk_tags),
             "target_face_risk_tags": list(target_mapping_face_risk_tags or selected_faces[0].get("risk_tags") or []) if selected_faces else [],
+            "target_anchor_quality": {
+                "score": target_mapping_face_score if target_mapping_face_score is not None else (selected_faces[0].get("quality_score") if selected_faces else None),
+                "risk_tags": list(target_mapping_face_risk_tags or selected_faces[0].get("risk_tags") or []) if selected_faces else [],
+                "valid_for_extreme": bool(
+                    target_mapping_face_score is not None
+                    and target_mapping_face_score >= 72
+                    and not {"face_small", "blur", "occlusion_risk", "full_frame_fallback", "bbox_suspicious"}.intersection(target_mapping_face_risk_tags)
+                ),
+            },
             "face_track_summary": face_track_summary,
             "target_anchor_summary": {
                 "frame_index": selected_faces[0].get("frame_index") if selected_faces else None,
@@ -526,6 +547,8 @@ class VideoFaceExtractor:
             },
             "focused_target_asset": focused_clip_asset,
             "focused_target_url": focused_clip_asset.public_url if focused_clip_asset is not None else None,
+            "proxy_target_asset": proxy_clip_asset,
+            "proxy_target_url": proxy_clip_asset.public_url if proxy_clip_asset is not None else None,
             "replacement_mode": "focused_clip" if focused_clip_asset is not None else "raw_target_video",
             "focus_crop_valid": focus_crop_valid,
             "focus_mode": focus_mode,
