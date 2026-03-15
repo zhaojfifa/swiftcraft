@@ -395,16 +395,48 @@ class VideoFaceExtractor:
             raise EngineRunError(f"target_face_extraction failed: focused clip generation failed: {stderr[-400:]}") from exc
         return output_path, focus_meta
 
-    def export_target_face_images(self, selected_faces: List[Dict[str, Any]], output_dir: Path) -> List[Path]:
+    def _candidate_face_box(self, face: Dict[str, Any]) -> tuple[float, float, float, float] | None:
+        return (
+            tuple(face.get("crop_box") or ()) if isinstance(face.get("crop_box"), (list, tuple)) else None
+        ) or self._region_to_box(face.get("region")) or tuple(face.get("raw_box") or ())
+
+    def _crop_face_image(self, src: Path, dst: Path, face: Dict[str, Any]) -> tuple[Path, tuple[int, int, int, int] | None]:
+        box = self._candidate_face_box(face)
+        if not box or len(box) < 4:
+            shutil.copyfile(src, dst)
+            return dst, None
+        from PIL import Image
+
+        with Image.open(src) as image:
+            image_width, image_height = image.size
+            x, y, width, height = [float(value) for value in box[:4]]
+            margin_x = width * 0.18
+            margin_y = height * 0.22
+            left = max(0, int(round(x - margin_x)))
+            top = max(0, int(round(y - margin_y)))
+            right = min(image_width, int(round(x + width + margin_x)))
+            bottom = min(image_height, int(round(y + height + margin_y)))
+            if right <= left or bottom <= top:
+                shutil.copyfile(src, dst)
+                return dst, None
+            image.crop((left, top, right, bottom)).save(dst)
+            return dst, (left, top, right - left, bottom - top)
+
+    def export_target_face_images(self, selected_faces: List[Dict[str, Any]], output_dir: Path) -> List[Dict[str, Any]]:
         output_dir.mkdir(parents=True, exist_ok=True)
-        exported: List[Path] = []
+        exported: List[Dict[str, Any]] = []
         for index, face in enumerate(selected_faces, start=1):
             src = Path(str(face.get("frame_path") or ""))
             if not src.exists():
                 raise EngineRunError("target_face_extraction failed: selected frame path missing")
             dst = output_dir / f"target_face_{index:02d}.jpg"
-            shutil.copyfile(src, dst)
-            exported.append(dst)
+            cropped_path, crop_box = self._crop_face_image(src, dst, face)
+            exported.append(
+                {
+                    "path": cropped_path,
+                    "crop_box": crop_box,
+                }
+            )
         return exported
 
     def create_proxy_target_clip(
@@ -418,6 +450,9 @@ class VideoFaceExtractor:
         if selected_face is None or video_size is None:
             return None, {"proxy_clip_valid": False, "proxy_reason": "missing_selected_face"}
         proxy_box = (
+            tuple(selected_face.get("crop_box") or ())
+            or tuple(selected_face.get("mapping_crop_box") or ())
+            or
             self._region_to_box(selected_face.get("region"))
             or self._opts_to_box(selected_face.get("opts"))
             or tuple(selected_face.get("raw_box") or ())
@@ -509,10 +544,10 @@ class VideoFaceExtractor:
         )
         if on_log is not None:
             on_log(f"[swap][target-track] tracked_frames={face_track_summary['tracked_frames']} avg_box={face_track_summary['avg_box']}")
-        exported_paths = self.export_target_face_images(selected_faces, work_dir / "target_faces")
+        exported_faces = self.export_target_face_images(selected_faces, work_dir / "target_faces")
         bridged_target_images = [
-            await self.bridge.bridge_asset(source_path=str(path), service=service, asset_kind="target-face")
-            for path in exported_paths
+            await self.bridge.bridge_asset(source_path=str(item["path"]), service=service, asset_kind="target-face")
+            for item in exported_faces
         ]
         focused_clip_asset = None
         proxy_clip_asset = None
@@ -543,18 +578,17 @@ class VideoFaceExtractor:
             if on_log is not None and focused_clip_asset is None:
                 on_log(f"[swap][target-focus] focus_crop_valid=false focus_mode={focus_mode}")
             if selection_mode == "aggressive_mapping":
-                if focused_clip_path is not None:
+                proxy_path, proxy_clip_meta = self.create_proxy_target_clip(
+                    source_video_path=video_path,
+                    output_path=work_dir / "proxy_target.mp4",
+                    selected_face=selected_faces[0] if selected_faces else None,
+                    video_size=video_size,
+                )
+                if proxy_path is not None:
+                    proxy_clip_asset = await self._bridge_proxy_clip(proxy_path=proxy_path, service=service)
+                elif focused_clip_path is not None:
                     proxy_clip_asset = focused_clip_asset
-                    proxy_clip_meta = {"proxy_clip_valid": True, "proxy_reason": "focused_clip_reused"}
-                else:
-                    proxy_path, proxy_clip_meta = self.create_proxy_target_clip(
-                        source_video_path=video_path,
-                        output_path=work_dir / "proxy_target.mp4",
-                        selected_face=selected_faces[0] if selected_faces else None,
-                        video_size=video_size,
-                    )
-                    if proxy_path is not None:
-                        proxy_clip_asset = await self._bridge_proxy_clip(proxy_path=proxy_path, service=service)
+                    proxy_clip_meta = {"proxy_clip_valid": True, "proxy_reason": "focused_clip_fallback"}
                 if on_log is not None and proxy_clip_asset is not None:
                     on_log(f"[swap][target-proxy] proxy_target_url={proxy_clip_asset.public_url}")
                 if on_log is not None and proxy_clip_asset is None:
@@ -564,6 +598,7 @@ class VideoFaceExtractor:
         target_mapping_face_risk_tags: List[str] = []
         for index, bridged in enumerate(bridged_target_images):
             selected_face = selected_faces[index]
+            exported_face = exported_faces[index]
             try:
                 detected = await self.client.detect_faces(
                     bridged.public_url,
@@ -596,6 +631,7 @@ class VideoFaceExtractor:
                     "mapping_quality_score": mapping_score["score"],
                     "mapping_risk_tags": list(mapping_score["risk_tags"]),
                     "frame_index": selected_face.get("frame_index"),
+                    "crop_box": exported_face.get("crop_box"),
                 }
             )
         if selection_mode == "aggressive_mapping" and proxy_clip_asset is None and target_faces:
@@ -604,6 +640,7 @@ class VideoFaceExtractor:
                 **dict(target_faces[0]),
                 "raw_box": (selected_faces[0] if selected_faces else {}).get("raw_box"),
                 "frame_index": (selected_faces[0] if selected_faces else {}).get("frame_index"),
+                "mapping_crop_box": (target_faces[0] if target_faces else {}).get("crop_box"),
             }
             proxy_path, proxy_clip_meta = self.create_proxy_target_clip(
                 source_video_path=video_path,
@@ -622,7 +659,7 @@ class VideoFaceExtractor:
             "frames": frames,
             "detected_faces": detected_faces,
             "selected_faces": selected_faces,
-            "exported_paths": exported_paths,
+            "exported_paths": [item["path"] for item in exported_faces],
             "target_faces": target_faces,
             "bridged_target_images": bridged_target_images,
             "used_bbox_fallback": any(bool(face.get("used_bbox_fallback")) for face in detected_faces),
