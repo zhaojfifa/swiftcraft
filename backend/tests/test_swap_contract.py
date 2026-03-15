@@ -92,3 +92,26 @@ def test_swap_request_accepts_explicit_replacement_intensity():
     assert isinstance(parsed, SwapRequest)
     assert parsed.face_fidelity == "high"
     assert parsed.replacement_intensity == "extreme_replace"
+
+
+
+def test_swap_request_accepts_source_face_images_pack():
+    payload = {
+        "service_type": "swap",
+        "swap_type": "face",
+        "mode": "intelligence",
+        "source_video_key": "uploads/source.mp4",
+        "source_face_images": [
+            "uploads/source-face-a.png",
+            "uploads/source-face-b.png",
+            "uploads/source-face-c.png",
+        ],
+    }
+    parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
+    assert isinstance(parsed, SwapRequest)
+    assert parsed.source_face_image_key == "uploads/source-face-a.png"
+    assert parsed.source_face_images == [
+        "uploads/source-face-a.png",
+        "uploads/source-face-b.png",
+        "uploads/source-face-c.png",
+    ]

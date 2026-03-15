@@ -764,6 +764,9 @@ class TaskService:
                 payload["input_key"] = parsed.input_key
                 payload["source_face_image_key"] = parsed.source_face_image_key
                 payload["source_face_image_url"] = parsed.source_face_image_url
+                payload["source_face_images"] = list(parsed.source_face_images or [])
+                payload["source_face_image_urls"] = list(parsed.source_face_image_urls or [])
+                payload["source_face_image_keys"] = list(parsed.source_face_image_keys or [])
                 payload["keep_original_audio"] = parsed.keep_original_audio
                 payload["face_fidelity"] = parsed.face_fidelity
                 payload["replacement_intensity"] = parsed.replacement_intensity

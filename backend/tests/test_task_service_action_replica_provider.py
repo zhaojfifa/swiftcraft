@@ -192,6 +192,21 @@ def test_extract_swap_run_config_keeps_source_face_images():
     assert cfg["source_face_image_url"] == "uploads/source-face-a.png"
 
 
+
+def test_extract_swap_run_config_normalizes_single_source_to_pack():
+    cfg = _extract_swap_run_config(
+        {
+            "inputs": {
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face-a.png",
+            }
+        },
+        "intelligence",
+    )
+    assert cfg["source_face_images"] == ["uploads/source-face-a.png"]
+    assert cfg["source_face_image_url"] == "uploads/source-face-a.png"
+
+
 def test_swap_provider_validation_rejects_mismatched_provider():
     svc = _svc()
     try:

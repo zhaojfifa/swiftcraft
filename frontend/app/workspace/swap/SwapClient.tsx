@@ -88,8 +88,10 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [inputSource, setInputSource] = useState<"preset" | "upload">("upload");
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
+  const [sourceFaceFiles, setSourceFaceFiles] = useState<File[]>([]);
   const [inputVideoUrl, setInputVideoUrl] = useState<string | null>(null);
   const [inputImageUrl, setInputImageUrl] = useState<string | null>(null);
+  const [sourceFacePreviewUrls, setSourceFacePreviewUrls] = useState<string[]>([]);
   const [keepOriginalAudio, setKeepOriginalAudio] = useState(true);
   const [faceFidelity, setFaceFidelity] = useState<"balanced" | "strong_identity" | "extreme_replace">("balanced");
   const [faceEnhance, setFaceEnhance] = useState(true);
@@ -160,9 +162,15 @@ export default function SwapClient({ service = "swap" }: Props) {
     if (String(serviceType || "swap").toLowerCase() === "swap") {
       const intelligence = ["intelligent", "intelligence"].includes(String(mode || "basic").toLowerCase());
       if (intelligence) {
+        if (!sourceFaceFiles.length && imageFile) {
+          setSourceFaceFiles([imageFile]);
+        }
         setFaceFidelity((current) => (current === "balanced" ? "extreme_replace" : current));
         setFaceEnhance(faceFidelity === "extreme_replace" ? false : true);
       } else {
+        if (!imageFile && sourceFaceFiles[0]) {
+          setImageFile(sourceFaceFiles[0]);
+        }
         setFaceFidelity("balanced");
         setFaceEnhance(true);
       }
@@ -181,7 +189,7 @@ export default function SwapClient({ service = "swap" }: Props) {
       setOrientationStrategy("auto");
       setPromptProfile("balanced");
     }
-  }, [isAvatar, mode, serviceType, faceFidelity]);
+  }, [isAvatar, mode, serviceType, faceFidelity, imageFile, sourceFaceFiles]);
 
   useEffect(() => {
     if (!imageFile) {
@@ -195,6 +203,18 @@ export default function SwapClient({ service = "swap" }: Props) {
     };
   }, [imageFile]);
 
+  useEffect(() => {
+    if (!sourceFaceFiles.length) {
+      setSourceFacePreviewUrls([]);
+      return;
+    }
+    const previewUrls = sourceFaceFiles.map((file) => URL.createObjectURL(file));
+    setSourceFacePreviewUrls(previewUrls);
+    return () => {
+      previewUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [sourceFaceFiles]);
+
   const serviceApi = String(serviceType || "swap").toLowerCase();
   const modeApi = String(mode || "basic").toLowerCase() as SwapMode;
   const isIntelligenceMode = modeApi === "intelligent" || modeApi === "intelligence";
@@ -203,6 +223,8 @@ export default function SwapClient({ service = "swap" }: Props) {
   const actionReplicaProvider = actionReplicaContract.provider;
   const swapContract = getSwapContract(modeApi, faceFidelity);
   const swapProvider = swapContract.provider;
+  const swapSourcePackEnabled = isSwap && isIntelligenceMode;
+  const activeSwapSourceFaceFiles = swapSourcePackEnabled ? sourceFaceFiles : (imageFile ? [imageFile] : []);
   const presetKey = resolvePresetInputKey(serviceApi, modeApi);
   const cdnBase = (process.env.NEXT_PUBLIC_CDN_BASE_URL || "").replace(/\/+$/, "");
   const safeDemoMotionKey = (process.env.NEXT_PUBLIC_SAFE_DEMO_MOTION_KEY || "").trim();
@@ -459,7 +481,7 @@ export default function SwapClient({ service = "swap" }: Props) {
 
   const handleRun = async () => {
     cancelPolling();
-    if (isSwap && (!videoFile || !imageFile)) {
+    if (isSwap && (!videoFile || (!swapSourcePackEnabled && !imageFile) || (swapSourcePackEnabled && sourceFaceFiles.length === 0))) {
       setError("Please upload a source face image and source video for swap.");
       return;
     }
@@ -480,17 +502,28 @@ export default function SwapClient({ service = "swap" }: Props) {
         result = await runAvatarTask();
       } else if (isSwap) {
         const sourceVideoKey = await uploadFileToR2(videoFile as File);
-        const sourceFaceImageKey = await uploadFileToR2(imageFile as File);
+        const sourceFaceImageKeys: string[] = [];
+        for (const file of activeSwapSourceFaceFiles) {
+          sourceFaceImageKeys.push(await uploadFileToR2(file));
+        }
+        const sourceFaceImageKey = sourceFaceImageKeys[0];
         result = await createTask({
           service_type: "swap",
           mode: swapContract.mode,
           swap_type: "face",
           source_video_key: sourceVideoKey,
           source_face_image_key: sourceFaceImageKey,
+          source_face_images: swapSourcePackEnabled ? sourceFaceImageKeys : undefined,
           keep_original_audio: keepOriginalAudio,
           face_fidelity: swapContract.faceFidelity,
           replacement_intensity: swapContract.replacementIntensity,
           face_enhance: faceEnhance,
+          inputs: swapSourcePackEnabled
+            ? {
+                source_face_images: sourceFaceImageKeys,
+                source_face_image_key: sourceFaceImageKey,
+              }
+            : undefined,
         });
       } else {
         const input_key =
@@ -602,6 +635,9 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskFaceCountLimit = String(taskMetadata.face_count_limit ?? "");
   const taskSourceFaceScore = String(taskMetadata.source_face_score ?? "");
   const taskReplacementIntensity = String(taskMetadata.replacement_intensity ?? taskMetadata.swap_strength ?? "");
+  const taskSourcePackSize = String(taskMetadata.source_pack_size ?? "");
+  const taskSelectedSourceFaceIndex = String(taskMetadata.selected_source_face_index ?? "");
+  const taskSelectedSourceFaceReason = String(taskMetadata.source_selection_reason ?? "");
   const taskTargetTrackFaceScore = String(taskMetadata.target_track_face_score ?? "");
   const taskTargetMappingFaceScore = String(taskMetadata.target_mapping_face_score ?? taskMetadata.target_face_score ?? "");
   const taskSelectedTargetFrameIndex = String(taskMetadata.selected_target_frame_index ?? "");
@@ -616,7 +652,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const canUseSafeDemo = Boolean(safeDemoMotionKey && safeDemoCharacterKey) && !isRunning;
   const canRun = isAvatar
     ? Boolean(videoFile && imageFile) && !isRunning
-    : Boolean(videoFile && imageFile) && !isRunning;
+    : Boolean(videoFile && (swapSourcePackEnabled ? sourceFaceFiles.length > 0 : imageFile)) && !isRunning;
   const payloadPreview = isAvatar
     ? {
         service_type: "action_replica",
@@ -654,6 +690,7 @@ export default function SwapClient({ service = "swap" }: Props) {
         swap_type: "face",
         source_video_key: "(source video key)",
         source_face_image_key: "(source face image key)",
+        source_face_images: swapSourcePackEnabled ? ["(source face key 1)", "(source face key 2)", "(source face key 3)"] : undefined,
         keep_original_audio: keepOriginalAudio,
         face_fidelity: swapContract.faceFidelity,
         replacement_intensity: swapContract.replacementIntensity,
@@ -675,7 +712,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"swap\",\"mode\":\"${swapContract.mode}\",\"swap_type\":\"face\",\"source_video_key\":\"<source_video_key>\",\"source_face_image_key\":\"<source_face_key>\",\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${swapContract.faceFidelity}\",\"replacement_intensity\":${swapContract.replacementIntensity ? `\"${swapContract.replacementIntensity}\"` : "null"},\"face_enhance\":${faceEnhance}}'`
+        `  -d '{\"service_type\":\"swap\",\"mode\":\"${swapContract.mode}\",\"swap_type\":\"face\",\"source_video_key\":\"<source_video_key>\",\"source_face_image_key\":\"<source_face_key>\",\"source_face_images\":${swapSourcePackEnabled ? '[\"<source_face_key_1>\",\"<source_face_key_2>\",\"<source_face_key_3>\"]' : "null"},\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${swapContract.faceFidelity}\",\"replacement_intensity\":${swapContract.replacementIntensity ? `\"${swapContract.replacementIntensity}\"` : "null"},\"face_enhance\":${faceEnhance}}'`
       ].join(" \\\n");
 
   const handleRetrySafeSlicing = async () => {
@@ -860,33 +897,127 @@ export default function SwapClient({ service = "swap" }: Props) {
                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                             {isAvatar ? "Character Image" : "Source Face Image"}
                           </label>
-                          <div className="flex items-center justify-between text-[11px] text-slate-400">
-                            <span>{imageFile ? imageFile.name : "No file selected"}</span>
-                            {imageFile ? (
-                              <button
-                                type="button"
-                                className="text-slate-500 hover:text-slate-700"
-                                onClick={() => setImageFile(null)}
-                              >
-                                Clear
-                              </button>
-                            ) : null}
-                          </div>
+                          {swapSourcePackEnabled ? (
+                            <>
+                              <div className="flex items-center justify-between text-[11px] text-slate-400">
+                                <span>{sourceFaceFiles.length ? `${sourceFaceFiles.length} source faces selected` : "No files selected"}</span>
+                                {sourceFaceFiles.length ? (
+                                  <button
+                                    type="button"
+                                    className="text-slate-500 hover:text-slate-700"
+                                    onClick={() => setSourceFaceFiles([])}
+                                  >
+                                    Clear
+                                  </button>
+                                ) : null}
+                              </div>
+                              <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] text-blue-800">
+                                Recommend 3–5 images: frontal, left angle, right angle, neutral, smile.
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex items-center justify-between text-[11px] text-slate-400">
+                              <span>{imageFile ? imageFile.name : "No file selected"}</span>
+                              {imageFile ? (
+                                <button
+                                  type="button"
+                                  className="text-slate-500 hover:text-slate-700"
+                                  onClick={() => setImageFile(null)}
+                                >
+                                  Clear
+                                </button>
+                              ) : null}
+                            </div>
+                          )}
                           <div className="group relative grid h-48 grid-rows-[1fr_auto] gap-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-3 transition hover:bg-slate-100 hover:border-slate-400">
                             <div className="relative flex flex-col items-center justify-center">
                               <input
                                 type="file"
                                 accept="image/*"
-                                onChange={(event) => setImageFile(event.target.files?.[0] || null)}
+                                multiple={swapSourcePackEnabled}
+                                onChange={(event) => {
+                                  const files = Array.from(event.target.files || []).slice(0, 5);
+                                  if (swapSourcePackEnabled) {
+                                    setSourceFaceFiles(files);
+                                  } else {
+                                    setImageFile(files[0] || null);
+                                  }
+                                }}
                                 className="absolute inset-0 opacity-0 cursor-pointer"
                               />
                               <div className="p-3 bg-white rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform border border-slate-100">
                                 <UploadCloud className="w-5 h-5 text-slate-600" />
                               </div>
-                              <span className="text-xs font-medium text-slate-600">Click to upload image</span>
+                              <span className="text-xs font-medium text-slate-600">
+                                {swapSourcePackEnabled ? "Click to upload source pack" : "Click to upload image"}
+                              </span>
+                              {swapSourcePackEnabled ? (
+                                <span className="text-[10px] text-slate-400 mt-1">drag and drop or multi-select up to 5 images</span>
+                              ) : null}
                             </div>
                             <div className="rounded-lg border border-slate-200 bg-white p-2">
-                              {inputImageUrl ? (
+                              {swapSourcePackEnabled ? (
+                                sourceFacePreviewUrls.length ? (
+                                  <div className="space-y-2">
+                                    {sourceFacePreviewUrls.map((previewUrl, index) => (
+                                      <div key={`${previewUrl}-${index}`} className="flex items-center gap-3">
+                                        <img
+                                          src={previewUrl}
+                                          alt={`Source face ${index + 1}`}
+                                          className="h-10 w-10 rounded-md object-cover"
+                                        />
+                                        <div className="min-w-0 flex-1">
+                                          <div className="truncate text-[11px] text-slate-500">{sourceFaceFiles[index]?.name || `Source face ${index + 1}`}</div>
+                                          <div className="text-[10px] text-slate-400">Ref {index + 1}</div>
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                          <button
+                                            type="button"
+                                            className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+                                            disabled={index === 0}
+                                            onClick={() =>
+                                              setSourceFaceFiles((current) => {
+                                                const next = [...current];
+                                                [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                                                return next;
+                                              })
+                                            }
+                                          >
+                                            ↑
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+                                            disabled={index === sourceFaceFiles.length - 1}
+                                            onClick={() =>
+                                              setSourceFaceFiles((current) => {
+                                                const next = [...current];
+                                                [next[index + 1], next[index]] = [next[index], next[index + 1]];
+                                                return next;
+                                              })
+                                            }
+                                          >
+                                            ↓
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="text-[10px] text-slate-500 hover:text-slate-700"
+                                            onClick={() =>
+                                              setSourceFaceFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                                            }
+                                          >
+                                            Remove
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center justify-center text-[11px] text-slate-400">
+                                    Source pack previews will appear here
+                                  </div>
+                                )
+                              ) : inputImageUrl ? (
                                 <div className="flex items-center gap-3">
                                   <img
                                     src={inputImageUrl}
@@ -1503,6 +1634,9 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Detect Stage: {taskDetectStage || "-"}</div>
                         <div>Submit Stage: {taskSubmitStage || "-"}</div>
                         <div>Source Face Score: {taskSourceFaceScore || "-"}</div>
+                        <div>Source Pack Size: {taskSourcePackSize || "-"}</div>
+                        <div>Selected Source Ref: {taskSelectedSourceFaceIndex || "-"}</div>
+                        <div>Selected Source Ref Reason: {taskSelectedSourceFaceReason || "-"}</div>
                         <div>Target Mapping Face Score: {taskTargetMappingFaceScore || "-"}</div>
                         <div>Target Track Face Score: {taskTargetTrackFaceScore || "-"}</div>
                         <div>Target Rank Reason: {taskTargetRankReason || "-"}</div>
