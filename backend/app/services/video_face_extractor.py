@@ -470,9 +470,18 @@ class VideoFaceExtractor:
             or self._opts_to_box(selected_face.get("opts"))
             or tuple(selected_face.get("raw_box") or ())
         )
-        if not proxy_box or len(proxy_box) < 4:
-            return None, {"proxy_clip_valid": False, "proxy_reason": "missing_face_box"}
         video_width, video_height = int(video_size[0]), int(video_size[1])
+        proxy_reason = "selected_face_crop"
+        if not proxy_box or len(proxy_box) < 4:
+            fallback_width = max(2.0, float(video_width) * 0.42)
+            fallback_height = max(2.0, float(video_height) * 0.62)
+            proxy_box = (
+                max(0.0, (float(video_width) - fallback_width) / 2.0),
+                max(0.0, (float(video_height) - fallback_height) / 2.0),
+                fallback_width,
+                fallback_height,
+            )
+            proxy_reason = "anchor_center_fallback"
         x, y, width, height = [float(value) for value in proxy_box[:4]]
         face_area_ratio = (width * height) / max(video_width * video_height, 1)
         if face_area_ratio >= 0.8:
@@ -495,7 +504,7 @@ class VideoFaceExtractor:
             crop_profile="proxy_extreme",
         )
         proxy_meta["proxy_clip_valid"] = proxy_path is not None
-        proxy_meta["proxy_reason"] = "selected_face_crop" if proxy_path is not None else str(proxy_meta.get("focus_mode") or "invalid_crop")
+        proxy_meta["proxy_reason"] = proxy_reason if proxy_path is not None else str(proxy_meta.get("focus_mode") or "invalid_crop")
         return proxy_path, proxy_meta
 
     async def _bridge_proxy_clip(
