@@ -194,7 +194,40 @@ class SwapRequest(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def normalize_face_fields(cls, data: object) -> object:
-        return _normalize_swap_face_fields(data)
+        normalized = _normalize_swap_face_fields(data)
+        if not isinstance(normalized, dict):
+            return normalized
+        merged = dict(normalized)
+        raw_inputs = merged.get("inputs")
+        input_data = dict(raw_inputs) if isinstance(raw_inputs, dict) else {}
+        if merged.get("provider") and not input_data.get("provider"):
+            input_data["provider"] = merged.get("provider")
+        if merged.get("source_video_key") and not input_data.get("source_video_key"):
+            input_data["source_video_key"] = merged.get("source_video_key")
+        if merged.get("source_video_url") and not input_data.get("source_video_url"):
+            input_data["source_video_url"] = merged.get("source_video_url")
+        if merged.get("input_key") and not input_data.get("source_video"):
+            input_data["source_video"] = merged.get("input_key")
+        if merged.get("source_face_image_url") and not input_data.get("source_face_image_url"):
+            input_data["source_face_image_url"] = merged.get("source_face_image_url")
+        if merged.get("source_face_image_key") and not input_data.get("source_face_image_key"):
+            input_data["source_face_image_key"] = merged.get("source_face_image_key")
+        if merged.get("source_face_images") and not input_data.get("source_face_images"):
+            input_data["source_face_images"] = list(merged.get("source_face_images") or [])
+        if merged.get("source_face_image_urls") and not input_data.get("source_face_image_urls"):
+            input_data["source_face_image_urls"] = list(merged.get("source_face_image_urls") or [])
+        if merged.get("source_face_image_keys") and not input_data.get("source_face_image_keys"):
+            input_data["source_face_image_keys"] = list(merged.get("source_face_image_keys") or [])
+        if merged.get("keep_original_audio") is not None and input_data.get("keep_original_audio") is None:
+            input_data["keep_original_audio"] = merged.get("keep_original_audio")
+        if merged.get("face_fidelity") is not None and input_data.get("face_fidelity") is None:
+            input_data["face_fidelity"] = merged.get("face_fidelity")
+        if merged.get("replacement_intensity") is not None and input_data.get("replacement_intensity") is None:
+            input_data["replacement_intensity"] = merged.get("replacement_intensity")
+        if merged.get("face_enhance") is not None and input_data.get("face_enhance") is None:
+            input_data["face_enhance"] = merged.get("face_enhance")
+        merged["inputs"] = input_data
+        return merged
 
     @model_validator(mode="after")
     def normalize_swap_type(self) -> "SwapRequest":

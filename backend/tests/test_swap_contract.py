@@ -115,3 +115,24 @@ def test_swap_request_accepts_source_face_images_pack():
         "uploads/source-face-b.png",
         "uploads/source-face-c.png",
     ]
+
+
+
+def test_swap_request_merges_top_level_video_into_inputs_source_pack():
+    payload = {
+        "service_type": "swap",
+        "swap_type": "face",
+        "mode": "intelligence",
+        "source_video_key": "uploads/source.mp4",
+        "inputs": {
+            "source_face_images": [
+                "uploads/source-face-a.png",
+                "uploads/source-face-b.png",
+                "uploads/source-face-c.png",
+            ],
+        },
+    }
+    parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
+    assert isinstance(parsed, SwapRequest)
+    assert parsed.inputs.source_video == "uploads/source.mp4"
+    assert parsed.inputs.source_face_image == "uploads/source-face-a.png"

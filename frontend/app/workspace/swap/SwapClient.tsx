@@ -248,6 +248,39 @@ export default function SwapClient({ service = "swap" }: Props) {
     return upload.file_key;
   };
 
+  const buildSwapTaskPayload = (sourceVideoKey: string, sourceFaceImageKeys: string[], emitDebug = false) => {
+    const sourceFaceImageKey = sourceFaceImageKeys[0];
+    const payload = {
+      service_type: "swap" as const,
+      mode: swapContract.mode,
+      swap_type: "face" as const,
+      source_video_key: sourceVideoKey,
+      source_face_image_key: sourceFaceImageKey,
+      source_face_images: swapSourcePackEnabled ? sourceFaceImageKeys : undefined,
+      keep_original_audio: keepOriginalAudio,
+      face_fidelity: swapContract.faceFidelity,
+      replacement_intensity: swapContract.replacementIntensity,
+      face_enhance: faceEnhance,
+      inputs: {
+        source_video_key: sourceVideoKey,
+        source_video_url: sourceVideoKey,
+        source_face_image_key: sourceFaceImageKey,
+        source_face_image: sourceFaceImageKey,
+        source_face_images: swapSourcePackEnabled ? sourceFaceImageKeys : undefined,
+      },
+    };
+    if (emitDebug) {
+      console.info("[swap][submit][client]", {
+        source_face_count: sourceFaceImageKeys.length,
+        has_source_face_image: Boolean(sourceFaceImageKey),
+        has_source_face_images: Boolean(sourceFaceImageKeys.length),
+        has_source_video: Boolean(payload.inputs.source_video_key),
+        has_source_video_url: Boolean(payload.inputs.source_video_url),
+      });
+    }
+    return payload;
+  };
+
   const getPollDelayMs = (attempt: number) => {
     return Math.min(POLL_MAX_MS, POLL_INITIAL_MS * Math.pow(2, attempt));
   };
@@ -506,25 +539,7 @@ export default function SwapClient({ service = "swap" }: Props) {
         for (const file of activeSwapSourceFaceFiles) {
           sourceFaceImageKeys.push(await uploadFileToR2(file));
         }
-        const sourceFaceImageKey = sourceFaceImageKeys[0];
-        result = await createTask({
-          service_type: "swap",
-          mode: swapContract.mode,
-          swap_type: "face",
-          source_video_key: sourceVideoKey,
-          source_face_image_key: sourceFaceImageKey,
-          source_face_images: swapSourcePackEnabled ? sourceFaceImageKeys : undefined,
-          keep_original_audio: keepOriginalAudio,
-          face_fidelity: swapContract.faceFidelity,
-          replacement_intensity: swapContract.replacementIntensity,
-          face_enhance: faceEnhance,
-          inputs: swapSourcePackEnabled
-            ? {
-                source_face_images: sourceFaceImageKeys,
-                source_face_image_key: sourceFaceImageKey,
-              }
-            : undefined,
-        });
+        result = await createTask(buildSwapTaskPayload(sourceVideoKey, sourceFaceImageKeys, true));
       } else {
         const input_key =
           inputSource === "preset" ? presetKey : await uploadFileToR2(videoFile as File);
@@ -653,6 +668,10 @@ export default function SwapClient({ service = "swap" }: Props) {
   const canRun = isAvatar
     ? Boolean(videoFile && imageFile) && !isRunning
     : Boolean(videoFile && (swapSourcePackEnabled ? sourceFaceFiles.length > 0 : imageFile)) && !isRunning;
+  const previewSourceFaceKeys = swapSourcePackEnabled
+    ? ["(source face key 1)", "(source face key 2)", "(source face key 3)"]
+    : ["(source face image key)"];
+  const swapPayloadPreview = buildSwapTaskPayload("(source video key)", previewSourceFaceKeys);
   const payloadPreview = isAvatar
     ? {
         service_type: "action_replica",
@@ -685,16 +704,7 @@ export default function SwapClient({ service = "swap" }: Props) {
         }
       }
     : {
-        service_type: "swap",
-        mode: swapContract.mode,
-        swap_type: "face",
-        source_video_key: "(source video key)",
-        source_face_image_key: "(source face image key)",
-        source_face_images: swapSourcePackEnabled ? ["(source face key 1)", "(source face key 2)", "(source face key 3)"] : undefined,
-        keep_original_audio: keepOriginalAudio,
-        face_fidelity: swapContract.faceFidelity,
-        replacement_intensity: swapContract.replacementIntensity,
-        face_enhance: faceEnhance,
+        ...swapPayloadPreview,
         single_face_only: true,
         face_count_limit: 1,
       };
@@ -712,7 +722,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"swap\",\"mode\":\"${swapContract.mode}\",\"swap_type\":\"face\",\"source_video_key\":\"<source_video_key>\",\"source_face_image_key\":\"<source_face_key>\",\"source_face_images\":${swapSourcePackEnabled ? '[\"<source_face_key_1>\",\"<source_face_key_2>\",\"<source_face_key_3>\"]' : "null"},\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${swapContract.faceFidelity}\",\"replacement_intensity\":${swapContract.replacementIntensity ? `\"${swapContract.replacementIntensity}\"` : "null"},\"face_enhance\":${faceEnhance}}'`
+        `  -d '${JSON.stringify(swapPayloadPreview)}'`
       ].join(" \\\n");
 
   const handleRetrySafeSlicing = async () => {
