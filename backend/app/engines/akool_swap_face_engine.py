@@ -79,14 +79,15 @@ class AkoolSwapFaceEngine:
         on_log: Callable[[str], None],
     ) -> tuple[bytes, Dict[str, Any]]:
         replacement_intensity = str(getattr(self, "_current_replacement_intensity", "strong_identity") or "strong_identity").strip().lower()
+        postprocess_profile = str(getattr(self, "_current_postprocess_profile", "postprocess_standard") or "postprocess_standard").strip().lower()
         filters = (
             "unsharp=5:5:0.75:5:5:0.0"
-            if replacement_intensity == "extreme_replace"
+            if postprocess_profile == "postprocess_minimal"
             else "unsharp=5:5:0.7:5:5:0.0,eq=contrast=1.03:saturation=1.02"
         )
         if shutil.which("ffmpeg") is None:
             on_log("[swap][postprocess] skipped reason=ffmpeg_unavailable")
-            return content, {"attempted": True, "applied": False, "reason": "ffmpeg_unavailable", "filters": filters}
+            return content, {"attempted": True, "applied": False, "reason": "ffmpeg_unavailable", "filters": filters, "profile": postprocess_profile}
         with tempfile.TemporaryDirectory(prefix="swap-postprocess-") as tmp_dir:
             tmp_path = Path(tmp_dir)
             input_path = tmp_path / "result.mp4"
@@ -108,15 +109,15 @@ class AkoolSwapFaceEngine:
                 subprocess.run(cmd, check=True, capture_output=True)
                 processed = output_path.read_bytes()
                 on_log("[swap][postprocess] ok")
-                return processed, {"attempted": True, "applied": True, "reason": None, "filters": filters}
+                return processed, {"attempted": True, "applied": True, "reason": None, "filters": filters, "profile": postprocess_profile}
             except FileNotFoundError:
                 on_log("[swap][postprocess] skipped reason=ffmpeg_unavailable")
-                return content, {"attempted": True, "applied": False, "reason": "ffmpeg_unavailable", "filters": filters}
+                return content, {"attempted": True, "applied": False, "reason": "ffmpeg_unavailable", "filters": filters, "profile": postprocess_profile}
             except subprocess.CalledProcessError as exc:
                 stderr = (exc.stderr or b"").decode("utf-8", errors="ignore")
                 reason = f"ffmpeg_failed:{stderr[-200:]}" if stderr else "ffmpeg_failed"
                 on_log(f"[swap][postprocess] failed reason={reason}")
-                return content, {"attempted": True, "applied": False, "reason": reason, "filters": filters}
+                return content, {"attempted": True, "applied": False, "reason": reason, "filters": filters, "profile": postprocess_profile}
 
     def _extract_provider_alg_msg(self, payload: Dict[str, Any] | None) -> str:
         body = dict(payload or {})
@@ -311,6 +312,20 @@ class AkoolSwapFaceEngine:
         is_intelligence_route = provider_name == "swap_intelligence_akool"
         replacement_intensity = str(run_cfg.get("replacement_intensity") or run_cfg.get("swap_strength") or ("strong_identity" if is_intelligence_route else "balanced")).strip().lower() or "balanced"
         swap_strength = replacement_intensity
+        proxy_profile = str(
+            run_cfg.get("proxy_profile")
+            or (
+                "proxy_extreme_close"
+                if replacement_intensity == "extreme_replace"
+                else "proxy_tight"
+                if is_intelligence_route
+                else "proxy_standard"
+            )
+        ).strip().lower() or "proxy_standard"
+        postprocess_profile = str(
+            run_cfg.get("postprocess_profile")
+            or ("postprocess_minimal" if replacement_intensity == "extreme_replace" else "postprocess_standard")
+        ).strip().lower() or "postprocess_standard"
         route_intent = str(
             run_cfg.get("route_intent")
             or ("explicit_replacement_preferred" if is_intelligence_route else "simplified_route_allowed")
@@ -395,6 +410,8 @@ class AkoolSwapFaceEngine:
         proxy_clip_valid = False
         proxy_clip_reason: str | None = None
         modify_video_source = "raw_target"
+        selected_source_ref: Dict[str, Any] | None = None
+        source_bucket_reason: str | None = None
         provider_failure_reason: str | None = None
         failure_stage: str | None = None
         retry_attempt = 0
@@ -572,6 +589,7 @@ class AkoolSwapFaceEngine:
                         max_frames=8,
                         create_focused_clip=True,
                         selection_mode="aggressive_mapping" if replacement_intensity == "extreme_replace" else "standard",
+                        proxy_profile=proxy_profile,
                         on_log=on_log,
                     )
                 frame_paths = extraction["frames"]
@@ -738,10 +756,30 @@ class AkoolSwapFaceEngine:
                         }
                     ]
                     selected_source_bucket = "frontal"
+                    selected_source_ref = dict(selected_source_refs[0])
+                    source_bucket_reason = source_selection_reason
                 target_anchor_frontalness = float(dict((target_anchor_summary or {}).get("quality_breakdown") or {}).get("frontalness") or 0.0)
                 selected_source_bucket = "frontal" if target_anchor_frontalness >= 16.0 else "side_angle"
                 if not any(str(item.get("bucket")) == selected_source_bucket for item in selected_source_refs):
                     selected_source_bucket = "frontal"
+                selected_source_ref = next(
+                    (dict(item) for item in selected_source_refs if str(item.get("bucket") or "") == selected_source_bucket),
+                    dict(selected_source_refs[0]) if selected_source_refs else None,
+                )
+                if selected_source_ref is not None:
+                    selected_source_face_index = int(selected_source_ref.get("selected_index") or selected_source_face_index)
+                    source_bucket_reason = str(selected_source_ref.get("selection_reason") or source_selection_reason)
+                    source_selection_reason = source_bucket_reason
+                    selected_candidate = next(
+                        (item for item in source_candidates_prepared if int(item.get("source_index") or 0) == selected_source_face_index),
+                        selected_candidate,
+                    )
+                    source_face = dict(selected_candidate["source_face"])
+                    source_face_vendor_url = str(selected_candidate["source_face_vendor_url"])
+                    canonical_source_face_url = str(selected_candidate["canonical_source_face_url"])
+                    source_face_score = selected_candidate.get("source_face_score")
+                    source_face_risk_tags = list(selected_candidate.get("source_face_risk_tags") or [])
+                    source_score_breakdown = dict(selected_candidate.get("source_score_breakdown") or {})
                 proxy_clip_valid = bool(proxy_target_url) or bool((proxy_clip_meta or {}).get("proxy_clip_valid"))
                 proxy_clip_reason = str((proxy_clip_meta or {}).get("proxy_reason") or "") or None
                 if replacement_intensity == "extreme_replace":
@@ -843,7 +881,8 @@ class AkoolSwapFaceEngine:
                 on_log(
                     f"[swap][submit] payload_summary="
                     f"{{'sourceImage_count': 1, 'targetImage_count': {len(submit_payload['targetImage'])}, "
-                    f"'modifyVideo': '{submit_modify_video}', 'modifyVideoSource': '{modify_video_source}', 'face_enhance': {submit_face_enhance}}}"
+                    f"'modifyVideo': '{submit_modify_video}', 'modifyVideoSource': '{modify_video_source}', "
+                    f"'proxyProfile': '{proxy_profile}', 'face_enhance': {submit_face_enhance}}}"
                 )
                 on_log(
                     f"[swap][target-proxy] proxy_clip_valid={str(proxy_clip_valid).lower()} "
@@ -1300,6 +1339,7 @@ class AkoolSwapFaceEngine:
             content = self._apply_audio_strategy(content, keep_original_audio)
             if is_intelligence_route:
                 self._current_replacement_intensity = replacement_intensity
+                self._current_postprocess_profile = postprocess_profile
                 processed_content, postprocess_info = self._apply_intelligence_postprocess(content, on_log)
                 vendor_runtime["postprocess"] = postprocess_info
                 content = processed_content
@@ -1343,6 +1383,8 @@ class AkoolSwapFaceEngine:
                 "target_mapping_face_score": target_mapping_face_score,
                 "selected_source_face_index": selected_source_face_index,
                 "selected_source_bucket": selected_source_bucket,
+                "selected_source_ref": selected_source_ref,
+                "source_bucket_reason": source_bucket_reason,
                 "source_pack_size": source_pack_size,
                 "selected_source_face_reason": source_selection_reason,
                 "selected_source_refs": selected_source_refs,
@@ -1357,6 +1399,10 @@ class AkoolSwapFaceEngine:
                 "proxy_clip_valid": proxy_clip_valid,
                 "proxy_clip_used": proxy_clip_used,
                 "proxy_clip_reason": proxy_clip_reason,
+                "proxy_profile": proxy_profile,
+                "proxy_crop_ratio": focus_crop_area_ratio if proxy_clip_used else None,
+                "postprocess_profile": postprocess_profile,
+                "overwrite_strength_expected": "high" if replacement_intensity == "extreme_replace" else "medium",
                 "modify_video_source": modify_video_source,
                 "provider_failure_reason": provider_failure_reason,
                 "failure_stage": failure_stage,
@@ -1409,6 +1455,8 @@ class AkoolSwapFaceEngine:
                     "model_style": model_style,
                     "source_crop_policy": source_crop_policy,
                     "target_anchor_policy": target_anchor_policy,
+                    "proxy_profile": proxy_profile,
+                    "postprocess_profile": postprocess_profile,
                 },
                 extra=self._json_safe({
                     "swap_type": swap_type,
@@ -1426,6 +1474,8 @@ class AkoolSwapFaceEngine:
                     "source_pack_size": source_pack_size,
                     "selected_source_face_index": selected_source_face_index,
                     "selected_source_bucket": selected_source_bucket,
+                    "selected_source_ref": selected_source_ref,
+                    "source_bucket_reason": source_bucket_reason,
                     "source_selection_reason": source_selection_reason,
                     "selected_source_refs": selected_source_refs,
                     "canonical_source_face_url": canonical_source_face_url,
@@ -1447,6 +1497,10 @@ class AkoolSwapFaceEngine:
                     "proxy_clip_valid": proxy_clip_valid,
                     "proxy_clip_used": proxy_clip_used,
                     "proxy_clip_reason": proxy_clip_reason,
+                    "proxy_profile": proxy_profile,
+                    "proxy_crop_ratio": quality_summary["proxy_crop_ratio"],
+                    "postprocess_profile": postprocess_profile,
+                    "overwrite_strength_expected": quality_summary["overwrite_strength_expected"],
                     "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,
@@ -1527,6 +1581,8 @@ class AkoolSwapFaceEngine:
                     "source_pack_size": source_pack_size,
                     "selected_source_face_index": selected_source_face_index,
                     "selected_source_bucket": selected_source_bucket,
+                    "selected_source_ref": selected_source_ref,
+                    "source_bucket_reason": source_bucket_reason,
                     "source_selection_reason": source_selection_reason,
                     "selected_source_refs": selected_source_refs,
                     "canonical_source_face_url": canonical_source_face_url,
@@ -1549,6 +1605,10 @@ class AkoolSwapFaceEngine:
                     "proxy_clip_valid": proxy_clip_valid,
                     "proxy_clip_used": proxy_clip_used,
                     "proxy_clip_reason": proxy_clip_reason,
+                    "proxy_profile": proxy_profile,
+                    "proxy_crop_ratio": quality_summary["proxy_crop_ratio"],
+                    "postprocess_profile": postprocess_profile,
+                    "overwrite_strength_expected": quality_summary["overwrite_strength_expected"],
                     "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,

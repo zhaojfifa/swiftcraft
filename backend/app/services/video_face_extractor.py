@@ -344,7 +344,16 @@ class VideoFaceExtractor:
         height = float(anchor_box.get("height") or video_height or 0.0)
         if video_width <= 0 or video_height <= 0:
             raise EngineRunError("target_face_extraction failed: focused clip missing video dimensions")
-        if crop_profile == "proxy_extreme":
+        if crop_profile == "proxy_extreme_close":
+            margin_x_scale = 0.95
+            margin_y_scale = 1.02
+        elif crop_profile == "proxy_tight":
+            margin_x_scale = 1.0
+            margin_y_scale = 1.08
+        elif crop_profile == "proxy_standard":
+            margin_x_scale = 1.08
+            margin_y_scale = 1.16
+        elif crop_profile == "proxy_extreme":
             margin_x_scale = 1.05
             margin_y_scale = 1.12
         else:
@@ -459,6 +468,7 @@ class VideoFaceExtractor:
         output_path: Path,
         selected_face: Dict[str, Any] | None,
         video_size: tuple[int, int] | None,
+        proxy_profile: str = "proxy_standard",
     ) -> tuple[Path | None, Dict[str, Any]]:
         if selected_face is None or video_size is None:
             return None, {"proxy_clip_valid": False, "proxy_reason": "missing_selected_face"}
@@ -501,10 +511,11 @@ class VideoFaceExtractor:
             source_video_path=source_video_path,
             output_path=output_path,
             face_track_summary=face_track_summary,
-            crop_profile="proxy_extreme",
+            crop_profile=proxy_profile,
         )
         proxy_meta["proxy_clip_valid"] = proxy_path is not None
         proxy_meta["proxy_reason"] = proxy_reason if proxy_path is not None else str(proxy_meta.get("focus_mode") or "invalid_crop")
+        proxy_meta["proxy_profile"] = proxy_profile
         return proxy_path, proxy_meta
 
     async def _bridge_proxy_clip(
@@ -530,6 +541,7 @@ class VideoFaceExtractor:
         max_frames: int = 8,
         create_focused_clip: bool = False,
         selection_mode: str = "standard",
+        proxy_profile: str = "proxy_standard",
         on_log: Any | None = None,
     ) -> Dict[str, Any]:
         video_path = work_dir / "source_video.mp4"
@@ -583,7 +595,7 @@ class VideoFaceExtractor:
                 source_video_path=video_path,
                 output_path=work_dir / "focused_target.mp4",
                 face_track_summary=face_track_summary,
-                crop_profile="proxy_extreme" if selection_mode == "aggressive_mapping" else "standard",
+                crop_profile=proxy_profile if selection_mode == "aggressive_mapping" else "standard",
             )
             focus_crop_valid = bool(focus_meta.get("focus_crop_valid"))
             focus_mode = str(focus_meta.get("focus_mode") or "unknown")
@@ -605,6 +617,7 @@ class VideoFaceExtractor:
                     output_path=work_dir / "proxy_target.mp4",
                     selected_face=selected_faces[0] if selected_faces else None,
                     video_size=video_size,
+                    proxy_profile=proxy_profile,
                 )
                 if proxy_path is not None:
                     proxy_clip_asset = await self._bridge_proxy_clip(proxy_path=proxy_path, service=service)
@@ -669,6 +682,7 @@ class VideoFaceExtractor:
                 output_path=work_dir / "proxy_target_mapping_face.mp4",
                 selected_face=selected_face_for_proxy,
                 video_size=video_size,
+                proxy_profile=proxy_profile,
             )
             if proxy_path is not None:
                 proxy_clip_asset = await self._bridge_proxy_clip(proxy_path=proxy_path, service=service)
@@ -719,6 +733,7 @@ class VideoFaceExtractor:
             "proxy_target_asset": proxy_clip_asset,
             "proxy_target_url": proxy_clip_asset.public_url if proxy_clip_asset is not None else None,
             "proxy_clip_meta": proxy_clip_meta,
+            "proxy_profile": proxy_profile,
             "replacement_mode": "focused_clip" if focused_clip_asset is not None else "raw_target_video",
             "focus_crop_valid": focus_crop_valid,
             "focus_mode": focus_mode,
