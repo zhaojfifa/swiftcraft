@@ -522,7 +522,7 @@ class VideoFaceExtractor:
                 "region": selected_faces[0].get("region") if selected_faces else None,
                 "raw_box": selected_faces[0].get("raw_box") if selected_faces else None,
                 "quality_breakdown": dict(selected_faces[0].get("quality_breakdown") or {}) if selected_faces else {},
-                "rank_reason": "largest_most_frontal_least_blurred_least_occluded" if selection_mode == "aggressive_mapping" else "highest_quality_primary_face",
+                "rank_reason": "best_for_identity_overwrite" if selection_mode == "aggressive_mapping" else "highest_quality_primary_face",
             },
             "focused_target_asset": focused_clip_asset,
             "focused_target_url": focused_clip_asset.public_url if focused_clip_asset is not None else None,

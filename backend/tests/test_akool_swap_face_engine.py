@@ -907,4 +907,62 @@ def test_swap_engine_intelligence_extreme_replace_sets_route_and_face_enhance_fl
     assert result.metadata["replacement_mode"] == "explicit_mapping_enhanced"
     assert result.metadata["face_enhance_used"] is False
     assert result.metadata["source_crop_policy"] == "extreme_identity_core"
-    assert result.metadata["target_mapping_face_rank_reason"] == "largest_most_frontal_least_blurred_least_occluded"
+    assert result.metadata["target_mapping_face_rank_reason"] == "best_for_identity_overwrite"
+    assert result.metadata["target_rank_reason"] == "best_for_identity_overwrite"
+    assert result.metadata["extreme_replace_effective"] is True
+
+
+def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_degraded():
+    engine = AkoolSwapFaceEngine.__new__(AkoolSwapFaceEngine)
+    engine.provider = "swap_intelligence_akool"
+    engine.service_type = "swap"
+    engine.poll_interval_sec = 1
+    engine.timeout_sec = 30
+    engine.watchdog_timeout_sec = 30
+    engine.client = _FakeClient()
+    engine.r2 = _FakeR2Upload()
+    engine.vendor_bridge = _FakeBridge()
+    engine.video_face_extractor = _InvalidFocusExtractor()
+    engine.swap_quality_pipeline = _FakeQualityPipeline()
+    engine.swap_segmenter = _FakeSegmenter(segment_count=1)
+    engine._apply_audio_strategy = lambda content, _keep: content
+    engine._apply_intelligence_postprocess = lambda content, _on_log: (
+        content,
+        {"attempted": True, "applied": True, "reason": None, "filters": "test"},
+    )
+
+    record = TaskRecord(
+        task_id="task-v4-extreme-fallback",
+        service="swap",
+        mode="intelligence",
+        input_key="uploads/source.mp4",
+        input_image_key="uploads/source-face.png",
+        metadata={
+            "provider": "swap_intelligence_akool",
+            "run_config_snapshot": {
+                "provider": "swap_intelligence_akool",
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+                "face_fidelity": "extreme_replace",
+                "replacement_intensity": "extreme_replace",
+                "swap_strength": "extreme_replace",
+                "source_crop_policy": "extreme_identity_core",
+                "target_anchor_policy": "extreme_mapping_primary",
+                "keep_original_audio": True,
+                "face_enhance": False,
+            }
+        },
+    )
+
+    result = asyncio.run(
+        engine.run(
+            "task-v4-extreme-fallback",
+            record,
+            {},
+            on_log=lambda _message: None,
+            on_stage=lambda _stage, _progress: None,
+        )
+    )
+
+    assert result.metadata["degraded_fallback_used"] is True
+    assert result.metadata["extreme_replace_effective"] is False

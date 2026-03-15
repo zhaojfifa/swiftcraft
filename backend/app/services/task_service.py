@@ -204,7 +204,7 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
     if face_fidelity not in {"high", "balanced", "stable", "strong_identity", "extreme_replace"}:
         face_fidelity = "balanced"
     if _normalize_swap_mode(mode) == "intelligence" and face_fidelity_raw is None:
-        replacement_intensity = "strong_identity"
+        replacement_intensity = "extreme_replace"
     else:
         replacement_intensity = _normalize_swap_replacement_intensity(mode, face_fidelity)
     face_enhance = data.get("face_enhance")

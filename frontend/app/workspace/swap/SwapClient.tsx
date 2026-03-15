@@ -129,10 +129,11 @@ export default function SwapClient({ service = "swap" }: Props) {
     if (String(serviceType || "swap").toLowerCase() === "swap") {
       const intelligence = ["intelligent", "intelligence"].includes(String(mode || "basic").toLowerCase());
       if (intelligence) {
-        setFaceFidelity((current) => (current === "balanced" ? "strong_identity" : current));
-        setFaceEnhance((current) => (faceFidelity === "extreme_replace" ? false : current));
+        setFaceFidelity((current) => (current === "balanced" ? "extreme_replace" : current));
+        setFaceEnhance(faceFidelity === "extreme_replace" ? false : true);
       } else {
         setFaceFidelity("balanced");
+        setFaceEnhance(true);
       }
       return;
     }
@@ -574,6 +575,8 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskReplacementMode = String(taskMetadata.replacement_mode ?? "");
   const taskDegradedFallbackUsed = String(taskMetadata.degraded_fallback_used ?? "");
   const taskFaceEnhanceUsed = String(taskMetadata.face_enhance_used ?? taskMetadata.face_enhance ?? "");
+  const taskTargetRankReason = String(taskMetadata.target_rank_reason ?? taskMetadata.target_mapping_face_rank_reason ?? "");
+  const taskExtremeReplaceEffective = String(taskMetadata.extreme_replace_effective ?? "");
   const taskRiskTags = Array.isArray(taskMetadata.risk_tags)
     ? (taskMetadata.risk_tags as unknown[]).map((value) => String(value)).filter(Boolean)
     : [];
@@ -1468,9 +1471,11 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Source Face Score: {taskSourceFaceScore || "-"}</div>
                         <div>Target Mapping Face Score: {taskTargetMappingFaceScore || "-"}</div>
                         <div>Target Track Face Score: {taskTargetTrackFaceScore || "-"}</div>
+                        <div>Target Rank Reason: {taskTargetRankReason || "-"}</div>
                         <div>Selected Anchor Frame: {taskSelectedTargetFrameIndex || "-"}</div>
                         <div>Replacement Mode: {taskReplacementMode || "-"}</div>
                         <div>Degraded Fallback Used: {taskDegradedFallbackUsed || "false"}</div>
+                        <div>Extreme Replace Effective: {taskExtremeReplaceEffective || "false"}</div>
                         <div>Risk Tags: {taskRiskTags.length ? taskRiskTags.join(", ") : "-"}</div>
                         <div>Remote Status: {taskRemoteStatus || "-"}</div>
                         <div>Elapsed: {taskElapsedMs ? `${taskElapsedMs} ms` : "-"}</div>

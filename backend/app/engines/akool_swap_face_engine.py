@@ -78,7 +78,12 @@ class AkoolSwapFaceEngine:
         content: bytes,
         on_log: Callable[[str], None],
     ) -> tuple[bytes, Dict[str, Any]]:
-        filters = "unsharp=5:5:0.7:5:5:0.0,eq=contrast=1.03:saturation=1.02"
+        replacement_intensity = str(getattr(self, "_current_replacement_intensity", "strong_identity") or "strong_identity").strip().lower()
+        filters = (
+            "unsharp=5:5:0.75:5:5:0.0"
+            if replacement_intensity == "extreme_replace"
+            else "unsharp=5:5:0.7:5:5:0.0,eq=contrast=1.03:saturation=1.02"
+        )
         if shutil.which("ffmpeg") is None:
             on_log("[swap][postprocess] skipped reason=ffmpeg_unavailable")
             return content, {"attempted": True, "applied": False, "reason": "ffmpeg_unavailable", "filters": filters}
@@ -549,7 +554,7 @@ class AkoolSwapFaceEngine:
                     if isinstance(target_anchor_summary, dict)
                     else None
                 ) or (
-                    "largest_most_frontal_least_blurred_least_occluded"
+                    "best_for_identity_overwrite"
                     if replacement_intensity == "extreme_replace"
                     else "highest_quality_primary_face"
                 )
@@ -1049,6 +1054,7 @@ class AkoolSwapFaceEngine:
             result_stage = "download_ok"
             content = self._apply_audio_strategy(content, keep_original_audio)
             if is_intelligence_route:
+                self._current_replacement_intensity = replacement_intensity
                 processed_content, postprocess_info = self._apply_intelligence_postprocess(content, on_log)
                 vendor_runtime["postprocess"] = postprocess_info
                 content = processed_content
@@ -1071,6 +1077,9 @@ class AkoolSwapFaceEngine:
                 if is_intelligence_route
                 else f"{str(record.mode or 'basic').lower()}_{api_version}_{route_execution_style}_{swap_strength}"
             )
+            extreme_replace_effective = (
+                replacement_intensity == "extreme_replace" and not degraded_fallback_used
+            )
             quality_summary = {
                 "swap_strength": swap_strength,
                 "replacement_intensity": replacement_intensity,
@@ -1083,6 +1092,8 @@ class AkoolSwapFaceEngine:
                 "selected_target_frame_index": selected_target_frame_index,
                 "face_enhance_used": bool(face_enhance),
                 "target_mapping_face_rank_reason": target_mapping_face_rank_reason,
+                "target_rank_reason": target_mapping_face_rank_reason,
+                "extreme_replace_effective": extreme_replace_effective,
                 "degraded_fallback_used": degraded_fallback_used,
                 "risk_tags": risk_tags,
                 "route_summary": route_summary,
@@ -1150,6 +1161,8 @@ class AkoolSwapFaceEngine:
                     "face_track_summary": face_track_summary,
                     "target_anchor_summary": target_anchor_summary,
                     "target_mapping_face_rank_reason": target_mapping_face_rank_reason,
+                    "target_rank_reason": target_mapping_face_rank_reason,
+                    "extreme_replace_effective": extreme_replace_effective,
                     "replacement_mode": replacement_mode,
                     "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,
@@ -1234,6 +1247,8 @@ class AkoolSwapFaceEngine:
                     "face_track_summary": face_track_summary,
                     "target_anchor_summary": target_anchor_summary,
                     "target_mapping_face_rank_reason": target_mapping_face_rank_reason,
+                    "target_rank_reason": target_mapping_face_rank_reason,
+                    "extreme_replace_effective": extreme_replace_effective,
                     "replacement_mode": replacement_mode,
                     "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,

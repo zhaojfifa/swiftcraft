@@ -107,7 +107,7 @@ def test_extract_swap_run_config_normalizes_basic_mode():
     assert cfg["route_execution_style"] == "simplified_single_face"
 
 
-def test_extract_swap_run_config_sets_strong_identity_for_intelligence():
+def test_extract_swap_run_config_defaults_to_extreme_replace_for_intelligence():
     cfg = _extract_swap_run_config(
         {
             "inputs": {
@@ -119,8 +119,8 @@ def test_extract_swap_run_config_sets_strong_identity_for_intelligence():
     )
     assert cfg["mode"] == "intelligence"
     assert cfg["provider"] == "swap_intelligence_akool"
-    assert cfg["swap_strength"] == "strong_identity"
-    assert cfg["replacement_intensity"] == "strong_identity"
+    assert cfg["swap_strength"] == "extreme_replace"
+    assert cfg["replacement_intensity"] == "extreme_replace"
     assert cfg["route_intent"] == "explicit_replacement_preferred"
     assert cfg["route_execution_style"] == "explicit_replacement"
 

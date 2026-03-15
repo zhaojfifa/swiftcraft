@@ -88,8 +88,8 @@ class SwapQualityPipeline:
             rgb = image.convert("RGB")
             if crop_policy == "extreme_identity_core":
                 width, height = rgb.size
-                crop_w = max(128, int(width * 0.68))
-                crop_h = max(128, int(height * 0.72))
+                crop_w = max(128, int(width * 0.58))
+                crop_h = max(128, int(height * 0.62))
                 left = max(0, (width - crop_w) // 2)
                 top = max(0, (height - crop_h) // 2)
                 rgb = rgb.crop((left, top, left + crop_w, top + crop_h))
