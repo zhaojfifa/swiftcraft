@@ -817,7 +817,7 @@ def test_swap_engine_intelligence_selects_best_source_reference():
     assert result.metadata["selected_source_bucket"] == "frontal"
     assert result.metadata["selected_source_ref"]["bucket"] == "frontal"
     assert result.metadata["source_bucket_reason"] == "target_anchor_pose_match"
-    assert result.metadata["proxy_profile"] == "proxy_tight"
+    assert result.metadata["proxy_profile"] == "tight"
     assert result.metadata["postprocess_profile"] == "postprocess_standard"
     assert result.metadata["overwrite_strength_expected"] == "medium"
 
@@ -1002,7 +1002,7 @@ def test_swap_engine_intelligence_extreme_replace_sets_route_and_face_enhance_fl
     assert result.metadata["target_anchor_quality"]["valid_for_extreme"] is True
     assert result.metadata["extreme_replace_selected"] is True
     assert result.metadata["downgraded_from_extreme"] is False
-    assert result.metadata["proxy_profile"] == "proxy_extreme_close"
+    assert result.metadata["proxy_profile"] == "extreme_close"
     assert result.metadata["postprocess_profile"] == "postprocess_minimal"
     assert result.metadata["overwrite_strength_expected"] == "high"
     assert engine.client.last_submit_kwargs["modify_video"] == "https://vendor.example/focused-target.mp4"

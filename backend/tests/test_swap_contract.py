@@ -95,6 +95,39 @@ def test_swap_request_accepts_explicit_replacement_intensity():
 
 
 
+def test_swap_request_accepts_proxy_profile():
+    payload = {
+        "service_type": "swap",
+        "swap_type": "face",
+        "mode": "intelligence",
+        "source_video_key": "uploads/source.mp4",
+        "source_face_image_key": "uploads/source-face.png",
+        "replacement_intensity": "extreme_replace",
+        "proxy_profile": "tight",
+    }
+    parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
+    assert isinstance(parsed, SwapRequest)
+    assert parsed.proxy_profile == "tight"
+    assert parsed.inputs.proxy_profile == "tight"
+
+
+def test_swap_request_accepts_legacy_prefixed_proxy_profile_alias():
+    payload = {
+        "service_type": "swap",
+        "swap_type": "face",
+        "mode": "intelligence",
+        "source_video_key": "uploads/source.mp4",
+        "source_face_image_key": "uploads/source-face.png",
+        "replacement_intensity": "extreme_replace",
+        "inputs": {
+            "proxy_profile": "proxy_extreme_close",
+        },
+    }
+    parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
+    assert isinstance(parsed, SwapRequest)
+    assert parsed.inputs.proxy_profile == "extreme_close"
+
+
 def test_swap_request_accepts_source_face_images_pack():
     payload = {
         "service_type": "swap",

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 
 SWAP_FACE_FIDELITY_VALUES = {"high", "balanced", "stable"}
 SWAP_REPLACEMENT_INTENSITY_VALUES = {"balanced", "strong_identity", "extreme_replace"}
+SWAP_PROXY_PROFILE_VALUES = {"standard", "tight", "extreme_close"}
 
 
 def _normalize_swap_face_fields(data: object) -> object:
@@ -17,8 +18,17 @@ def _normalize_swap_face_fields(data: object) -> object:
     normalized = dict(data)
     raw_face_fidelity = normalized.get("face_fidelity")
     raw_replacement_intensity = normalized.get("replacement_intensity")
+    raw_proxy_profile = normalized.get("proxy_profile")
     face_fidelity = str(raw_face_fidelity or "").strip().lower() or None
     replacement_intensity = str(raw_replacement_intensity or "").strip().lower() or None
+    proxy_profile = str(raw_proxy_profile or "").strip().lower() or None
+    proxy_profile_aliases = {
+        "proxy_standard": "standard",
+        "proxy_tight": "tight",
+        "proxy_extreme_close": "extreme_close",
+        "proxy_extreme": "extreme_close",
+    }
+    proxy_profile = proxy_profile_aliases.get(proxy_profile or "", proxy_profile)
     if face_fidelity == "extreme_replace":
         if not replacement_intensity:
             replacement_intensity = "extreme_replace"
@@ -31,8 +41,11 @@ def _normalize_swap_face_fields(data: object) -> object:
         raise ValueError("face_fidelity must be one of: high, balanced, stable")
     if replacement_intensity and replacement_intensity not in SWAP_REPLACEMENT_INTENSITY_VALUES:
         raise ValueError("replacement_intensity must be one of: balanced, strong_identity, extreme_replace")
+    if proxy_profile and proxy_profile not in SWAP_PROXY_PROFILE_VALUES:
+        raise ValueError("proxy_profile must be one of: standard, tight, extreme_close")
     normalized["face_fidelity"] = face_fidelity
     normalized["replacement_intensity"] = replacement_intensity
+    normalized["proxy_profile"] = proxy_profile
     return normalized
 
 
@@ -129,6 +142,7 @@ class SwapInputs(BaseModel):
     keep_original_audio: Optional[bool] = True
     face_fidelity: Optional[str] = "balanced"
     replacement_intensity: Optional[str] = None
+    proxy_profile: Optional[str] = None
     face_enhance: Optional[bool] = True
 
     @model_validator(mode="before")
@@ -168,6 +182,8 @@ class SwapInputs(BaseModel):
             raise ValueError("inputs.face_fidelity must be one of: high, balanced, stable")
         if self.replacement_intensity and self.replacement_intensity not in SWAP_REPLACEMENT_INTENSITY_VALUES:
             raise ValueError("inputs.replacement_intensity must be one of: balanced, strong_identity, extreme_replace")
+        if self.proxy_profile and self.proxy_profile not in SWAP_PROXY_PROFILE_VALUES:
+            raise ValueError("inputs.proxy_profile must be one of: standard, tight, extreme_close")
         return self
 
 
@@ -188,6 +204,7 @@ class SwapRequest(BaseModel):
     keep_original_audio: Optional[bool] = None
     face_fidelity: Optional[str] = None
     replacement_intensity: Optional[str] = None
+    proxy_profile: Optional[str] = None
     face_enhance: Optional[bool] = None
     inputs: Optional[SwapInputs] = None
 
@@ -224,6 +241,8 @@ class SwapRequest(BaseModel):
             input_data["face_fidelity"] = merged.get("face_fidelity")
         if merged.get("replacement_intensity") is not None and input_data.get("replacement_intensity") is None:
             input_data["replacement_intensity"] = merged.get("replacement_intensity")
+        if merged.get("proxy_profile") is not None and input_data.get("proxy_profile") is None:
+            input_data["proxy_profile"] = merged.get("proxy_profile")
         if merged.get("face_enhance") is not None and input_data.get("face_enhance") is None:
             input_data["face_enhance"] = merged.get("face_enhance")
         merged["inputs"] = input_data
@@ -256,6 +275,8 @@ class SwapRequest(BaseModel):
             merged_input_data["face_fidelity"] = self.face_fidelity
         if self.replacement_intensity is not None:
             merged_input_data["replacement_intensity"] = self.replacement_intensity
+        if self.proxy_profile is not None:
+            merged_input_data["proxy_profile"] = self.proxy_profile
         if self.face_enhance is not None:
             merged_input_data["face_enhance"] = self.face_enhance
         merged_inputs = SwapInputs.model_validate(merged_input_data)
@@ -276,6 +297,7 @@ class SwapRequest(BaseModel):
         self.keep_original_audio = self.inputs.keep_original_audio
         self.face_fidelity = self.inputs.face_fidelity
         self.replacement_intensity = self.inputs.replacement_intensity
+        self.proxy_profile = self.inputs.proxy_profile
         self.face_enhance = self.inputs.face_enhance
         return self
 

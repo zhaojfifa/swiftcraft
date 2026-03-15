@@ -77,6 +77,15 @@ function getSwapContract(
   };
 }
 
+function normalizeSwapProxyProfile(value: string | null | undefined): "standard" | "tight" | "extreme_close" {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "tight") return "tight";
+  if (normalized === "extreme_close" || normalized === "proxy_extreme_close" || normalized === "proxy_extreme") {
+    return "extreme_close";
+  }
+  return "standard";
+}
+
 export default function SwapClient({ service = "swap" }: Props) {
   const serviceType = service;
   const isSwap = serviceType === "swap";
@@ -94,6 +103,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [sourceFacePreviewUrls, setSourceFacePreviewUrls] = useState<string[]>([]);
   const [keepOriginalAudio, setKeepOriginalAudio] = useState(true);
   const [faceFidelity, setFaceFidelity] = useState<"balanced" | "strong_identity" | "extreme_replace">("balanced");
+  const [proxyProfile, setProxyProfile] = useState<"standard" | "tight" | "extreme_close">("standard");
   const [faceEnhance, setFaceEnhance] = useState(true);
   const [orientation, setOrientation] = useState<"front" | "auto">("front");
   const [prompt, setPrompt] = useState<string>("");
@@ -166,12 +176,14 @@ export default function SwapClient({ service = "swap" }: Props) {
           setSourceFaceFiles([imageFile]);
         }
         setFaceFidelity((current) => (current === "balanced" ? "extreme_replace" : current));
+        setProxyProfile((current) => (current === "standard" ? "standard" : current));
         setFaceEnhance(faceFidelity === "extreme_replace" ? false : true);
       } else {
         if (!imageFile && sourceFaceFiles[0]) {
           setImageFile(sourceFaceFiles[0]);
         }
         setFaceFidelity("balanced");
+        setProxyProfile("standard");
         setFaceEnhance(true);
       }
       return;
@@ -224,6 +236,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const swapContract = getSwapContract(modeApi, faceFidelity);
   const swapProvider = swapContract.provider;
   const swapSourcePackEnabled = isSwap && isIntelligenceMode;
+  const effectiveProxyProfile = isIntelligenceMode ? normalizeSwapProxyProfile(proxyProfile) : "standard";
   const activeSwapSourceFaceFiles = swapSourcePackEnabled ? sourceFaceFiles : (imageFile ? [imageFile] : []);
   const presetKey = resolvePresetInputKey(serviceApi, modeApi);
   const cdnBase = (process.env.NEXT_PUBLIC_CDN_BASE_URL || "").replace(/\/+$/, "");
@@ -260,6 +273,7 @@ export default function SwapClient({ service = "swap" }: Props) {
       keep_original_audio: keepOriginalAudio,
       face_fidelity: swapContract.faceFidelity,
       replacement_intensity: swapContract.replacementIntensity,
+      proxy_profile: swapSourcePackEnabled ? effectiveProxyProfile : undefined,
       face_enhance: faceEnhance,
       inputs: {
         source_video_key: sourceVideoKey,
@@ -267,6 +281,7 @@ export default function SwapClient({ service = "swap" }: Props) {
         source_face_image_key: sourceFaceImageKey,
         source_face_image: sourceFaceImageKey,
         source_face_images: swapSourcePackEnabled ? sourceFaceImageKeys : undefined,
+        proxy_profile: swapSourcePackEnabled ? effectiveProxyProfile : undefined,
       },
     };
     if (emitDebug) {
@@ -276,6 +291,7 @@ export default function SwapClient({ service = "swap" }: Props) {
         has_source_face_images: Boolean(sourceFaceImageKeys.length),
         has_source_video: Boolean(payload.inputs.source_video_key),
         has_source_video_url: Boolean(payload.inputs.source_video_url),
+        proxy_profile: payload.inputs.proxy_profile,
       });
     }
     return payload;
@@ -657,6 +673,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskTargetMappingFaceScore = String(taskMetadata.target_mapping_face_score ?? taskMetadata.target_face_score ?? "");
   const taskSelectedTargetFrameIndex = String(taskMetadata.selected_target_frame_index ?? "");
   const taskReplacementMode = String(taskMetadata.replacement_mode ?? "");
+  const taskProxyProfile = taskMetadata.proxy_profile ? normalizeSwapProxyProfile(String(taskMetadata.proxy_profile)) : "";
   const taskDegradedFallbackUsed = String(taskMetadata.degraded_fallback_used ?? "");
   const taskFaceEnhanceUsed = String(taskMetadata.face_enhance_used ?? taskMetadata.face_enhance ?? "");
   const taskTargetRankReason = String(taskMetadata.target_rank_reason ?? taskMetadata.target_mapping_face_rank_reason ?? "");
@@ -1469,6 +1486,24 @@ export default function SwapClient({ service = "swap" }: Props) {
                               <option value="extreme_replace">extreme_replace</option>
                             </select>
                           </div>
+                        ) : null}
+                        {isIntelligenceMode ? (
+                          <div className="space-y-3 mt-4">
+                            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                              Proxy Profile
+                            </label>
+                            <select
+                              value={proxyProfile}
+                              onChange={(event) => {
+                                setProxyProfile(normalizeSwapProxyProfile(event.target.value));
+                              }}
+                              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                            >
+                              <option value="standard">Standard</option>
+                              <option value="tight">Tight</option>
+                              <option value="extreme_close">Extreme Close</option>
+                            </select>
+                          </div>
                         ) : (
                           <div className="space-y-3 mt-4">
                             <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -1651,6 +1686,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Target Track Face Score: {taskTargetTrackFaceScore || "-"}</div>
                         <div>Target Rank Reason: {taskTargetRankReason || "-"}</div>
                         <div>Selected Anchor Frame: {taskSelectedTargetFrameIndex || "-"}</div>
+                        <div>Proxy Profile: {taskProxyProfile || "-"}</div>
                         <div>Replacement Mode: {taskReplacementMode || "-"}</div>
                         <div>Degraded Fallback Used: {taskDegradedFallbackUsed || "false"}</div>
                         <div>Extreme Replace Effective: {taskExtremeReplaceEffective || "false"}</div>
@@ -1745,6 +1781,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                       <div>Target Mapping Face Score: {taskTargetMappingFaceScore || "-"}</div>
                       <div>Target Track Face Score: {taskTargetTrackFaceScore || "-"}</div>
                       <div>Selected Anchor Frame: {taskSelectedTargetFrameIndex || "-"}</div>
+                      <div>Proxy Profile: {taskProxyProfile || "-"}</div>
                       <div>Degraded Fallback Used: {taskDegradedFallbackUsed || "false"}</div>
                       <div>Risk Tags: {taskRiskTags.length ? taskRiskTags.join(", ") : "-"}</div>
                     </div>

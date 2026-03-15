@@ -344,18 +344,15 @@ class VideoFaceExtractor:
         height = float(anchor_box.get("height") or video_height or 0.0)
         if video_width <= 0 or video_height <= 0:
             raise EngineRunError("target_face_extraction failed: focused clip missing video dimensions")
-        if crop_profile == "proxy_extreme_close":
+        if crop_profile in {"extreme_close", "proxy_extreme_close", "proxy_extreme"}:
             margin_x_scale = 0.95
             margin_y_scale = 1.02
-        elif crop_profile == "proxy_tight":
+        elif crop_profile in {"tight", "proxy_tight"}:
             margin_x_scale = 1.0
             margin_y_scale = 1.08
-        elif crop_profile == "proxy_standard":
+        elif crop_profile in {"standard", "proxy_standard"}:
             margin_x_scale = 1.08
             margin_y_scale = 1.16
-        elif crop_profile == "proxy_extreme":
-            margin_x_scale = 1.05
-            margin_y_scale = 1.12
         else:
             margin_x_scale = 1.2
             margin_y_scale = 1.3

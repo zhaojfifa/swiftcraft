@@ -119,6 +119,23 @@ class AkoolSwapFaceEngine:
                 on_log(f"[swap][postprocess] failed reason={reason}")
                 return content, {"attempted": True, "applied": False, "reason": reason, "filters": filters, "profile": postprocess_profile}
 
+    def _normalize_proxy_profile(self, proxy_profile: str | None, *, replacement_intensity: str, is_intelligence_route: bool) -> str:
+        value = str(proxy_profile or "").strip().lower()
+        aliases = {
+            "proxy_standard": "standard",
+            "proxy_tight": "tight",
+            "proxy_extreme_close": "extreme_close",
+            "proxy_extreme": "extreme_close",
+        }
+        normalized = aliases.get(value, value)
+        if normalized in {"standard", "tight", "extreme_close"}:
+            return normalized
+        if replacement_intensity == "extreme_replace":
+            return "extreme_close"
+        if is_intelligence_route:
+            return "tight"
+        return "standard"
+
     def _extract_provider_alg_msg(self, payload: Dict[str, Any] | None) -> str:
         body = dict(payload or {})
         item = self.client.extract_result_item(body) if hasattr(self.client, "extract_result_item") else {}
@@ -312,16 +329,11 @@ class AkoolSwapFaceEngine:
         is_intelligence_route = provider_name == "swap_intelligence_akool"
         replacement_intensity = str(run_cfg.get("replacement_intensity") or run_cfg.get("swap_strength") or ("strong_identity" if is_intelligence_route else "balanced")).strip().lower() or "balanced"
         swap_strength = replacement_intensity
-        proxy_profile = str(
-            run_cfg.get("proxy_profile")
-            or (
-                "proxy_extreme_close"
-                if replacement_intensity == "extreme_replace"
-                else "proxy_tight"
-                if is_intelligence_route
-                else "proxy_standard"
-            )
-        ).strip().lower() or "proxy_standard"
+        proxy_profile = self._normalize_proxy_profile(
+            str(run_cfg.get("proxy_profile") or "").strip().lower() or None,
+            replacement_intensity=replacement_intensity,
+            is_intelligence_route=is_intelligence_route,
+        )
         postprocess_profile = str(
             run_cfg.get("postprocess_profile")
             or ("postprocess_minimal" if replacement_intensity == "extreme_replace" else "postprocess_standard")

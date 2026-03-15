@@ -210,6 +210,9 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
     replacement_intensity_raw = data.get("replacement_intensity")
     if replacement_intensity_raw is None:
         replacement_intensity_raw = payload.get("replacement_intensity")
+    proxy_profile_raw = data.get("proxy_profile")
+    if proxy_profile_raw is None:
+        proxy_profile_raw = payload.get("proxy_profile")
     face_fidelity_legacy_hint = str(face_fidelity_raw or "").strip().lower() or None
     face_fidelity = str(
         face_fidelity_raw
@@ -221,6 +224,15 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
     replacement_intensity_text = str(replacement_intensity_raw or "").strip().lower() or None
     if replacement_intensity_text not in {None, "balanced", "strong_identity", "extreme_replace"}:
         replacement_intensity_text = None
+    proxy_profile = str(proxy_profile_raw or "").strip().lower() or None
+    proxy_profile = {
+        "proxy_standard": "standard",
+        "proxy_tight": "tight",
+        "proxy_extreme_close": "extreme_close",
+        "proxy_extreme": "extreme_close",
+    }.get(proxy_profile or "", proxy_profile)
+    if proxy_profile not in {None, "standard", "tight", "extreme_close"}:
+        proxy_profile = None
     if _normalize_swap_mode(mode) == "intelligence" and replacement_intensity_text is None and face_fidelity_raw is None:
         replacement_intensity = "extreme_replace"
     else:
@@ -259,6 +271,7 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         "keep_original_audio": bool(keep_original_audio),
         "face_fidelity": face_fidelity,
         "replacement_intensity": replacement_intensity,
+        "proxy_profile": proxy_profile,
         "face_enhance": bool(face_enhance),
         "source_crop_policy": (
             "extreme_identity_core"
@@ -770,6 +783,7 @@ class TaskService:
                 payload["keep_original_audio"] = parsed.keep_original_audio
                 payload["face_fidelity"] = parsed.face_fidelity
                 payload["replacement_intensity"] = parsed.replacement_intensity
+                payload["proxy_profile"] = parsed.proxy_profile
                 payload["face_enhance"] = parsed.face_enhance
         else:
             legacy = LegacySwapRequest.model_validate(payload)
