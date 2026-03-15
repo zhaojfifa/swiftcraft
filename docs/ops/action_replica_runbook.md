@@ -1,61 +1,80 @@
-# Action Replica Contract Closeout
+# Action Replica Runbook
 
-## Input / Output
-- Input:
-  - `service_type=action_replica`
-  - `inputs.source_video_url`
-  - `inputs.character_image_url`
-  - `inputs.audio_strategy`
-  - `mode=baseline|intelligent`
-- Output:
-  - `outputs.video_url`
-  - `outputs.manifest_url`
-  - metadata highlights prompt and fidelity controls
+## Production Baseline
 
-## Manifest Example
-```json
-{
-  "task_id": "ar_demo_001",
-  "service_type": "action_replica",
-  "mode": "intelligent",
-  "provider": "kling_motioncontrol_v3_pro",
-  "input_snapshot": {
-    "source_video_url": "uploads/motion.mp4",
-    "character_image_url": "uploads/character.png"
-  },
-  "outputs": {
-    "video_url": "https://cdn.swiftcraft.ai/outputs/ar_demo_001/result.mp4",
-    "manifest_url": "https://cdn.swiftcraft.ai/outputs/ar_demo_001/manifest.json"
-  },
-  "metrics": {
-    "total_latency_ms": 65543
-  },
-  "qa_summary": {
-    "fidelity_bias": "motion",
-    "prompt_source": "user",
-    "prompt_profile": "motion_priority",
-    "prompt_strength": "high",
-    "audio_strategy": "keep_original"
-  },
-  "run_config_snapshot": {
-    "service_type": "action_replica",
-    "provider": "kling_motioncontrol_v3_pro",
-    "fidelity_bias": "motion",
-    "prompt_source": "user",
-    "audio_strategy": "keep_original"
-  },
-  "audio_strategy": "keep_original",
-  "original_audio_preserved": true
-}
-```
+Action Replica has two formal routes:
+
+- `basic`
+- `intelligent`
+
+UI labels:
+
+- `Basic`
+- `Intelligence`
+
+Contract values:
+
+- `basic`
+- `intelligent`
+
+Do not send `mode=intelligence` from clients. Backend keeps a compatibility normalization for legacy payloads, but the formal contract is `intelligent`.
+
+## Provider Mapping
+
+### Basic
+
+- provider: `wan26_r2v`
+- engine: `FalWan26R2VEngine`
+- role: stable WAN 2.6 baseline
+
+### Intelligence
+
+- provider: `kling_motioncontrol_v3_pro`
+- engine: `FalKlingMotionControlV3ProEngine`
+- role: enhanced comparison route
+
+## Basic Prompt Baseline
+
+Basic intentionally stays conservative.
+
+Expected runtime markers:
+
+- `prompt_profile=balanced`
+- `prompt_profile_id=action_replica.basic.wan.v3`
+- `priority_policy=identity>camera>motion>timing>background`
+
+Expected behavior:
+
+- preserve exact framing
+- preserve original motion timing
+- reduce identity drift
+- reduce background drift
+- reduce wardrobe redesign
+- reduce shot reframing
 
 ## Manual Acceptance
-1. Run one baseline task and confirm default provider is WAN.
-2. Run one intelligent task and confirm default provider is Kling motion-control.
-3. Verify UI exposes `Audio Strategy` and default is `keep_original`.
-4. Verify manifest includes `audio_strategy` and `original_audio_preserved=true`.
 
-## Risks / Constraints
-- Baseline scope stays on WAN.
-- Intelligent scope stays on Kling motion-control.
-- No new model family expansion in this phase.
+1. Submit one Basic task.
+2. Confirm request payload contains:
+   - `service_type=action_replica`
+   - `mode=basic`
+   - `inputs.provider=wan26_r2v`
+3. Confirm logs show dispatch to WAN engine.
+4. Submit one Intelligence task.
+5. Confirm request payload contains:
+   - `service_type=action_replica`
+   - `mode=intelligent`
+   - `inputs.provider=kling_motioncontrol_v3_pro`
+6. Confirm logs show dispatch to Kling engine.
+7. For Basic, inspect logs for:
+   - `prompt_profile=balanced`
+   - `prompt_profile_id=action_replica.basic.wan.v3`
+   - conservative `final_prompt_preview`
+   - conservative `final_negative_prompt_preview`
+
+## Regression Guardrails
+
+- Do not change Basic off `wan26_r2v`
+- Do not change Intelligence off `kling_motioncontrol_v3_pro` without explicit product decision
+- Do not reintroduce mixed `intelligence/intelligent` contract values in frontend payloads
+- Keep all mode normalization inside task normalization, not scattered in provider code

@@ -245,3 +245,15 @@ def test_action_replica_basic_prompt_builder_is_conservative():
     assert "preserve exact framing" in final_prompt
     assert "clothing redesign" in final_negative_prompt
     assert "shot reframing" in final_negative_prompt
+
+
+def test_action_replica_provider_from_record_normalizes_legacy_intelligence_mode(monkeypatch):
+    svc = _svc()
+    monkeypatch.setattr(svc, "_avatar_enabled", lambda: True)
+    record = TaskRecord(
+        task_id="ar-legacy-1",
+        service="avatar",
+        mode="intelligence",
+        metadata={},
+    )
+    assert svc._resolve_provider_from_record(record) == "kling_motioncontrol_v3_pro"
