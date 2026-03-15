@@ -76,6 +76,15 @@ SWAP_PROVIDER_ALIASES: Dict[str, str] = {
 }
 
 
+def _normalize_action_replica_mode(mode: str | None) -> str:
+    value = str(mode or "").strip().lower()
+    if value in {"intelligence", "intelligent"}:
+        return "intelligent"
+    if value in {"baseline", "basic"}:
+        return "basic"
+    return "basic"
+
+
 def _normalize_swap_mode(mode: str | None) -> str:
     value = str(mode or "").strip().lower()
     if value in {"intelligence", "intelligent"}:
@@ -280,8 +289,7 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
         candidate_count_val = 1
     if candidate_count_val < 1:
         candidate_count_val = 1
-    mode_norm = str(mode or "").strip().lower()
-    resolved_mode = "intelligent" if mode_norm == "intelligent" else "basic"
+    resolved_mode = _normalize_action_replica_mode(mode)
     prompt_profile_default = "motion_priority" if resolved_mode == "intelligent" else "balanced"
     prompt_profile = str(data.get("prompt_profile") or prompt_profile_default).strip().lower() or prompt_profile_default
     if prompt_profile not in {"balanced", "camera_priority", "motion_priority", "identity_priority"}:
@@ -585,8 +593,8 @@ class TaskService:
                 return "kling_motioncontrol_v3_pro"
             if requested in {"wan26_r2v", "wan26-r2v", "r2v"}:
                 return "wan26_r2v"
-            mode_norm = str(mode or "").strip().lower()
-            if mode_norm in {"intelligent"}:
+            mode_norm = _normalize_action_replica_mode(mode)
+            if mode_norm == "intelligent":
                 return (
                     os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_INTELLIGENT", "kling_motioncontrol_v3_pro").strip()
                     or "kling_motioncontrol_v3_pro"
@@ -716,7 +724,12 @@ class TaskService:
                 self._validate_swap_single_face_inputs(payload)
 
         resolved_service = (service or "swap").lower()
-        resolved_mode = _normalize_swap_mode(mode) if resolved_service == "swap" else (mode or "baseline").lower()
+        if resolved_service == "swap":
+            resolved_mode = _normalize_swap_mode(mode)
+        elif resolved_service in {"action_replica", "avatar"}:
+            resolved_mode = _normalize_action_replica_mode(mode)
+        else:
+            resolved_mode = (mode or "baseline").lower()
         resolved_service_type = _service_type_from_legacy(resolved_service)
         # Runtime service key stays `avatar` for engine/store compatibility.
         if resolved_service == "action_replica":
@@ -1029,7 +1042,7 @@ class TaskService:
         if record.service in {"avatar", "action_replica"}:
             if not self._avatar_enabled():
                 return "mock"
-            if record.mode == "intelligent":
+            if _normalize_action_replica_mode(record.mode) == "intelligent":
                 return (
                     os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_INTELLIGENT", "kling_motioncontrol_v3_pro").strip()
                     or "kling_motioncontrol_v3_pro"

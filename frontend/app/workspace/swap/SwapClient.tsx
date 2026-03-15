@@ -33,6 +33,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const serviceType = service;
   const isSwap = serviceType === "swap";
   const isAvatar = serviceType === "action_replica" || serviceType === "avatar";
+  const intelligentModeValue: SwapMode = isAvatar ? "intelligent" : "intelligence";
 
   const [mode, setMode] = useState<SwapMode>("basic");
   const [swapSubtype, setSwapSubtype] = useState<"scene" | "face">("face");
@@ -112,8 +113,9 @@ export default function SwapClient({ service = "swap" }: Props) {
 
   useEffect(() => {
     if (!isAvatar) return;
-    setActionReplicaProvider(mode === "intelligent" ? "kling_motioncontrol_v3_pro" : "wan26_r2v");
-    if (mode === "intelligent") {
+    const normalizedMode = mode === "intelligent" || mode === "intelligence" ? "intelligent" : "basic";
+    setActionReplicaProvider(normalizedMode === "intelligent" ? "kling_motioncontrol_v3_pro" : "wan26_r2v");
+    if (normalizedMode === "intelligent") {
       setExpressionMode("neutral");
       setFidelityBias("motion");
       setOrientationStrategy("prefer_video_motion");
@@ -364,7 +366,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     const characterKey = overrides?.characterKey || (await uploadFileToR2(imageFile as File));
     const motionKey = overrides?.motionKey || (await uploadFileToR2(videoFile as File));
     const resolvedMode = String(overrides?.modeOverride || modeApi).toLowerCase();
-    const modeForRequest = resolvedMode === "intelligent" || resolvedMode === "intelligence" ? "intelligence" : "basic";
+    const modeForRequest = resolvedMode === "intelligent" || resolvedMode === "intelligence" ? "intelligent" : "basic";
     return createTask({
       service_type: "action_replica",
       model_id: "kling-v2.6-std-motion",
@@ -424,7 +426,7 @@ export default function SwapClient({ service = "swap" }: Props) {
         const sourceFaceImageKey = await uploadFileToR2(imageFile as File);
         result = await createTask({
           service_type: "swap",
-          mode: isIntelligenceMode ? "intelligence" : "basic",
+          mode: isIntelligenceMode ? "intelligent" : "basic",
           swap_type: "face",
           source_video_key: sourceVideoKey,
           source_face_image_key: sourceFaceImageKey,
@@ -680,7 +682,7 @@ export default function SwapClient({ service = "swap" }: Props) {
             Basic
           </button>
           <button
-            onClick={() => setMode("intelligence")}
+            onClick={() => setMode(intelligentModeValue)}
             className={`px-6 py-1.5 rounded-md text-sm font-medium transition-all duration-200 z-10 ${
               (mode === "intelligent" || mode === "intelligence")
                 ? "bg-white text-blue-600 shadow-sm border border-slate-200 ring-1 ring-black/5"

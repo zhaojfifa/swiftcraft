@@ -1,4 +1,9 @@
-from app.services.task_service import TaskService, _extract_action_replica_run_config, _extract_swap_run_config
+from app.services.task_service import (
+    TaskService,
+    _extract_action_replica_run_config,
+    _extract_swap_run_config,
+    _normalize_action_replica_mode,
+)
 from app.models.task import TaskRecord
 
 
@@ -163,10 +168,18 @@ def test_action_replica_default_provider_mapping(monkeypatch):
     monkeypatch.setattr(svc, "_avatar_enabled", lambda: True)
     assert svc._resolve_provider("avatar", {"inputs": {}}, "baseline") == "wan26_r2v"
     assert svc._resolve_provider("avatar", {"inputs": {}}, "intelligent") == "kling_motioncontrol_v3_pro"
+    assert svc._resolve_provider("avatar", {"inputs": {}}, "intelligence") == "kling_motioncontrol_v3_pro"
+
+
+def test_action_replica_mode_normalization_maps_intelligence_to_intelligent():
+    assert _normalize_action_replica_mode("intelligence") == "intelligent"
+    assert _normalize_action_replica_mode("intelligent") == "intelligent"
+    assert _normalize_action_replica_mode("baseline") == "basic"
 
 
 def test_action_replica_prompt_contract_defaults():
     cfg = _extract_action_replica_run_config({"inputs": {}}, mode="baseline")
+    assert cfg["mode"] == "basic"
     assert cfg["prompt_strength"] == "medium"
     assert cfg["prompt_used"] is False
     assert cfg["preserve_camera"] is True
@@ -193,3 +206,12 @@ def test_action_replica_prompt_contract_with_user_inputs():
     assert cfg["prompt_strength"] == "high"
     assert cfg["prompt_used"] is True
     assert cfg["preserve_camera"] is False
+
+
+def test_action_replica_run_config_normalizes_intelligence_to_intelligent():
+    cfg = _extract_action_replica_run_config(
+        {"inputs": {"provider": "kling_motioncontrol_v3_pro"}},
+        mode="intelligence",
+    )
+    assert cfg["mode"] == "intelligent"
+    assert cfg["provider_hint"] == "kling_motioncontrol_v3_pro"
