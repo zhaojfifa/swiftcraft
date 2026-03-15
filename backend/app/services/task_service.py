@@ -294,7 +294,7 @@ def _extract_action_replica_run_config(payload: Dict[str, Any], mode: str) -> Di
     prompt_profile = str(data.get("prompt_profile") or prompt_profile_default).strip().lower() or prompt_profile_default
     if prompt_profile not in {"balanced", "camera_priority", "motion_priority", "identity_priority"}:
         prompt_profile = "balanced"
-    prompt_profile_id = "action_replica.intelligent.kling.v1" if resolved_mode == "intelligent" else "action_replica.basic.wan.v2"
+    prompt_profile_id = "action_replica.intelligent.kling.v1" if resolved_mode == "intelligent" else "action_replica.basic.wan.v3"
     try:
         duration_val = int(data.get("duration") or 5)
     except Exception:

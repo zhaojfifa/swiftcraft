@@ -36,7 +36,7 @@ def _norm_fidelity_bias(fidelity_bias: str, mode: str) -> str:
 def resolve_priority_policy(mode: str) -> str:
     if _norm_mode(mode) == "intelligent":
         return "motion>timing>background>camera>expression"
-    return "camera>motion>timing>background"
+    return "identity>camera>motion>timing>background"
 
 
 def resolve_character_orientation(
@@ -78,7 +78,7 @@ def resolve_prompt_profile(
         return "identity_priority"
     if (fidelity_bias or "").strip().lower() == "motion":
         return "motion_priority"
-    if preserve_motion or preserve_timing:
+    if preserve_motion and not preserve_camera:
         return "motion_priority"
     if preserve_background:
         return "balanced"
@@ -118,10 +118,10 @@ def build_action_replica_prompts(
         preserve_background=preserve_background,
         fidelity_bias=fidelity,
     )
-    if preserve_camera and preserve_motion and preserve_timing and preserve_background:
-        prompt_profile = "motion_priority"
+    if mode_norm == "basic" and preserve_camera and preserve_motion and preserve_timing and preserve_background:
+        prompt_profile = "balanced"
     profile_id = (
-        "action_replica.intelligent.kling.v1" if mode_norm == "intelligent" else "action_replica.basic.wan.v2"
+        "action_replica.intelligent.kling.v1" if mode_norm == "intelligent" else "action_replica.basic.wan.v3"
     )
     effective_source = "default"
     if user_prompt:
@@ -129,8 +129,11 @@ def build_action_replica_prompts(
 
     basic_default = (
         "Replace the original human subject in the source video with the provided character identity. "
-        "Preserve main motion rhythm and scene intent, and avoid major background redesign. "
-        "Keep the output close to the source clip while allowing minor visual flexibility."
+        "The provided character identity must be the only human identity shown in the final video. "
+        "Preserve exact framing, shot composition, original motion timing, body proportions, wardrobe category, "
+        "hair silhouette, and background layout. "
+        "Do not redesign the scene, clothing, hairstyle, or camera setup. "
+        "Treat this route as a conservative baseline replacement, not a reinterpretation."
     )
     intelligent_default = (
         "Perform strict identity replacement of the original subject with the provided character. "
@@ -151,7 +154,8 @@ def build_action_replica_prompts(
         "Prioritize face and identity consistency for the provided character, while keeping motion and scene continuity close to source."
     )
     balanced = (
-        "Balance identity replacement, action continuity, and scene consistency. Keep source pacing and composition without redesign."
+        "Preserve the source clip conservatively: keep identity replacement stable while keeping shot composition, pacing, "
+        "background continuity, and wardrobe appearance unchanged."
     )
     profile_prompt = {
         "balanced": balanced,
@@ -193,12 +197,17 @@ def build_action_replica_prompts(
         final_parts.append(
             "Keep the original environment, background layout, object placement, lighting direction, and scene continuity unchanged."
         )
+    if mode_norm == "basic":
+        final_parts.append(
+            "Do not introduce a second person, do not redesign wardrobe, and do not alter face shape, hairstyle, or body silhouette."
+        )
     if user_prompt:
         final_parts.append(f"User emphasis: {user_prompt.strip()}")
     final_prompt = "\n\n".join(part for part in final_parts if part.strip())
 
     identity_negative = (
-        "wrong person, identity drift, inconsistent face, deformed face, extra fingers, warped limbs, bad hands"
+        "wrong person, second person, identity drift, face inconsistency, face shape drift, hairstyle drift, "
+        "deformed face, extra fingers, warped limbs, bad hands"
     )
     expression_negative = "exaggerated expression, overacting, excessive mouth opening, eyebrow exaggeration, head swing amplification"
     negative_parts = [identity_negative]
@@ -212,6 +221,10 @@ def build_action_replica_prompts(
         negative_parts.append("background change, scene redesign, layout drift, object relocation, lighting inconsistency")
     if preserve_timing:
         negative_parts.append("timing shift, pacing change, delayed action, accelerated gesture, asynchronous motion")
+    if mode_norm == "basic":
+        negative_parts.append(
+            "clothing redesign, wardrobe change, shot reframing, pose reinterpretation, body proportion change, full scene restyle"
+        )
     if expression == "neutral":
         negative_parts.append(expression_negative)
     elif expression == "natural":

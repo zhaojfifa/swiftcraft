@@ -187,6 +187,9 @@ def test_action_replica_prompt_contract_defaults():
     assert cfg["original_audio_preserved"] is True
     assert cfg["expression_mode"] == "natural"
     assert cfg["fidelity_bias"] == "balanced"
+    assert cfg["prompt_profile"] == "balanced"
+    assert cfg["prompt_profile_id"] == "action_replica.basic.wan.v3"
+    assert cfg["priority_policy"] == "identity>camera>motion>timing>background"
 
 
 def test_action_replica_prompt_contract_with_user_inputs():
@@ -215,3 +218,30 @@ def test_action_replica_run_config_normalizes_intelligence_to_intelligent():
     )
     assert cfg["mode"] == "intelligent"
     assert cfg["provider_hint"] == "kling_motioncontrol_v3_pro"
+
+
+def test_action_replica_basic_prompt_builder_is_conservative():
+    cfg = _extract_action_replica_run_config({"inputs": {}}, mode="baseline")
+    from app.engines.action_replica_prompt import build_action_replica_prompts
+
+    prompts = build_action_replica_prompts(
+        mode=cfg["mode"],
+        provider="wan26_r2v",
+        prompt_strength=cfg["prompt_strength"],
+        prompt_source=cfg["prompt_source"],
+        user_prompt=cfg["user_prompt"] or "",
+        user_negative_prompt=cfg["negative_prompt"] or "",
+        expression_mode=cfg["expression_mode"],
+        fidelity_bias=cfg["fidelity_bias"],
+        resolved_character_orientation=cfg["resolved_character_orientation"],
+        preserve_camera=cfg["preserve_camera"],
+        preserve_motion=cfg["preserve_motion"],
+        preserve_timing=cfg["preserve_timing"],
+        preserve_background=cfg["preserve_background"],
+    )
+    final_prompt = prompts["final_prompt"].lower()
+    final_negative_prompt = prompts["final_negative_prompt"].lower()
+    assert "only human identity" in final_prompt
+    assert "preserve exact framing" in final_prompt
+    assert "clothing redesign" in final_negative_prompt
+    assert "shot reframing" in final_negative_prompt
