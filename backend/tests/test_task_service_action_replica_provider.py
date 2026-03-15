@@ -120,8 +120,29 @@ def test_extract_swap_run_config_sets_strong_identity_for_intelligence():
     assert cfg["mode"] == "intelligence"
     assert cfg["provider"] == "swap_intelligence_akool"
     assert cfg["swap_strength"] == "strong_identity"
+    assert cfg["replacement_intensity"] == "strong_identity"
     assert cfg["route_intent"] == "explicit_replacement_preferred"
     assert cfg["route_execution_style"] == "explicit_replacement"
+
+
+def test_extract_swap_run_config_sets_extreme_replace_for_intelligence():
+    cfg = _extract_swap_run_config(
+        {
+            "inputs": {
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+                "face_fidelity": "extreme_replace",
+            }
+        },
+        "intelligence",
+    )
+    assert cfg["mode"] == "intelligence"
+    assert cfg["provider"] == "swap_intelligence_akool"
+    assert cfg["swap_strength"] == "extreme_replace"
+    assert cfg["replacement_intensity"] == "extreme_replace"
+    assert cfg["source_crop_policy"] == "extreme_identity_core"
+    assert cfg["target_anchor_policy"] == "extreme_mapping_primary"
+    assert cfg["face_enhance"] is False
 
 
 def test_extract_swap_run_config_keeps_source_face_images():

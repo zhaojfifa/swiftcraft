@@ -60,7 +60,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [inputVideoUrl, setInputVideoUrl] = useState<string | null>(null);
   const [inputImageUrl, setInputImageUrl] = useState<string | null>(null);
   const [keepOriginalAudio, setKeepOriginalAudio] = useState(true);
-  const [faceFidelity, setFaceFidelity] = useState<"high" | "balanced">("balanced");
+  const [faceFidelity, setFaceFidelity] = useState<"balanced" | "strong_identity" | "extreme_replace">("balanced");
   const [faceEnhance, setFaceEnhance] = useState(true);
   const [orientation, setOrientation] = useState<"front" | "auto">("front");
   const [prompt, setPrompt] = useState<string>("");
@@ -126,6 +126,16 @@ export default function SwapClient({ service = "swap" }: Props) {
   }, [videoFile]);
 
   useEffect(() => {
+    if (String(serviceType || "swap").toLowerCase() === "swap") {
+      const intelligence = ["intelligent", "intelligence"].includes(String(mode || "basic").toLowerCase());
+      if (intelligence) {
+        setFaceFidelity((current) => (current === "balanced" ? "strong_identity" : current));
+        setFaceEnhance((current) => (faceFidelity === "extreme_replace" ? false : current));
+      } else {
+        setFaceFidelity("balanced");
+      }
+      return;
+    }
     if (!isAvatar) return;
     const contract = getActionReplicaContract(mode);
     if (contract.mode === "intelligent") {
@@ -139,7 +149,7 @@ export default function SwapClient({ service = "swap" }: Props) {
       setOrientationStrategy("auto");
       setPromptProfile("balanced");
     }
-  }, [isAvatar, mode]);
+  }, [isAvatar, mode, serviceType, faceFidelity]);
 
   useEffect(() => {
     if (!imageFile) {
@@ -557,11 +567,13 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskSingleFaceOnly = String(taskMetadata.single_face_only ?? "");
   const taskFaceCountLimit = String(taskMetadata.face_count_limit ?? "");
   const taskSourceFaceScore = String(taskMetadata.source_face_score ?? "");
+  const taskReplacementIntensity = String(taskMetadata.replacement_intensity ?? taskMetadata.swap_strength ?? "");
   const taskTargetTrackFaceScore = String(taskMetadata.target_track_face_score ?? "");
   const taskTargetMappingFaceScore = String(taskMetadata.target_mapping_face_score ?? taskMetadata.target_face_score ?? "");
   const taskSelectedTargetFrameIndex = String(taskMetadata.selected_target_frame_index ?? "");
   const taskReplacementMode = String(taskMetadata.replacement_mode ?? "");
   const taskDegradedFallbackUsed = String(taskMetadata.degraded_fallback_used ?? "");
+  const taskFaceEnhanceUsed = String(taskMetadata.face_enhance_used ?? taskMetadata.face_enhance ?? "");
   const taskRiskTags = Array.isArray(taskMetadata.risk_tags)
     ? (taskMetadata.risk_tags as unknown[]).map((value) => String(value)).filter(Boolean)
     : [];
@@ -1261,11 +1273,23 @@ export default function SwapClient({ service = "swap" }: Props) {
                         {isIntelligenceMode ? (
                           <div className="space-y-3 mt-4">
                             <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                              Swap Strategy
+                              Replacement Intensity
                             </label>
-                            <div className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-                              strong_identity
-                            </div>
+                            <select
+                              value={faceFidelity}
+                              onChange={(event) => {
+                                const value = event.target.value as "balanced" | "strong_identity" | "extreme_replace";
+                                setFaceFidelity(value);
+                                if (value === "extreme_replace") {
+                                  setFaceEnhance(false);
+                                }
+                              }}
+                              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                            >
+                              <option value="balanced">balanced</option>
+                              <option value="strong_identity">strong_identity</option>
+                              <option value="extreme_replace">extreme_replace</option>
+                            </select>
                           </div>
                         ) : (
                           <div className="space-y-3 mt-4">
@@ -1274,11 +1298,11 @@ export default function SwapClient({ service = "swap" }: Props) {
                             </label>
                             <select
                               value={faceFidelity}
-                              onChange={(event) => setFaceFidelity(event.target.value as "high" | "balanced")}
+                              onChange={(event) => setFaceFidelity(event.target.value as "balanced" | "strong_identity")}
                               className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
                             >
                               <option value="balanced">balanced</option>
-                              <option value="high">high</option>
+                              <option value="strong_identity">high</option>
                             </select>
                           </div>
                         )}
@@ -1429,12 +1453,15 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Mode: {taskModeSummary || task?.mode || "-"}</div>
                         <div>Provider: {taskProviderSummary || "-"}</div>
                         <div>Swap Strength: {taskSwapStrength || (isIntelligenceMode ? "strong_identity" : "balanced")}</div>
+                        <div>Replacement Intensity: {taskReplacementIntensity || "-"}</div>
                         <div>Route Intent: {taskRouteIntent || "-"}</div>
                         <div>Execution Style: {taskRouteExecutionStyle || "-"}</div>
+                        <div>Route Summary: {taskRouteSummary || "-"}</div>
                         <div>Single-Face Only: {taskSingleFaceOnly ? taskSingleFaceOnly : "true"}</div>
                         <div>Face Count Limit: {taskFaceCountLimit || "1"}</div>
                         <div>Request ID: {taskRequestId || "-"}</div>
                         <div>Face Enhance: {taskFaceEnhance ? taskFaceEnhance : "-"}</div>
+                        <div>Face Enhance Used: {taskFaceEnhanceUsed || "-"}</div>
                         <div>Keep Original Audio: {taskKeepOriginalAudio ? taskKeepOriginalAudio : "-"}</div>
                         <div>Detect Stage: {taskDetectStage || "-"}</div>
                         <div>Submit Stage: {taskSubmitStage || "-"}</div>

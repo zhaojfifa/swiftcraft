@@ -250,7 +250,8 @@ class AkoolSwapFaceEngine:
         swap_type = str(run_cfg.get("swap_type") or "face").strip().lower() or "face"
         provider_name = str((record.metadata or {}).get("provider") or self.provider).strip().lower() or self.provider
         is_intelligence_route = provider_name == "swap_intelligence_akool"
-        swap_strength = str(run_cfg.get("swap_strength") or ("strong_identity" if is_intelligence_route else "balanced")).strip().lower() or "balanced"
+        replacement_intensity = str(run_cfg.get("replacement_intensity") or run_cfg.get("swap_strength") or ("strong_identity" if is_intelligence_route else "balanced")).strip().lower() or "balanced"
+        swap_strength = replacement_intensity
         route_intent = str(
             run_cfg.get("route_intent")
             or ("explicit_replacement_preferred" if is_intelligence_route else "simplified_route_allowed")
@@ -335,6 +336,7 @@ class AkoolSwapFaceEngine:
         focus_crop_area_ratio = None
         quality_summary: Dict[str, Any] | None = None
         degraded_fallback_used = False
+        target_mapping_face_rank_reason = None
         on_log(
             f"[swap][preflight] provider={provider_name} mode={record.mode} swap_type={swap_type} "
             f"timeout_sec={self.timeout_sec} poll_interval_sec={self.poll_interval_sec}"
@@ -379,6 +381,7 @@ class AkoolSwapFaceEngine:
                     source_face_url=detected_face["path"],
                     service="swap",
                     output_dir=Path(tmp_dir),
+                    crop_policy=source_crop_policy,
                 )
                 source_score = self.swap_quality_pipeline.score_source_face(
                     canonicalized["canonical_path"],
@@ -442,6 +445,7 @@ class AkoolSwapFaceEngine:
                         source_face_url=source_face["path"],
                         service="swap",
                         output_dir=Path(tmp_dir),
+                        crop_policy=source_crop_policy,
                     )
                     canonical_source_face_url = canonicalized["canonical_source_face_url"]
                     source_score = self.swap_quality_pipeline.score_source_face(
@@ -487,6 +491,7 @@ class AkoolSwapFaceEngine:
                         service="swap",
                         max_frames=8,
                         create_focused_clip=True,
+                        selection_mode="aggressive_mapping" if replacement_intensity == "extreme_replace" else "standard",
                         on_log=on_log,
                     )
                 frame_paths = extraction["frames"]
@@ -539,6 +544,15 @@ class AkoolSwapFaceEngine:
                 focused_target_url = extraction.get("focused_target_url")
                 face_track_summary = extraction.get("face_track_summary")
                 target_anchor_summary = extraction.get("target_anchor_summary")
+                target_mapping_face_rank_reason = (
+                    (target_anchor_summary or {}).get("rank_reason")
+                    if isinstance(target_anchor_summary, dict)
+                    else None
+                ) or (
+                    "largest_most_frontal_least_blurred_least_occluded"
+                    if replacement_intensity == "extreme_replace"
+                    else "highest_quality_primary_face"
+                )
                 replacement_mode = "explicit_mapping_enhanced"
                 focus_crop_valid = bool(extraction.get("focus_crop_valid"))
                 focus_mode = str(extraction.get("focus_mode") or "unknown")
@@ -556,6 +570,10 @@ class AkoolSwapFaceEngine:
                 on_log(
                     f"[swap][target-map] track_score={target_track_face_score} mapping_score={target_mapping_face_score} "
                     f"degraded_fallback_used={str(degraded_fallback_used).lower()}"
+                )
+                on_log(
+                    f"[swap][target-map] rank_reason={target_mapping_face_rank_reason or 'highest_quality_primary_face'} "
+                    f"replacement_intensity={replacement_intensity} face_enhance_used={face_enhance}"
                 )
                 if focused_target_url:
                     if self.swap_segmenter is None:
@@ -1046,9 +1064,16 @@ class AkoolSwapFaceEngine:
             manifest_key = f"outputs/{task_id}/manifest.json"
             target_risk_tags = target_mapping_face_risk_tags if is_intelligence_route else target_track_face_risk_tags
             risk_tags = sorted({*source_face_risk_tags, *target_risk_tags})
-            route_summary = "intelligence_explicit_mapping" if is_intelligence_route else f"{str(record.mode or 'basic').lower()}_{api_version}_{route_execution_style}_{swap_strength}"
+            route_summary = (
+                "intelligence_explicit_mapping_extreme"
+                if is_intelligence_route and replacement_intensity == "extreme_replace"
+                else "intelligence_explicit_mapping"
+                if is_intelligence_route
+                else f"{str(record.mode or 'basic').lower()}_{api_version}_{route_execution_style}_{swap_strength}"
+            )
             quality_summary = {
                 "swap_strength": swap_strength,
+                "replacement_intensity": replacement_intensity,
                 "route_intent": route_intent,
                 "route_execution_style": route_execution_style,
                 "source_face_score": source_face_score,
@@ -1056,6 +1081,8 @@ class AkoolSwapFaceEngine:
                 "target_mapping_face_score": target_mapping_face_score,
                 "selected_source_face_index": selected_source_face_index,
                 "selected_target_frame_index": selected_target_frame_index,
+                "face_enhance_used": bool(face_enhance),
+                "target_mapping_face_rank_reason": target_mapping_face_rank_reason,
                 "degraded_fallback_used": degraded_fallback_used,
                 "risk_tags": risk_tags,
                 "route_summary": route_summary,
@@ -1084,6 +1111,7 @@ class AkoolSwapFaceEngine:
                     "provider_contract": provider_contract,
                     "api_version": api_version,
                     "swap_strength": swap_strength,
+                    "replacement_intensity": replacement_intensity,
                     "route_intent": route_intent,
                     "route_execution_style": route_execution_style,
                     "source_video_key": source_video_key,
@@ -1107,9 +1135,11 @@ class AkoolSwapFaceEngine:
                     "api_version": api_version,
                     "model_style": model_style,
                     "swap_strength": swap_strength,
+                    "replacement_intensity": replacement_intensity,
                     "route_intent": route_intent,
                     "route_execution_style": route_execution_style,
                     "route_summary": quality_summary["route_summary"],
+                    "face_enhance_used": bool(face_enhance),
                     "source_face_score": source_face_score,
                     "source_face_risk_tags": source_face_risk_tags,
                     "selected_source_face_index": selected_source_face_index,
@@ -1119,6 +1149,7 @@ class AkoolSwapFaceEngine:
                     "focused_target_url": focused_target_url,
                     "face_track_summary": face_track_summary,
                     "target_anchor_summary": target_anchor_summary,
+                    "target_mapping_face_rank_reason": target_mapping_face_rank_reason,
                     "replacement_mode": replacement_mode,
                     "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,
@@ -1188,9 +1219,11 @@ class AkoolSwapFaceEngine:
                     "api_version": api_version,
                     "model_style": model_style,
                     "swap_strength": swap_strength,
+                    "replacement_intensity": replacement_intensity,
                     "route_intent": route_intent,
                     "route_execution_style": route_execution_style,
                     "route_summary": quality_summary["route_summary"],
+                    "face_enhance_used": bool(face_enhance),
                     "source_face_score": source_face_score,
                     "source_face_risk_tags": source_face_risk_tags,
                     "selected_source_face_index": selected_source_face_index,
@@ -1200,6 +1233,7 @@ class AkoolSwapFaceEngine:
                     "focused_target_url": focused_target_url,
                     "face_track_summary": face_track_summary,
                     "target_anchor_summary": target_anchor_summary,
+                    "target_mapping_face_rank_reason": target_mapping_face_rank_reason,
                     "replacement_mode": replacement_mode,
                     "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,

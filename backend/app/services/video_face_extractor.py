@@ -149,9 +149,20 @@ class VideoFaceExtractor:
                 return 0.0
         return 0.0
 
-    def select_primary_face(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def select_primary_face(self, candidates: List[Dict[str, Any]], selection_mode: str = "standard") -> List[Dict[str, Any]]:
         if not candidates:
             return []
+        if selection_mode == "aggressive_mapping":
+            return [
+                max(
+                    candidates,
+                    key=lambda candidate: (
+                        candidate.get("quality_score") or 0,
+                        self._face_area(candidate),
+                        -int(candidate.get("frame_index") or 0),
+                    ),
+                )
+            ]
         return [max(candidates, key=lambda candidate: (candidate.get("quality_score") or 0, self._face_area(candidate)))]
 
     @staticmethod
@@ -381,6 +392,7 @@ class VideoFaceExtractor:
         service: str = "swap",
         max_frames: int = 8,
         create_focused_clip: bool = False,
+        selection_mode: str = "standard",
         on_log: Any | None = None,
     ) -> Dict[str, Any]:
         video_path = work_dir / "source_video.mp4"
@@ -402,7 +414,7 @@ class VideoFaceExtractor:
                     f"[swap][target-score] frame={detected.get('frame_index', 0)} "
                     f"score={score['score']} risk_tags={score['risk_tags']}"
                 )
-        selected_faces = self.select_primary_face(detected_faces)
+        selected_faces = self.select_primary_face(detected_faces, selection_mode=selection_mode)
         if on_log is not None and selected_faces:
             selected = selected_faces[0]
             on_log(
@@ -510,6 +522,7 @@ class VideoFaceExtractor:
                 "region": selected_faces[0].get("region") if selected_faces else None,
                 "raw_box": selected_faces[0].get("raw_box") if selected_faces else None,
                 "quality_breakdown": dict(selected_faces[0].get("quality_breakdown") or {}) if selected_faces else {},
+                "rank_reason": "largest_most_frontal_least_blurred_least_occluded" if selection_mode == "aggressive_mapping" else "highest_quality_primary_face",
             },
             "focused_target_asset": focused_clip_asset,
             "focused_target_url": focused_clip_asset.public_url if focused_clip_asset is not None else None,

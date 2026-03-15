@@ -101,8 +101,22 @@ def _normalize_swap_provider(provider: str | None) -> str:
     return SWAP_PROVIDER_ALIASES.get(raw, raw)
 
 
-def _swap_strength_for_mode(mode: str | None) -> str:
-    return "strong_identity" if _normalize_swap_mode(mode) == "intelligence" else "balanced"
+def _normalize_swap_replacement_intensity(mode: str | None, face_fidelity: str | None = None) -> str:
+    mode_norm = _normalize_swap_mode(mode)
+    if mode_norm != "intelligence":
+        return "balanced"
+    fidelity = str(face_fidelity or "").strip().lower()
+    if fidelity in {"extreme_replace", "extreme"}:
+        return "extreme_replace"
+    if fidelity in {"strong_identity", "high"}:
+        return "strong_identity"
+    if fidelity in {"balanced", "stable"}:
+        return "balanced"
+    return "strong_identity"
+
+
+def _swap_strength_for_mode(mode: str | None, face_fidelity: str | None = None) -> str:
+    return _normalize_swap_replacement_intensity(mode, face_fidelity)
 
 
 def _swap_route_intent_for_mode(mode: str | None) -> str:
@@ -179,19 +193,25 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         keep_original_audio = settings.SWIFT_SWAP_KEEP_ORIGINAL_AUDIO_DEFAULT
     else:
         keep_original_audio = str(keep_original_audio).strip().lower() in {"1", "true", "yes", "on"}
+    face_fidelity_raw = data.get("face_fidelity")
+    if face_fidelity_raw is None:
+        face_fidelity_raw = payload.get("face_fidelity")
     face_fidelity = str(
-        data.get("face_fidelity")
-        or payload.get("face_fidelity")
+        face_fidelity_raw
         or settings.SWIFT_SWAP_FACE_FIDELITY_DEFAULT
         or "balanced"
     ).strip().lower() or "balanced"
-    if face_fidelity not in {"high", "balanced", "stable"}:
+    if face_fidelity not in {"high", "balanced", "stable", "strong_identity", "extreme_replace"}:
         face_fidelity = "balanced"
+    if _normalize_swap_mode(mode) == "intelligence" and face_fidelity_raw is None:
+        replacement_intensity = "strong_identity"
+    else:
+        replacement_intensity = _normalize_swap_replacement_intensity(mode, face_fidelity)
     face_enhance = data.get("face_enhance")
     if face_enhance is None:
         face_enhance = payload.get("face_enhance")
     if face_enhance is None:
-        face_enhance = True
+        face_enhance = False if replacement_intensity == "extreme_replace" else True
     else:
         face_enhance = str(face_enhance).strip().lower() in {"1", "true", "yes", "on"}
     return {
@@ -200,7 +220,8 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         "subtype": swap_type,
         "mode": _normalize_swap_mode(mode),
         "provider": provider,
-        "swap_strength": _swap_strength_for_mode(mode),
+        "swap_strength": replacement_intensity,
+        "replacement_intensity": replacement_intensity,
         "route_intent": _swap_route_intent_for_mode(mode),
         "route_execution_style": _swap_route_execution_style_for_mode(mode),
         "single_face_only": SWAP_SINGLE_FACE_ONLY,
@@ -216,9 +237,17 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         "keep_original_audio": bool(keep_original_audio),
         "face_fidelity": face_fidelity,
         "face_enhance": bool(face_enhance),
-        "source_crop_policy": "tight_identity_focus" if _normalize_swap_mode(mode) == "intelligence" else "standard_single_face",
-        "target_anchor_policy": "strong_identity_primary" if _normalize_swap_mode(mode) == "intelligence" else "primary_face",
-        "identity_preservation_profile": "strong_identity" if _normalize_swap_mode(mode) == "intelligence" else "balanced",
+        "source_crop_policy": (
+            "extreme_identity_core"
+            if replacement_intensity == "extreme_replace"
+            else "tight_identity_focus" if _normalize_swap_mode(mode) == "intelligence" else "standard_single_face"
+        ),
+        "target_anchor_policy": (
+            "extreme_mapping_primary"
+            if replacement_intensity == "extreme_replace"
+            else "strong_identity_primary" if _normalize_swap_mode(mode) == "intelligence" else "primary_face"
+        ),
+        "identity_preservation_profile": replacement_intensity if _normalize_swap_mode(mode) == "intelligence" else "balanced",
     }
 
 

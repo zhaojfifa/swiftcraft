@@ -75,6 +75,7 @@ class SwapQualityPipeline:
         source_face_url: str,
         service: str,
         output_dir: Path,
+        crop_policy: str = "tight_identity_focus",
     ) -> Dict[str, Any]:
         output_dir.mkdir(parents=True, exist_ok=True)
         source_path = output_dir / "source_face_input.png"
@@ -85,6 +86,13 @@ class SwapQualityPipeline:
             source_path.write_bytes(response.content)
         with Image.open(source_path) as image:
             rgb = image.convert("RGB")
+            if crop_policy == "extreme_identity_core":
+                width, height = rgb.size
+                crop_w = max(128, int(width * 0.68))
+                crop_h = max(128, int(height * 0.72))
+                left = max(0, (width - crop_w) // 2)
+                top = max(0, (height - crop_h) // 2)
+                rgb = rgb.crop((left, top, left + crop_w, top + crop_h))
             contained = ImageOps.contain(rgb, (512, 512), method=Image.Resampling.LANCZOS)
             canvas = Image.new("RGB", (512, 512), color=(18, 18, 18))
             offset = ((512 - contained.width) // 2, (512 - contained.height) // 2)
