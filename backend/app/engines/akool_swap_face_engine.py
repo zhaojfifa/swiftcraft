@@ -317,8 +317,10 @@ class AkoolSwapFaceEngine:
         canonical_source_face_url = source_face_vendor_url = source_video_vendor_url = None
         selected_source_face_index = 0
         source_selection_reason = "single_source_only"
-        target_face_score = None
-        target_face_risk_tags: list[str] = []
+        target_track_face_score = None
+        target_track_face_risk_tags: list[str] = []
+        target_mapping_face_score = None
+        target_mapping_face_risk_tags: list[str] = []
         selected_target_frame_index = None
         original_target_url = None
         focused_target_url = None
@@ -332,6 +334,7 @@ class AkoolSwapFaceEngine:
         focus_face_ratio = None
         focus_crop_area_ratio = None
         quality_summary: Dict[str, Any] | None = None
+        degraded_fallback_used = False
         on_log(
             f"[swap][preflight] provider={provider_name} mode={record.mode} swap_type={swap_type} "
             f"timeout_sec={self.timeout_sec} poll_interval_sec={self.poll_interval_sec}"
@@ -507,6 +510,8 @@ class AkoolSwapFaceEngine:
                     "focus_face_ratio": extraction.get("focus_face_ratio"),
                     "focus_crop_area_ratio": extraction.get("focus_crop_area_ratio"),
                     "target_anchor_summary": extraction.get("target_anchor_summary"),
+                    "target_track_face_score": extraction.get("target_track_face_score"),
+                    "target_mapping_face_score": extraction.get("target_mapping_face_score"),
                 }
                 vendor_runtime["target_face_extraction"] = {
                     "attempted": True,
@@ -525,22 +530,32 @@ class AkoolSwapFaceEngine:
                     "non_blocking": True,
                     "reason": None if target_faces else "no face detected in sampled frames",
                 }
-                target_face_score = extraction.get("target_face_score")
-                target_face_risk_tags = list(extraction.get("target_face_risk_tags") or [])
+                target_track_face_score = extraction.get("target_track_face_score")
+                target_track_face_risk_tags = list(extraction.get("target_track_face_risk_tags") or [])
+                target_mapping_face_score = extraction.get("target_mapping_face_score")
+                target_mapping_face_risk_tags = list(extraction.get("target_mapping_face_risk_tags") or [])
                 selected_target_frame_index = extraction.get("selected_target_frame_index")
                 original_target_url = extraction.get("original_target_url") or source_video_vendor_url
                 focused_target_url = extraction.get("focused_target_url")
                 face_track_summary = extraction.get("face_track_summary")
                 target_anchor_summary = extraction.get("target_anchor_summary")
-                replacement_mode = str(extraction.get("replacement_mode") or "focused_clip")
+                replacement_mode = "explicit_mapping_enhanced"
                 focus_crop_valid = bool(extraction.get("focus_crop_valid"))
                 focus_mode = str(extraction.get("focus_mode") or "unknown")
                 focus_face_ratio = extraction.get("focus_face_ratio")
                 focus_crop_area_ratio = extraction.get("focus_crop_area_ratio")
+                degraded_fallback_used = (
+                    bool(extraction.get("used_bbox_fallback"))
+                    or not focus_crop_valid
+                )
                 on_log(
                     f"[swap][target-focus] focus_crop_valid={str(focus_crop_valid).lower()} "
                     f"focus_mode={focus_mode} focus_face_ratio={focus_face_ratio} "
                     f"focus_crop_area_ratio={focus_crop_area_ratio}"
+                )
+                on_log(
+                    f"[swap][target-map] track_score={target_track_face_score} mapping_score={target_mapping_face_score} "
+                    f"degraded_fallback_used={str(degraded_fallback_used).lower()}"
                 )
                 if focused_target_url:
                     if self.swap_segmenter is None:
@@ -573,7 +588,7 @@ class AkoolSwapFaceEngine:
                         ],
                     }
                     target_face_runtime["segment_summary"] = segment_summary
-                    replacement_mode = "segment_based" if segment_summary["segment_count"] > 1 else replacement_mode
+                    replacement_mode = "explicit_mapping_enhanced"
                 if self.swap_quality_pipeline is not None:
                     source_candidates_prepared = [
                         {
@@ -615,7 +630,7 @@ class AkoolSwapFaceEngine:
                 if not intelligence_source_faces:
                     raise EngineRunError("source face not detected")
                 source_face = dict(intelligence_source_faces[0])
-                replacement_mode = "segment_based" if segment_summary and int(segment_summary.get("segment_count") or 0) > 1 else "focused_clip"
+                replacement_mode = "explicit_mapping_enhanced"
                 on_stage("running", 35)
                 submit_payload = {
                     "sourceImage": [{"path": source_face["path"], "opts": source_face["opts"]}],
@@ -679,9 +694,13 @@ class AkoolSwapFaceEngine:
                     "focus_face_ratio": extraction.get("focus_face_ratio"),
                     "focus_crop_area_ratio": extraction.get("focus_crop_area_ratio"),
                     "target_anchor_summary": extraction.get("target_anchor_summary"),
+                    "target_track_face_score": extraction.get("target_track_face_score"),
+                    "target_mapping_face_score": extraction.get("target_mapping_face_score"),
                 }
-                target_face_score = extraction.get("target_face_score")
-                target_face_risk_tags = list(extraction.get("target_face_risk_tags") or [])
+                target_track_face_score = extraction.get("target_track_face_score")
+                target_track_face_risk_tags = list(extraction.get("target_track_face_risk_tags") or [])
+                target_mapping_face_score = extraction.get("target_mapping_face_score")
+                target_mapping_face_risk_tags = list(extraction.get("target_mapping_face_risk_tags") or [])
                 selected_target_frame_index = extraction.get("selected_target_frame_index")
                 original_target_url = extraction.get("original_target_url") or source_video_vendor_url
                 face_track_summary = extraction.get("face_track_summary")
@@ -800,6 +819,7 @@ class AkoolSwapFaceEngine:
                 harvested_content = stitched_path.read_bytes()
                 vendor_runtime["segment_results"] = segment_results
                 vendor_runtime["segment_count"] = len(segment_results)
+                degraded_fallback_used = degraded_fallback_used or any(bool(item.get("fallback_used")) for item in segment_results)
                 first_success = next((item for item in segment_results if not item.get("fallback_used")), None)
                 job = SimpleNamespace(
                     request_id=str((first_success or {}).get("request_id") or "segment-composite"),
@@ -1024,17 +1044,21 @@ class AkoolSwapFaceEngine:
             on_log(f"[swap][finalize] harvest_ok output_key={output_key}")
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             manifest_key = f"outputs/{task_id}/manifest.json"
-            risk_tags = sorted({*source_face_risk_tags, *target_face_risk_tags})
+            target_risk_tags = target_mapping_face_risk_tags if is_intelligence_route else target_track_face_risk_tags
+            risk_tags = sorted({*source_face_risk_tags, *target_risk_tags})
+            route_summary = "intelligence_explicit_mapping" if is_intelligence_route else f"{str(record.mode or 'basic').lower()}_{api_version}_{route_execution_style}_{swap_strength}"
             quality_summary = {
                 "swap_strength": swap_strength,
                 "route_intent": route_intent,
                 "route_execution_style": route_execution_style,
                 "source_face_score": source_face_score,
-                "target_face_score": target_face_score,
+                "target_track_face_score": target_track_face_score,
+                "target_mapping_face_score": target_mapping_face_score,
                 "selected_source_face_index": selected_source_face_index,
                 "selected_target_frame_index": selected_target_frame_index,
+                "degraded_fallback_used": degraded_fallback_used,
                 "risk_tags": risk_tags,
-                "route_summary": f"{str(record.mode or 'basic').lower()}_{api_version}_{route_execution_style}_{swap_strength}",
+                "route_summary": route_summary,
             }
             outputs = {
                 "video_key": output_key,
@@ -1096,14 +1120,19 @@ class AkoolSwapFaceEngine:
                     "face_track_summary": face_track_summary,
                     "target_anchor_summary": target_anchor_summary,
                     "replacement_mode": replacement_mode,
+                    "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,
                     "focus_face_ratio": focus_face_ratio,
                     "focus_crop_area_ratio": focus_crop_area_ratio,
                     "segment_summary": segment_summary,
-                    "target_face_score": target_face_score,
+                    "target_track_face_score": target_track_face_score,
+                    "target_mapping_face_score": target_mapping_face_score,
+                    "target_face_score": target_mapping_face_score if is_intelligence_route else target_track_face_score,
                     "selected_target_frame_index": selected_target_frame_index,
-                    "target_face_risk_tags": target_face_risk_tags,
+                    "target_track_face_risk_tags": target_track_face_risk_tags,
+                    "target_mapping_face_risk_tags": target_mapping_face_risk_tags,
+                    "target_face_risk_tags": target_risk_tags,
                     "risk_tags": risk_tags,
                     "quality_summary": quality_summary,
                     "source_crop_policy": source_crop_policy,
@@ -1172,14 +1201,19 @@ class AkoolSwapFaceEngine:
                     "face_track_summary": face_track_summary,
                     "target_anchor_summary": target_anchor_summary,
                     "replacement_mode": replacement_mode,
+                    "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,
                     "focus_face_ratio": focus_face_ratio,
                     "focus_crop_area_ratio": focus_crop_area_ratio,
                     "segment_summary": segment_summary,
-                    "target_face_score": target_face_score,
+                    "target_track_face_score": target_track_face_score,
+                    "target_mapping_face_score": target_mapping_face_score,
+                    "target_face_score": target_mapping_face_score if is_intelligence_route else target_track_face_score,
                     "selected_target_frame_index": selected_target_frame_index,
-                    "target_face_risk_tags": target_face_risk_tags,
+                    "target_track_face_risk_tags": target_track_face_risk_tags,
+                    "target_mapping_face_risk_tags": target_mapping_face_risk_tags,
+                    "target_face_risk_tags": target_risk_tags,
                     "risk_tags": risk_tags,
                     "quality_summary": quality_summary,
                     "mode": str(record.mode or "basic").lower(),

@@ -448,6 +448,8 @@ class VideoFaceExtractor:
             if on_log is not None and focused_clip_asset is None:
                 on_log(f"[swap][target-focus] focus_crop_valid=false focus_mode={focus_mode}")
         target_faces: List[Dict[str, Any]] = []
+        target_mapping_face_score = None
+        target_mapping_face_risk_tags: List[str] = []
         for index, bridged in enumerate(bridged_target_images):
             selected_face = selected_faces[index]
             try:
@@ -460,6 +462,14 @@ class VideoFaceExtractor:
             except RuntimeError:
                 faces = []
             standardized_face = faces[0] if faces else selected_face
+            mapping_score = self.quality.score_target_face(
+                Path(str(selected_face.get("frame_path") or "")),
+                standardized_face,
+            )
+            if target_mapping_face_score is None:
+                target_mapping_face_score = mapping_score["score"]
+            if not target_mapping_face_risk_tags:
+                target_mapping_face_risk_tags = list(mapping_score["risk_tags"])
             target_faces.append(
                 {
                     "face_id": standardized_face.get("face_id") or selected_face.get("face_id") or f"target-{index+1}",
@@ -471,6 +481,8 @@ class VideoFaceExtractor:
                     "used_bbox_fallback": bool(selected_face.get("used_bbox_fallback")),
                     "quality_score": selected_face.get("quality_score"),
                     "risk_tags": list(selected_face.get("risk_tags") or []),
+                    "mapping_quality_score": mapping_score["score"],
+                    "mapping_risk_tags": list(mapping_score["risk_tags"]),
                     "frame_index": selected_face.get("frame_index"),
                 }
             )
@@ -483,9 +495,13 @@ class VideoFaceExtractor:
             "bridged_target_images": bridged_target_images,
             "used_bbox_fallback": any(bool(face.get("used_bbox_fallback")) for face in detected_faces),
             "require_landmarks": False,
-            "target_face_score": selected_faces[0].get("quality_score") if selected_faces else None,
+            "target_track_face_score": selected_faces[0].get("quality_score") if selected_faces else None,
+            "target_mapping_face_score": target_mapping_face_score,
+            "target_face_score": target_mapping_face_score if target_mapping_face_score is not None else (selected_faces[0].get("quality_score") if selected_faces else None),
             "selected_target_frame_index": selected_faces[0].get("frame_index") if selected_faces else None,
-            "target_face_risk_tags": list(selected_faces[0].get("risk_tags") or []) if selected_faces else [],
+            "target_track_face_risk_tags": list(selected_faces[0].get("risk_tags") or []) if selected_faces else [],
+            "target_mapping_face_risk_tags": list(target_mapping_face_risk_tags),
+            "target_face_risk_tags": list(target_mapping_face_risk_tags or selected_faces[0].get("risk_tags") or []) if selected_faces else [],
             "face_track_summary": face_track_summary,
             "target_anchor_summary": {
                 "frame_index": selected_faces[0].get("frame_index") if selected_faces else None,

@@ -557,8 +557,11 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskSingleFaceOnly = String(taskMetadata.single_face_only ?? "");
   const taskFaceCountLimit = String(taskMetadata.face_count_limit ?? "");
   const taskSourceFaceScore = String(taskMetadata.source_face_score ?? "");
-  const taskTargetFaceScore = String(taskMetadata.target_face_score ?? "");
+  const taskTargetTrackFaceScore = String(taskMetadata.target_track_face_score ?? "");
+  const taskTargetMappingFaceScore = String(taskMetadata.target_mapping_face_score ?? taskMetadata.target_face_score ?? "");
   const taskSelectedTargetFrameIndex = String(taskMetadata.selected_target_frame_index ?? "");
+  const taskReplacementMode = String(taskMetadata.replacement_mode ?? "");
+  const taskDegradedFallbackUsed = String(taskMetadata.degraded_fallback_used ?? "");
   const taskRiskTags = Array.isArray(taskMetadata.risk_tags)
     ? (taskMetadata.risk_tags as unknown[]).map((value) => String(value)).filter(Boolean)
     : [];
@@ -1436,8 +1439,11 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Detect Stage: {taskDetectStage || "-"}</div>
                         <div>Submit Stage: {taskSubmitStage || "-"}</div>
                         <div>Source Face Score: {taskSourceFaceScore || "-"}</div>
-                        <div>Target Face Score: {taskTargetFaceScore || "-"}</div>
+                        <div>Target Mapping Face Score: {taskTargetMappingFaceScore || "-"}</div>
+                        <div>Target Track Face Score: {taskTargetTrackFaceScore || "-"}</div>
                         <div>Selected Anchor Frame: {taskSelectedTargetFrameIndex || "-"}</div>
+                        <div>Replacement Mode: {taskReplacementMode || "-"}</div>
+                        <div>Degraded Fallback Used: {taskDegradedFallbackUsed || "false"}</div>
                         <div>Risk Tags: {taskRiskTags.length ? taskRiskTags.join(", ") : "-"}</div>
                         <div>Remote Status: {taskRemoteStatus || "-"}</div>
                         <div>Elapsed: {taskElapsedMs ? `${taskElapsedMs} ms` : "-"}</div>
@@ -1524,9 +1530,12 @@ export default function SwapClient({ service = "swap" }: Props) {
                       <div>Mode: {taskModeSummary || task?.mode || "-"}</div>
                       <div>Swap Strength: {taskSwapStrength || "-"}</div>
                       <div>Route Summary: {taskRouteSummary || "-"}</div>
+                      <div>Replacement Mode: {taskReplacementMode || "-"}</div>
                       <div>Source Face Score: {taskSourceFaceScore || "-"}</div>
-                      <div>Target Face Score: {taskTargetFaceScore || "-"}</div>
+                      <div>Target Mapping Face Score: {taskTargetMappingFaceScore || "-"}</div>
+                      <div>Target Track Face Score: {taskTargetTrackFaceScore || "-"}</div>
                       <div>Selected Anchor Frame: {taskSelectedTargetFrameIndex || "-"}</div>
+                      <div>Degraded Fallback Used: {taskDegradedFallbackUsed || "false"}</div>
                       <div>Risk Tags: {taskRiskTags.length ? taskRiskTags.join(", ") : "-"}</div>
                     </div>
                   </div>

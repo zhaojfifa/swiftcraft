@@ -104,12 +104,12 @@ class SwapQualityPipeline:
     def score_source_face(self, image_path: Path, candidate: Dict[str, Any]) -> Dict[str, Any]:
         metrics = _image_metrics(image_path)
         region = _region_metrics(candidate.get("region"), metrics["width"], metrics["height"])
-        resolution_score = _clamp(((metrics["width"] * metrics["height"]) / (512.0 * 512.0)) * 18.0, 6.0, 18.0)
-        frontalness_score = _clamp((1.0 - abs(region["aspect_ratio"] - 1.0)) * 18.0, 6.0, 18.0)
-        lighting_score = _clamp((1.0 - abs(metrics["brightness"] - 132.0) / 132.0) * 16.0, 4.0, 16.0)
-        face_ratio_score = _clamp(min(region["area_ratio"] / 0.32, 1.2) * 18.0, 4.0, 18.0)
-        occlusion_score = _clamp((1.0 - min(region["center_offset"] / 0.22, 1.0)) * 15.0, 3.0, 15.0)
-        expression_neutrality = 15.0
+        resolution_score = _clamp(((metrics["width"] * metrics["height"]) / (512.0 * 512.0)) * 16.0, 4.0, 16.0)
+        frontalness_score = _clamp((1.0 - abs(region["aspect_ratio"] - 1.0)) * 15.0, 3.0, 15.0)
+        lighting_score = _clamp((1.0 - abs(metrics["brightness"] - 132.0) / 132.0) * 14.0, 2.0, 14.0)
+        face_ratio_score = _clamp(min(region["area_ratio"] / 0.28, 1.0) * 15.0, 2.0, 15.0)
+        occlusion_score = _clamp((1.0 - min(region["center_offset"] / 0.25, 1.0)) * 12.0, 1.0, 12.0)
+        expression_neutrality = 10.0
         score = int(round(_clamp(
             resolution_score + frontalness_score + lighting_score + face_ratio_score + occlusion_score + expression_neutrality,
             0.0,
@@ -142,20 +142,26 @@ class SwapQualityPipeline:
     def score_target_face(self, frame_path: Path, candidate: Dict[str, Any]) -> Dict[str, Any]:
         metrics = _image_metrics(frame_path)
         region = _region_metrics(candidate.get("region"), metrics["width"], metrics["height"])
-        face_size = _clamp(min(region["area_ratio"] / 0.28, 1.2) * 38.0, 4.0, 38.0)
-        frontalness = _clamp((1.0 - abs(region["aspect_ratio"] - 1.0)) * 24.0, 4.0, 24.0)
-        blur = _clamp(min(metrics["blur_signal"] / 42.0, 1.0) * 20.0, 2.0, 20.0)
-        occlusion = _clamp((1.0 - min(region["center_offset"] / 0.22, 1.0)) * 18.0, 2.0, 18.0)
-        score = int(round(_clamp(face_size + frontalness + blur + occlusion, 0.0, 100.0)))
+        face_size = _clamp(min(region["area_ratio"] / 0.24, 1.0) * 32.0, 1.0, 32.0)
+        frontalness = _clamp((1.0 - abs(region["aspect_ratio"] - 1.0)) * 22.0, 1.0, 22.0)
+        blur = _clamp(min(metrics["blur_signal"] / 48.0, 1.0) * 16.0, 1.0, 16.0)
+        occlusion = _clamp((1.0 - min(region["center_offset"] / 0.24, 1.0)) * 14.0, 1.0, 14.0)
+        fallback_penalty = 20.0 if bool(candidate.get("used_bbox_fallback")) else 0.0
+        suspicious_bbox_penalty = 18.0 if region["area_ratio"] >= 0.8 else 0.0
+        score = int(round(_clamp(face_size + frontalness + blur + occlusion - fallback_penalty - suspicious_bbox_penalty, 0.0, 100.0)))
         risk_tags: List[str] = []
         if region["area_ratio"] < 0.14:
             risk_tags.append("face_small")
+        if region["area_ratio"] >= 0.8:
+            risk_tags.append("bbox_suspicious")
         if abs(region["aspect_ratio"] - 1.0) > 0.4:
             risk_tags.append("frontalness_low")
         if metrics["blur_signal"] < 8.0:
             risk_tags.append("blur")
         if region["center_offset"] > 0.18:
             risk_tags.append("occlusion_risk")
+        if bool(candidate.get("used_bbox_fallback")):
+            risk_tags.append("full_frame_fallback")
         return {
             "score": score,
             "risk_tags": risk_tags,

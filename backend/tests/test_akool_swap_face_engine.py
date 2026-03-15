@@ -429,8 +429,12 @@ class _FakeExtractor:
             "detected_faces": [{"path": "https://vendor.example/frame-face.jpg", "opts": "1,2,3,4"}],
             "target_faces": [{"path": "https://vendor.example/target-face.jpg", "opts": "1,2,3,4", "frame_index": 5}],
             "bridged_target_images": [_FakeBridgeAsset("https://vendor.example/target-face.jpg")],
+            "target_track_face_score": 78,
+            "target_mapping_face_score": 86,
             "target_face_score": 78,
             "selected_target_frame_index": 5,
+            "target_track_face_risk_tags": ["face_small"],
+            "target_mapping_face_risk_tags": ["lighting_gap"],
             "target_face_risk_tags": ["face_small"],
             "face_track_summary": {
                 "tracked_frames": 3,
@@ -449,7 +453,7 @@ class _FakeExtractor:
                 "quality_breakdown": {"frontalness": 17},
             },
             "focused_target_url": "https://vendor.example/focused-target.mp4",
-            "replacement_mode": "focused_clip",
+            "replacement_mode": "explicit_mapping_enhanced",
             "focus_crop_valid": True,
             "focus_mode": "focused_crop",
             "focus_face_ratio": 0.42,
@@ -467,6 +471,10 @@ class _InvalidFocusExtractor(_FakeExtractor):
         payload["focus_mode"] = "full_frame_fallback"
         payload["focus_face_ratio"] = 0.12
         payload["focus_crop_area_ratio"] = 1.0
+        payload["target_track_face_score"] = 32
+        payload["target_mapping_face_score"] = 24
+        payload["target_track_face_risk_tags"] = ["bbox_suspicious", "full_frame_fallback"]
+        payload["target_mapping_face_risk_tags"] = ["bbox_suspicious", "full_frame_fallback"]
         payload["face_track_summary"] = {
             **dict(payload["face_track_summary"]),
             "full_frame_fallback": True,
@@ -647,11 +655,12 @@ def test_swap_engine_intelligence_uses_v4_submit_path():
     assert engine.client.last_submit_kwargs["modify_video"] == "https://vendor.example/focused-target.mp4"
     assert result.metadata["swap_strength"] == "strong_identity"
     assert result.metadata["source_face_score"] == 84
-    assert result.metadata["target_face_score"] == 78
+    assert result.metadata["target_mapping_face_score"] == 86
+    assert result.metadata["target_track_face_score"] == 78
     assert result.metadata["selected_target_frame_index"] == 5
     assert result.metadata["focused_target_url"] == "https://vendor.example/focused-target.mp4"
     assert result.metadata["original_target_url"] == "https://vendor.example/source-video.bin"
-    assert result.metadata["replacement_mode"] == "focused_clip"
+    assert result.metadata["replacement_mode"] == "explicit_mapping_enhanced"
     assert result.metadata["focus_crop_valid"] is True
     assert result.metadata["focus_mode"] == "focused_crop"
     assert result.metadata["focus_face_ratio"] == 0.42
@@ -660,14 +669,15 @@ def test_swap_engine_intelligence_uses_v4_submit_path():
     assert result.metadata["provider_contract"] == "akool_v3_video_faceswap_strong_identity"
     assert result.metadata["api_version"] == "v3"
     assert result.metadata["model_style"] == "realistic"
-    assert result.metadata["risk_tags"] == ["face_small", "lighting_gap"]
+    assert result.metadata["risk_tags"] == ["lighting_gap"]
     assert result.metadata["quality_summary"]["swap_strength"] == "strong_identity"
     assert result.metadata["quality_summary"]["source_face_score"] == 84
-    assert result.metadata["quality_summary"]["target_face_score"] == 78
+    assert result.metadata["quality_summary"]["target_mapping_face_score"] == 86
+    assert result.metadata["quality_summary"]["target_track_face_score"] == 78
     assert result.metadata["quality_summary"]["selected_target_frame_index"] == 5
-    assert result.metadata["manifest_preview"]["quality_summary"]["route_summary"] == "intelligence_v3_explicit_replacement_strong_identity"
-    assert result.metadata["manifest_preview"]["risk_tags"] == ["face_small", "lighting_gap"]
-    assert result.metadata["manifest_preview"]["replacement_mode"] == "focused_clip"
+    assert result.metadata["manifest_preview"]["quality_summary"]["route_summary"] == "intelligence_explicit_mapping"
+    assert result.metadata["manifest_preview"]["risk_tags"] == ["lighting_gap"]
+    assert result.metadata["manifest_preview"]["replacement_mode"] == "explicit_mapping_enhanced"
     assert result.metadata["manifest_preview"]["focus_crop_valid"] is True
     assert result.metadata["manifest_preview"]["focus_mode"] == "focused_crop"
     assert result.metadata["target_anchor_summary"]["frame_index"] == 5
@@ -776,7 +786,7 @@ def test_swap_engine_intelligence_segment_route_stitches_and_fallbacks():
 
     assert engine.client.submit_calls == 2
     assert engine.client.submit_plus_calls == 0
-    assert result.metadata["replacement_mode"] == "segment_based"
+    assert result.metadata["replacement_mode"] == "explicit_mapping_enhanced"
     assert result.metadata["segment_summary"]["segment_count"] == 2
     assert result.metadata["segment_summary"]["segmentation_mode"] == "pose_motion_stability"
     assert result.metadata["segment_summary"]["anchor_segment_index"] == 1
@@ -834,7 +844,7 @@ def test_swap_engine_intelligence_invalid_focus_falls_back_to_raw_target_video()
     assert engine.client.submit_plus_calls == 0
     assert engine.client.last_submit_kwargs["modify_video"] == "https://vendor.example/source-video.bin"
     assert result.metadata["focused_target_url"] is None
-    assert result.metadata["replacement_mode"] == "focused_clip"
+    assert result.metadata["replacement_mode"] == "explicit_mapping_enhanced"
     assert result.metadata["focus_crop_valid"] is False
     assert result.metadata["focus_mode"] == "full_frame_fallback"
     assert result.metadata["manifest_preview"]["focus_crop_valid"] is False
