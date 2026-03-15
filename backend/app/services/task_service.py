@@ -101,10 +101,17 @@ def _normalize_swap_provider(provider: str | None) -> str:
     return SWAP_PROVIDER_ALIASES.get(raw, raw)
 
 
-def _normalize_swap_replacement_intensity(mode: str | None, face_fidelity: str | None = None) -> str:
+def _normalize_swap_replacement_intensity(
+    mode: str | None,
+    face_fidelity: str | None = None,
+    replacement_intensity: str | None = None,
+) -> str:
     mode_norm = _normalize_swap_mode(mode)
     if mode_norm != "intelligence":
         return "balanced"
+    intensity = str(replacement_intensity or "").strip().lower()
+    if intensity in {"balanced", "strong_identity", "extreme_replace"}:
+        return intensity
     fidelity = str(face_fidelity or "").strip().lower()
     if fidelity in {"extreme_replace", "extreme"}:
         return "extreme_replace"
@@ -115,8 +122,12 @@ def _normalize_swap_replacement_intensity(mode: str | None, face_fidelity: str |
     return "strong_identity"
 
 
-def _swap_strength_for_mode(mode: str | None, face_fidelity: str | None = None) -> str:
-    return _normalize_swap_replacement_intensity(mode, face_fidelity)
+def _swap_strength_for_mode(
+    mode: str | None,
+    face_fidelity: str | None = None,
+    replacement_intensity: str | None = None,
+) -> str:
+    return _normalize_swap_replacement_intensity(mode, face_fidelity, replacement_intensity)
 
 
 def _swap_route_intent_for_mode(mode: str | None) -> str:
@@ -196,17 +207,28 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
     face_fidelity_raw = data.get("face_fidelity")
     if face_fidelity_raw is None:
         face_fidelity_raw = payload.get("face_fidelity")
+    replacement_intensity_raw = data.get("replacement_intensity")
+    if replacement_intensity_raw is None:
+        replacement_intensity_raw = payload.get("replacement_intensity")
+    face_fidelity_legacy_hint = str(face_fidelity_raw or "").strip().lower() or None
     face_fidelity = str(
         face_fidelity_raw
         or settings.SWIFT_SWAP_FACE_FIDELITY_DEFAULT
         or "balanced"
     ).strip().lower() or "balanced"
-    if face_fidelity not in {"high", "balanced", "stable", "strong_identity", "extreme_replace"}:
+    if face_fidelity not in {"high", "balanced", "stable"}:
         face_fidelity = "balanced"
-    if _normalize_swap_mode(mode) == "intelligence" and face_fidelity_raw is None:
+    replacement_intensity_text = str(replacement_intensity_raw or "").strip().lower() or None
+    if replacement_intensity_text not in {None, "balanced", "strong_identity", "extreme_replace"}:
+        replacement_intensity_text = None
+    if _normalize_swap_mode(mode) == "intelligence" and replacement_intensity_text is None and face_fidelity_raw is None:
         replacement_intensity = "extreme_replace"
     else:
-        replacement_intensity = _normalize_swap_replacement_intensity(mode, face_fidelity)
+        replacement_intensity = _normalize_swap_replacement_intensity(
+            mode,
+            face_fidelity_legacy_hint or face_fidelity,
+            replacement_intensity_text,
+        )
     face_enhance = data.get("face_enhance")
     if face_enhance is None:
         face_enhance = payload.get("face_enhance")
@@ -236,6 +258,7 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         "source_face_image_keys": source_face_images,
         "keep_original_audio": bool(keep_original_audio),
         "face_fidelity": face_fidelity,
+        "replacement_intensity": replacement_intensity,
         "face_enhance": bool(face_enhance),
         "source_crop_policy": (
             "extreme_identity_core"
@@ -743,6 +766,7 @@ class TaskService:
                 payload["source_face_image_url"] = parsed.source_face_image_url
                 payload["keep_original_audio"] = parsed.keep_original_audio
                 payload["face_fidelity"] = parsed.face_fidelity
+                payload["replacement_intensity"] = parsed.replacement_intensity
                 payload["face_enhance"] = parsed.face_enhance
         else:
             legacy = LegacySwapRequest.model_validate(payload)

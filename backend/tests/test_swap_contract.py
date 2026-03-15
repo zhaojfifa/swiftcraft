@@ -59,3 +59,36 @@ def test_swap_request_accepts_basic_mode_alias():
     parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
     assert isinstance(parsed, SwapRequest)
     assert parsed.mode == "basic"
+
+
+def test_swap_request_legacy_extreme_face_fidelity_maps_to_replacement_intensity():
+    payload = {
+        "service_type": "swap",
+        "swap_type": "face",
+        "mode": "intelligence",
+        "source_video_key": "uploads/source.mp4",
+        "source_face_image_key": "uploads/source-face.png",
+        "face_fidelity": "extreme_replace",
+    }
+    parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
+    assert isinstance(parsed, SwapRequest)
+    assert parsed.face_fidelity == "high"
+    assert parsed.replacement_intensity == "extreme_replace"
+    assert parsed.inputs.face_fidelity == "high"
+    assert parsed.inputs.replacement_intensity == "extreme_replace"
+
+
+def test_swap_request_accepts_explicit_replacement_intensity():
+    payload = {
+        "service_type": "swap",
+        "swap_type": "face",
+        "mode": "intelligence",
+        "source_video_key": "uploads/source.mp4",
+        "source_face_image_key": "uploads/source-face.png",
+        "face_fidelity": "high",
+        "replacement_intensity": "extreme_replace",
+    }
+    parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
+    assert isinstance(parsed, SwapRequest)
+    assert parsed.face_fidelity == "high"
+    assert parsed.replacement_intensity == "extreme_replace"

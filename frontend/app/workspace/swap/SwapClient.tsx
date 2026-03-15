@@ -46,6 +46,37 @@ function getActionReplicaContract(modeLike: string | null | undefined): {
   };
 }
 
+function getSwapContract(
+  modeLike: string | null | undefined,
+  intensityLike: "balanced" | "strong_identity" | "extreme_replace",
+): {
+  mode: "basic" | "intelligent";
+  provider: "akool_swap_face" | "swap_intelligence_akool";
+  faceFidelity: "high" | "balanced" | "stable";
+  replacementIntensity?: "balanced" | "strong_identity" | "extreme_replace";
+} {
+  const mode = ["intelligent", "intelligence"].includes(String(modeLike || "").trim().toLowerCase())
+    ? "intelligent"
+    : "basic";
+  if (mode !== "intelligent") {
+    return {
+      mode: "basic",
+      provider: "akool_swap_face",
+      faceFidelity: intensityLike === "strong_identity" ? "high" : "balanced",
+    };
+  }
+  const replacementIntensity =
+    intensityLike === "extreme_replace" || intensityLike === "strong_identity"
+      ? intensityLike
+      : "balanced";
+  return {
+    mode: "intelligent",
+    provider: "swap_intelligence_akool",
+    faceFidelity: replacementIntensity === "balanced" ? "balanced" : "high",
+    replacementIntensity,
+  };
+}
+
 export default function SwapClient({ service = "swap" }: Props) {
   const serviceType = service;
   const isSwap = serviceType === "swap";
@@ -170,7 +201,8 @@ export default function SwapClient({ service = "swap" }: Props) {
   const actionReplicaContract = getActionReplicaContract(modeApi);
   const actionReplicaMode = actionReplicaContract.mode;
   const actionReplicaProvider = actionReplicaContract.provider;
-  const swapProvider = isIntelligenceMode ? "swap_intelligence_akool" : "akool_swap_face";
+  const swapContract = getSwapContract(modeApi, faceFidelity);
+  const swapProvider = swapContract.provider;
   const presetKey = resolvePresetInputKey(serviceApi, modeApi);
   const cdnBase = (process.env.NEXT_PUBLIC_CDN_BASE_URL || "").replace(/\/+$/, "");
   const safeDemoMotionKey = (process.env.NEXT_PUBLIC_SAFE_DEMO_MOTION_KEY || "").trim();
@@ -451,12 +483,13 @@ export default function SwapClient({ service = "swap" }: Props) {
         const sourceFaceImageKey = await uploadFileToR2(imageFile as File);
         result = await createTask({
           service_type: "swap",
-          mode: isIntelligenceMode ? "intelligent" : "basic",
+          mode: swapContract.mode,
           swap_type: "face",
           source_video_key: sourceVideoKey,
           source_face_image_key: sourceFaceImageKey,
           keep_original_audio: keepOriginalAudio,
-          face_fidelity: faceFidelity,
+          face_fidelity: swapContract.faceFidelity,
+          replacement_intensity: swapContract.replacementIntensity,
           face_enhance: faceEnhance,
         });
       } else {
@@ -617,12 +650,13 @@ export default function SwapClient({ service = "swap" }: Props) {
       }
     : {
         service_type: "swap",
-        mode: isIntelligenceMode ? "intelligence" : "basic",
+        mode: swapContract.mode,
         swap_type: "face",
         source_video_key: "(source video key)",
         source_face_image_key: "(source face image key)",
         keep_original_audio: keepOriginalAudio,
-        face_fidelity: faceFidelity,
+        face_fidelity: swapContract.faceFidelity,
+        replacement_intensity: swapContract.replacementIntensity,
         face_enhance: faceEnhance,
         single_face_only: true,
         face_count_limit: 1,
@@ -641,7 +675,7 @@ export default function SwapClient({ service = "swap" }: Props) {
     : [
         `curl -X POST \"${apiBase}/api/v1/tasks\"`,
         "  -H \"Content-Type: application/json\"",
-        `  -d '{\"service_type\":\"swap\",\"mode\":\"${isIntelligenceMode ? "intelligence" : "basic"}\",\"swap_type\":\"face\",\"source_video_key\":\"<source_video_key>\",\"source_face_image_key\":\"<source_face_key>\",\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${faceFidelity}\",\"face_enhance\":${faceEnhance}}'`
+        `  -d '{\"service_type\":\"swap\",\"mode\":\"${swapContract.mode}\",\"swap_type\":\"face\",\"source_video_key\":\"<source_video_key>\",\"source_face_image_key\":\"<source_face_key>\",\"keep_original_audio\":${keepOriginalAudio},\"face_fidelity\":\"${swapContract.faceFidelity}\",\"replacement_intensity\":${swapContract.replacementIntensity ? `\"${swapContract.replacementIntensity}\"` : "null"},\"face_enhance\":${faceEnhance}}'`
       ].join(" \\\n");
 
   const handleRetrySafeSlicing = async () => {

@@ -145,6 +145,39 @@ def test_extract_swap_run_config_sets_extreme_replace_for_intelligence():
     assert cfg["face_enhance"] is False
 
 
+def test_extract_swap_run_config_prioritizes_replacement_intensity_over_face_fidelity():
+    cfg = _extract_swap_run_config(
+        {
+            "inputs": {
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+                "face_fidelity": "balanced",
+                "replacement_intensity": "extreme_replace",
+            }
+        },
+        "intelligence",
+    )
+    assert cfg["face_fidelity"] == "balanced"
+    assert cfg["replacement_intensity"] == "extreme_replace"
+    assert cfg["swap_strength"] == "extreme_replace"
+    assert cfg["face_enhance"] is False
+
+
+def test_extract_swap_run_config_legacy_face_fidelity_extreme_still_works():
+    cfg = _extract_swap_run_config(
+        {
+            "inputs": {
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+                "face_fidelity": "extreme_replace",
+            }
+        },
+        "intelligence",
+    )
+    assert cfg["face_fidelity"] == "balanced"
+    assert cfg["replacement_intensity"] == "extreme_replace"
+
+
 def test_extract_swap_run_config_keeps_source_face_images():
     cfg = _extract_swap_run_config(
         {

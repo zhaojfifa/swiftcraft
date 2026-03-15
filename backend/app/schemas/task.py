@@ -7,6 +7,35 @@ from typing import Annotated, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field, model_validator
 
 
+SWAP_FACE_FIDELITY_VALUES = {"high", "balanced", "stable"}
+SWAP_REPLACEMENT_INTENSITY_VALUES = {"balanced", "strong_identity", "extreme_replace"}
+
+
+def _normalize_swap_face_fields(data: object) -> object:
+    if not isinstance(data, dict):
+        return data
+    normalized = dict(data)
+    raw_face_fidelity = normalized.get("face_fidelity")
+    raw_replacement_intensity = normalized.get("replacement_intensity")
+    face_fidelity = str(raw_face_fidelity or "").strip().lower() or None
+    replacement_intensity = str(raw_replacement_intensity or "").strip().lower() or None
+    if face_fidelity == "extreme_replace":
+        if not replacement_intensity:
+            replacement_intensity = "extreme_replace"
+        face_fidelity = "high"
+    elif face_fidelity == "strong_identity":
+        if not replacement_intensity:
+            replacement_intensity = "strong_identity"
+        face_fidelity = "high"
+    elif face_fidelity and face_fidelity not in SWAP_FACE_FIDELITY_VALUES:
+        raise ValueError("face_fidelity must be one of: high, balanced, stable")
+    if replacement_intensity and replacement_intensity not in SWAP_REPLACEMENT_INTENSITY_VALUES:
+        raise ValueError("replacement_intensity must be one of: balanced, strong_identity, extreme_replace")
+    normalized["face_fidelity"] = face_fidelity
+    normalized["replacement_intensity"] = replacement_intensity
+    return normalized
+
+
 class ServiceType(str, Enum):
     swap = "swap"
     # legacy alias
@@ -95,8 +124,14 @@ class SwapInputs(BaseModel):
     target_image_url: Optional[str] = None
     provider: Optional[str] = None
     keep_original_audio: Optional[bool] = True
-    face_fidelity: Optional[Literal["high", "balanced", "stable"]] = "balanced"
+    face_fidelity: Optional[str] = "balanced"
+    replacement_intensity: Optional[str] = None
     face_enhance: Optional[bool] = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_face_fields(cls, data: object) -> object:
+        return _normalize_swap_face_fields(data)
 
     @model_validator(mode="after")
     def normalize_aliases(self) -> "SwapInputs":
@@ -118,6 +153,10 @@ class SwapInputs(BaseModel):
             raise ValueError("inputs.source_video (or source_video_url) is required for swap.")
         if not self.source_face_image:
             raise ValueError("inputs.source_face_image (or source_face_image_url/source_face_image_key) is required for swap.")
+        if self.face_fidelity and self.face_fidelity not in SWAP_FACE_FIDELITY_VALUES:
+            raise ValueError("inputs.face_fidelity must be one of: high, balanced, stable")
+        if self.replacement_intensity and self.replacement_intensity not in SWAP_REPLACEMENT_INTENSITY_VALUES:
+            raise ValueError("inputs.replacement_intensity must be one of: balanced, strong_identity, extreme_replace")
         return self
 
 
@@ -133,32 +172,40 @@ class SwapRequest(BaseModel):
     source_face_image_url: Optional[str] = None
     source_face_image_key: Optional[str] = None
     keep_original_audio: Optional[bool] = None
-    face_fidelity: Optional[Literal["high", "balanced", "stable"]] = None
+    face_fidelity: Optional[str] = None
+    replacement_intensity: Optional[str] = None
     face_enhance: Optional[bool] = None
     inputs: Optional[SwapInputs] = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_face_fields(cls, data: object) -> object:
+        return _normalize_swap_face_fields(data)
+
     @model_validator(mode="after")
     def normalize_swap_type(self) -> "SwapRequest":
-        merged_inputs = self.inputs.model_copy(deep=True) if self.inputs is not None else SwapInputs.model_construct()
-        if self.provider and not merged_inputs.provider:
-            merged_inputs.provider = self.provider
-        if self.source_video_key and not merged_inputs.source_video_key:
-            merged_inputs.source_video_key = self.source_video_key
-        if self.source_video_url and not merged_inputs.source_video_url:
-            merged_inputs.source_video_url = self.source_video_url
-        if self.input_key and not merged_inputs.source_video:
-            merged_inputs.source_video = self.input_key
-        if self.source_face_image_url and not merged_inputs.source_face_image_url:
-            merged_inputs.source_face_image_url = self.source_face_image_url
-        if self.source_face_image_key and not merged_inputs.source_face_image_key:
-            merged_inputs.source_face_image_key = self.source_face_image_key
+        merged_input_data = self.inputs.model_dump(exclude_none=True) if self.inputs is not None else {}
+        if self.provider and not merged_input_data.get("provider"):
+            merged_input_data["provider"] = self.provider
+        if self.source_video_key and not merged_input_data.get("source_video_key"):
+            merged_input_data["source_video_key"] = self.source_video_key
+        if self.source_video_url and not merged_input_data.get("source_video_url"):
+            merged_input_data["source_video_url"] = self.source_video_url
+        if self.input_key and not merged_input_data.get("source_video"):
+            merged_input_data["source_video"] = self.input_key
+        if self.source_face_image_url and not merged_input_data.get("source_face_image_url"):
+            merged_input_data["source_face_image_url"] = self.source_face_image_url
+        if self.source_face_image_key and not merged_input_data.get("source_face_image_key"):
+            merged_input_data["source_face_image_key"] = self.source_face_image_key
         if self.keep_original_audio is not None:
-            merged_inputs.keep_original_audio = self.keep_original_audio
-        if self.face_fidelity and not merged_inputs.face_fidelity:
-            merged_inputs.face_fidelity = self.face_fidelity
-        if self.face_enhance is not None and merged_inputs.face_enhance is None:
-            merged_inputs.face_enhance = self.face_enhance
-        merged_inputs = SwapInputs.model_validate(merged_inputs.model_dump())
+            merged_input_data["keep_original_audio"] = self.keep_original_audio
+        if self.face_fidelity is not None:
+            merged_input_data["face_fidelity"] = self.face_fidelity
+        if self.replacement_intensity is not None:
+            merged_input_data["replacement_intensity"] = self.replacement_intensity
+        if self.face_enhance is not None:
+            merged_input_data["face_enhance"] = self.face_enhance
+        merged_inputs = SwapInputs.model_validate(merged_input_data)
         self.inputs = merged_inputs
         if self.swap_type:
             self.subtype = self.swap_type
@@ -172,6 +219,7 @@ class SwapRequest(BaseModel):
         self.source_face_image_key = self.inputs.source_face_image_key
         self.keep_original_audio = self.inputs.keep_original_audio
         self.face_fidelity = self.inputs.face_fidelity
+        self.replacement_intensity = self.inputs.replacement_intensity
         self.face_enhance = self.inputs.face_enhance
         return self
 
