@@ -322,7 +322,7 @@ class AkoolSwapFaceEngine:
         source_face_risk_tags: list[str] = []
         canonical_source_face_url = source_face_vendor_url = source_video_vendor_url = None
         selected_source_face_index = 0
-        selected_source_bucket = "primary"
+        selected_source_bucket = "frontal"
         source_selection_reason = "single_source_only"
         source_pack_size = 1
         selected_source_refs: list[dict[str, Any]] = []
@@ -334,6 +334,9 @@ class AkoolSwapFaceEngine:
         downgrade_reason: str | None = None
         fallback_reason: str | None = None
         proxy_clip_used = False
+        proxy_clip_valid = False
+        proxy_clip_reason: str | None = None
+        modify_video_source = "raw_target"
         requested_replacement_intensity = replacement_intensity
         selected_target_frame_index = None
         original_target_url = None
@@ -664,13 +667,19 @@ class AkoolSwapFaceEngine:
                     source_pack_size = max(1, len(source_face_candidates_raw) or 1)
                     selected_source_refs = [
                         {
-                            "bucket": "primary",
+                            "bucket": "frontal",
                             "selected_index": selected_source_face_index,
                             "selection_reason": source_selection_reason,
                             "selection_score": source_face_score,
                         }
                     ]
-                    selected_source_bucket = "primary"
+                    selected_source_bucket = "frontal"
+                target_anchor_frontalness = float(dict((target_anchor_summary or {}).get("quality_breakdown") or {}).get("frontalness") or 0.0)
+                selected_source_bucket = "frontal" if target_anchor_frontalness >= 16.0 else "side_angle"
+                if not any(str(item.get("bucket")) == selected_source_bucket for item in selected_source_refs):
+                    selected_source_bucket = "frontal"
+                proxy_clip_valid = bool(proxy_target_url) or bool((proxy_clip_meta or {}).get("proxy_clip_valid"))
+                proxy_clip_reason = str((proxy_clip_meta or {}).get("proxy_reason") or "") or None
                 if replacement_intensity == "extreme_replace":
                     target_anchor_valid = bool((target_anchor_quality or {}).get("valid_for_extreme"))
                     if not target_anchor_valid:
@@ -678,14 +687,19 @@ class AkoolSwapFaceEngine:
                         fallback_reason = downgrade_reason
                         on_log("[swap][target-map] extreme gate failed; downgrade to strong_identity")
                     proxy_clip_used = bool(proxy_target_url and target_anchor_valid)
+                    modify_video_source = "proxy_target" if proxy_clip_used else "raw_target"
                     if proxy_clip_used:
                         on_log(f"[swap][target-proxy] proxy_clip_used=true url={proxy_target_url}")
                     else:
                         on_log(f"[swap][target-proxy] proxy_clip_used=false")
-                        if proxy_clip_meta.get("proxy_reason"):
-                            fallback_reason = str(proxy_clip_meta.get("proxy_reason"))
-                elif proxy_clip_meta.get("proxy_reason") and not fallback_reason:
-                    fallback_reason = str(proxy_clip_meta.get("proxy_reason"))
+                        if focus_mode == "full_frame_fallback":
+                            fallback_reason = "full_frame_target"
+                        elif proxy_clip_reason:
+                            fallback_reason = proxy_clip_reason
+                else:
+                    modify_video_source = "focused_target" if focused_target_url else "raw_target"
+                if replacement_intensity != "extreme_replace" and proxy_clip_reason and not fallback_reason:
+                    fallback_reason = proxy_clip_reason
                 intelligence_source_detect = await self.client.detect_faces(
                     canonical_source_face_url or source_face_vendor_url,
                     single_face=True,
@@ -721,11 +735,17 @@ class AkoolSwapFaceEngine:
                     else replacement_intensity
                 )
                 submit_face_enhance = face_enhance if downgrade_reason is None else True
-                selected_source_bucket = "primary"
+                submit_modify_video = proxy_target_url or focused_target_url or source_video_vendor_url
+                if submit_modify_video == proxy_target_url and proxy_target_url:
+                    modify_video_source = "proxy_target"
+                elif submit_modify_video == focused_target_url and focused_target_url:
+                    modify_video_source = "focused_target"
+                else:
+                    modify_video_source = "raw_target"
                 submit_payload = {
                     "sourceImage": [{"path": source_face["path"], "opts": source_face["opts"]}],
                     "targetImage": [{"path": face["path"], "opts": face["opts"]} for face in target_face_runtime["target_image_payload"]],
-                    "modifyVideo": proxy_target_url or focused_target_url or source_video_vendor_url,
+                    "modifyVideo": submit_modify_video,
                     "face_enhance": submit_face_enhance,
                 }
                 vendor_runtime["submit_validation"] = {
@@ -744,7 +764,11 @@ class AkoolSwapFaceEngine:
                 on_log(
                     f"[swap][submit] payload_summary="
                     f"{{'sourceImage_count': 1, 'targetImage_count': {len(submit_payload['targetImage'])}, "
-                    f"'modifyVideo': '{proxy_target_url or focused_target_url or source_video_vendor_url}', 'face_enhance': {submit_face_enhance}}}"
+                    f"'modifyVideo': '{submit_modify_video}', 'modifyVideoSource': '{modify_video_source}', 'face_enhance': {submit_face_enhance}}}"
+                )
+                on_log(
+                    f"[swap][target-proxy] proxy_clip_valid={str(proxy_clip_valid).lower()} "
+                    f"proxy_clip_used={str(proxy_clip_used).lower()} modifyVideo_source={modify_video_source}"
                 )
                 on_log(f"[swap][submit] payload={submit_payload}")
                 replacement_intensity = effective_replacement_intensity
@@ -868,7 +892,7 @@ class AkoolSwapFaceEngine:
                     (
                         int(item.get("selected_index") or 0)
                         for item in selected_source_refs
-                        if str(item.get("bucket") or "") == "support"
+                        if str(item.get("bucket") or "") == "side_angle"
                     ),
                     selected_source_face_index,
                 )
@@ -887,7 +911,7 @@ class AkoolSwapFaceEngine:
                             selected_source_face_index if segment_index == anchor_segment_index else support_source_index,
                             source_face,
                         )
-                        segment_source_bucket = "primary" if segment_index == anchor_segment_index else "support"
+                        segment_source_bucket = "frontal" if segment_index == anchor_segment_index else "side_angle"
                         segment_content, segment_runtime = await self._run_intelligence_vendor_job(
                             source_face=segment_source_face,
                             target_faces=target_face_runtime["target_image_payload"],
@@ -1168,7 +1192,7 @@ class AkoolSwapFaceEngine:
             if downgrade_reason or (extreme_replace_selected and not focus_crop_valid and not proxy_clip_used and degraded_fallback_used):
                 extreme_replace_effective = False
             if extreme_replace_selected and not extreme_replace_effective and not fallback_reason:
-                fallback_reason = downgrade_reason or "full_frame_target_fallback"
+                fallback_reason = downgrade_reason or "full_frame_target"
             quality_summary = {
                 "swap_strength": swap_strength,
                 "replacement_intensity": replacement_intensity,
@@ -1191,7 +1215,10 @@ class AkoolSwapFaceEngine:
                 "downgrade_reason": downgrade_reason,
                 "fallback_reason": fallback_reason,
                 "target_anchor_quality": target_anchor_quality,
+                "proxy_clip_valid": proxy_clip_valid,
                 "proxy_clip_used": proxy_clip_used,
+                "proxy_clip_reason": proxy_clip_reason,
+                "modify_video_source": modify_video_source,
                 "degraded_fallback_used": degraded_fallback_used,
                 "risk_tags": risk_tags,
                 "route_summary": route_summary,
@@ -1268,7 +1295,10 @@ class AkoolSwapFaceEngine:
                     "downgrade_reason": downgrade_reason,
                     "fallback_reason": fallback_reason,
                     "replacement_mode": replacement_mode,
+                    "modify_video_source": modify_video_source,
+                    "proxy_clip_valid": proxy_clip_valid,
                     "proxy_clip_used": proxy_clip_used,
+                    "proxy_clip_reason": proxy_clip_reason,
                     "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,
@@ -1362,7 +1392,10 @@ class AkoolSwapFaceEngine:
                     "downgrade_reason": downgrade_reason,
                     "fallback_reason": fallback_reason,
                     "replacement_mode": replacement_mode,
+                    "modify_video_source": modify_video_source,
+                    "proxy_clip_valid": proxy_clip_valid,
                     "proxy_clip_used": proxy_clip_used,
+                    "proxy_clip_reason": proxy_clip_reason,
                     "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,

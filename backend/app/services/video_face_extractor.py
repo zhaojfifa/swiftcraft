@@ -450,6 +450,20 @@ class VideoFaceExtractor:
         proxy_meta["proxy_reason"] = "selected_face_crop" if proxy_path is not None else str(proxy_meta.get("focus_mode") or "invalid_crop")
         return proxy_path, proxy_meta
 
+    async def _bridge_proxy_clip(
+        self,
+        *,
+        proxy_path: Path | None,
+        service: str,
+    ):
+        if proxy_path is None:
+            return None
+        return await self.bridge.bridge_asset(
+            source_path=str(proxy_path),
+            service=service,
+            asset_kind="proxy-target-video",
+        )
+
     async def build_target_faces(
         self,
         *,
@@ -540,11 +554,7 @@ class VideoFaceExtractor:
                         video_size=video_size,
                     )
                     if proxy_path is not None:
-                        proxy_clip_asset = await self.bridge.bridge_asset(
-                            source_path=str(proxy_path),
-                            service=service,
-                            asset_kind="proxy-target-video",
-                        )
+                        proxy_clip_asset = await self._bridge_proxy_clip(proxy_path=proxy_path, service=service)
                 if on_log is not None and proxy_clip_asset is not None:
                     on_log(f"[swap][target-proxy] proxy_target_url={proxy_clip_asset.public_url}")
                 if on_log is not None and proxy_clip_asset is None:
@@ -588,6 +598,26 @@ class VideoFaceExtractor:
                     "frame_index": selected_face.get("frame_index"),
                 }
             )
+        if selection_mode == "aggressive_mapping" and proxy_clip_asset is None and target_faces:
+            selected_face_for_proxy = {
+                **dict(selected_faces[0] if selected_faces else {}),
+                **dict(target_faces[0]),
+                "raw_box": (selected_faces[0] if selected_faces else {}).get("raw_box"),
+                "frame_index": (selected_faces[0] if selected_faces else {}).get("frame_index"),
+            }
+            proxy_path, proxy_clip_meta = self.create_proxy_target_clip(
+                source_video_path=video_path,
+                output_path=work_dir / "proxy_target_mapping_face.mp4",
+                selected_face=selected_face_for_proxy,
+                video_size=video_size,
+            )
+            if proxy_path is not None:
+                proxy_clip_asset = await self._bridge_proxy_clip(proxy_path=proxy_path, service=service)
+                proxy_clip_meta["proxy_reason"] = "target_mapping_face_crop"
+                if on_log is not None:
+                    on_log(f"[swap][target-proxy] proxy_target_url={proxy_clip_asset.public_url}")
+            elif on_log is not None:
+                on_log(f"[swap][target-proxy] proxy_clip_valid=false reason={proxy_clip_meta.get('proxy_reason')}")
         return {
             "frames": frames,
             "detected_faces": detected_faces,

@@ -229,43 +229,55 @@ class SwapQualityPipeline:
     ) -> List[Dict[str, Any]]:
         if not source_candidates:
             return []
-        primary = self.select_best_source_reference(
-            source_candidates=source_candidates,
-            target_anchor=target_anchor,
-        )
-        selections = [
-            {
-                "bucket": "primary",
-                "selected_index": int(primary["selected_index"]),
-                "selection_reason": str(primary["selection_reason"]),
-                "selection_score": primary["selected"].get("selection_score"),
-            }
-        ]
-        if len(source_candidates) == 1:
-            return selections
+        frontal_candidate = None
+        frontal_score = -1.0
+        side_candidate = None
+        side_score = -1.0
         target_breakdown = dict((target_anchor or {}).get("quality_breakdown") or {})
         target_frontalness = float(target_breakdown.get("frontalness") or 0.0)
-        alternate = None
-        alternate_score = -1.0
         for candidate in source_candidates:
-            source_index = int(candidate.get("source_index") or 0)
-            if source_index == int(primary["selected_index"]):
-                continue
             source_breakdown = dict(candidate.get("source_score_breakdown") or {})
             source_frontalness = float(source_breakdown.get("frontalness") or 0.0)
             source_score = float(candidate.get("source_face_score") or 0.0)
-            pose_offset = abs(source_frontalness - target_frontalness)
-            support_score = source_score + max(0.0, 12.0 - pose_offset)
-            if support_score > alternate_score:
-                alternate = candidate
-                alternate_score = support_score
-        if alternate is not None:
+            resolution = float(source_breakdown.get("resolution") or 0.0)
+            frontal_bucket_score = source_score + (source_frontalness * 1.8) + resolution
+            side_bucket_score = source_score + max(0.0, 18.0 - abs(source_frontalness - min(target_frontalness, 14.0))) + resolution * 0.5
+            if frontal_bucket_score > frontal_score:
+                frontal_candidate = candidate
+                frontal_score = frontal_bucket_score
+            if side_bucket_score > side_score:
+                side_candidate = candidate
+                side_score = side_bucket_score
+        selections: List[Dict[str, Any]] = []
+        if frontal_candidate is not None:
             selections.append(
                 {
-                    "bucket": "support",
-                    "selected_index": int(alternate.get("source_index") or 0),
-                    "selection_reason": "pose_bucket_support",
-                    "selection_score": round(alternate_score, 2),
+                    "bucket": "frontal",
+                    "selected_index": int(frontal_candidate.get("source_index") or 0),
+                    "selection_reason": "frontal_bucket_best",
+                    "selection_score": round(frontal_score, 2),
+                }
+            )
+        if side_candidate is not None and int(side_candidate.get("source_index") or 0) != int((frontal_candidate or {}).get("source_index") or -1):
+            selections.append(
+                {
+                    "bucket": "side_angle",
+                    "selected_index": int(side_candidate.get("source_index") or 0),
+                    "selection_reason": "side_angle_bucket_best",
+                    "selection_score": round(side_score, 2),
+                }
+            )
+        if not selections:
+            primary = self.select_best_source_reference(
+                source_candidates=source_candidates,
+                target_anchor=target_anchor,
+            )
+            selections.append(
+                {
+                    "bucket": "frontal",
+                    "selected_index": int(primary["selected_index"]),
+                    "selection_reason": str(primary["selection_reason"]),
+                    "selection_score": primary["selected"].get("selection_score"),
                 }
             )
         return selections

@@ -539,7 +539,7 @@ class _FakeQualityPipeline:
         )
         refs = [
             {
-                "bucket": "primary",
+                "bucket": "frontal",
                 "selected_index": selected["selected_index"],
                 "selection_reason": "target_anchor_pose_match",
                 "selection_score": selected["selected"].get("selection_score"),
@@ -548,9 +548,9 @@ class _FakeQualityPipeline:
         if alternate["source_index"] != selected["selected_index"]:
             refs.append(
                 {
-                    "bucket": "support",
+                    "bucket": "side_angle",
                     "selected_index": alternate["source_index"],
-                    "selection_reason": "pose_bucket_support",
+                    "selection_reason": "side_angle_bucket_best",
                     "selection_score": alternate.get("selection_score"),
                 }
             )
@@ -780,7 +780,7 @@ def test_swap_engine_intelligence_selects_best_source_reference():
     assert result.metadata["source_selection_reason"] == "target_anchor_pose_match"
     assert result.metadata["source_pack_size"] == 3
     assert len(result.metadata["selected_source_refs"]) >= 1
-    assert result.metadata["selected_source_bucket"] == "primary"
+    assert result.metadata["selected_source_bucket"] == "frontal"
 
 
 def test_swap_engine_intelligence_segment_route_stitches_and_fallbacks():
@@ -956,7 +956,10 @@ def test_swap_engine_intelligence_extreme_replace_sets_route_and_face_enhance_fl
     assert result.metadata["target_mapping_face_rank_reason"] == "best_for_identity_overwrite"
     assert result.metadata["target_rank_reason"] == "best_for_identity_overwrite"
     assert result.metadata["extreme_replace_effective"] is True
+    assert result.metadata["proxy_clip_valid"] is True
     assert result.metadata["proxy_clip_used"] is True
+    assert result.metadata["modify_video_source"] == "proxy_target"
+    assert result.metadata["selected_source_bucket"] == "frontal"
     assert result.metadata["target_anchor_quality"]["valid_for_extreme"] is True
     assert result.metadata["extreme_replace_selected"] is True
     assert engine.client.last_submit_kwargs["modify_video"] == "https://vendor.example/focused-target.mp4"
@@ -1017,7 +1020,9 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert result.metadata["degraded_fallback_used"] is True
     assert result.metadata["extreme_replace_effective"] is False
     assert result.metadata["downgrade_reason"] == "target_mapping_face_below_extreme_threshold"
+    assert result.metadata["proxy_clip_valid"] is False
     assert result.metadata["proxy_clip_used"] is False
+    assert result.metadata["modify_video_source"] == "raw_target"
     assert result.metadata["target_anchor_quality"]["valid_for_extreme"] is False
     assert result.metadata["extreme_replace_selected"] is True
-    assert result.metadata["fallback_reason"] == "target_mapping_face_below_extreme_threshold"
+    assert result.metadata["fallback_reason"] == "full_frame_target"
