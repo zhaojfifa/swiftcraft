@@ -531,6 +531,32 @@ class _FakeQualityPipeline:
         }
 
 
+    def select_source_reference_buckets(self, *, source_candidates, target_anchor):
+        selected = self.select_best_source_reference(source_candidates=source_candidates, target_anchor=target_anchor)
+        alternate = next(
+            (candidate for candidate in source_candidates if candidate["source_index"] != selected["selected_index"]),
+            selected["selected"],
+        )
+        refs = [
+            {
+                "bucket": "primary",
+                "selected_index": selected["selected_index"],
+                "selection_reason": "target_anchor_pose_match",
+                "selection_score": selected["selected"].get("selection_score"),
+            }
+        ]
+        if alternate["source_index"] != selected["selected_index"]:
+            refs.append(
+                {
+                    "bucket": "support",
+                    "selected_index": alternate["source_index"],
+                    "selection_reason": "pose_bucket_support",
+                    "selection_score": alternate.get("selection_score"),
+                }
+            )
+        return refs
+
+
 class _FakeR2Upload(_FakeR2):
     def upload_bytes(self, key: str, content: bytes, content_type: str = "") -> str:
         return f"https://cdn.example/{key}"
@@ -753,6 +779,7 @@ def test_swap_engine_intelligence_selects_best_source_reference():
     assert result.metadata["selected_source_face_index"] == 1
     assert result.metadata["source_selection_reason"] == "target_anchor_pose_match"
     assert result.metadata["source_pack_size"] == 3
+    assert len(result.metadata["selected_source_refs"]) >= 1
 
 
 def test_swap_engine_intelligence_segment_route_stitches_and_fallbacks():
@@ -990,3 +1017,4 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert result.metadata["downgrade_reason"] == "target_mapping_face_below_extreme_threshold"
     assert result.metadata["proxy_clip_used"] is False
     assert result.metadata["target_anchor_quality"]["valid_for_extreme"] is False
+    assert result.metadata["fallback_reason"] == "target_mapping_face_below_extreme_threshold"

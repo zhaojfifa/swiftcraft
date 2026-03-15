@@ -220,3 +220,52 @@ class SwapQualityPipeline:
             "selected_index": int(best_candidate.get("source_index") or 0),
             "selection_reason": "target_anchor_pose_match",
         }
+
+    def select_source_reference_buckets(
+        self,
+        *,
+        source_candidates: List[Dict[str, Any]],
+        target_anchor: Dict[str, Any] | None,
+    ) -> List[Dict[str, Any]]:
+        if not source_candidates:
+            return []
+        primary = self.select_best_source_reference(
+            source_candidates=source_candidates,
+            target_anchor=target_anchor,
+        )
+        selections = [
+            {
+                "bucket": "primary",
+                "selected_index": int(primary["selected_index"]),
+                "selection_reason": str(primary["selection_reason"]),
+                "selection_score": primary["selected"].get("selection_score"),
+            }
+        ]
+        if len(source_candidates) == 1:
+            return selections
+        target_breakdown = dict((target_anchor or {}).get("quality_breakdown") or {})
+        target_frontalness = float(target_breakdown.get("frontalness") or 0.0)
+        alternate = None
+        alternate_score = -1.0
+        for candidate in source_candidates:
+            source_index = int(candidate.get("source_index") or 0)
+            if source_index == int(primary["selected_index"]):
+                continue
+            source_breakdown = dict(candidate.get("source_score_breakdown") or {})
+            source_frontalness = float(source_breakdown.get("frontalness") or 0.0)
+            source_score = float(candidate.get("source_face_score") or 0.0)
+            pose_offset = abs(source_frontalness - target_frontalness)
+            support_score = source_score + max(0.0, 12.0 - pose_offset)
+            if support_score > alternate_score:
+                alternate = candidate
+                alternate_score = support_score
+        if alternate is not None:
+            selections.append(
+                {
+                    "bucket": "support",
+                    "selected_index": int(alternate.get("source_index") or 0),
+                    "selection_reason": "pose_bucket_support",
+                    "selection_score": round(alternate_score, 2),
+                }
+            )
+        return selections

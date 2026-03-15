@@ -390,6 +390,45 @@ class VideoFaceExtractor:
             exported.append(dst)
         return exported
 
+    def create_proxy_target_clip(
+        self,
+        *,
+        source_video_path: Path,
+        output_path: Path,
+        selected_face: Dict[str, Any] | None,
+        video_size: tuple[int, int] | None,
+    ) -> tuple[Path | None, Dict[str, Any]]:
+        if selected_face is None or video_size is None:
+            return None, {"proxy_clip_valid": False, "proxy_reason": "missing_selected_face"}
+        proxy_box = self._region_to_box(selected_face.get("region")) or tuple(selected_face.get("raw_box") or ())
+        if not proxy_box or len(proxy_box) < 4:
+            return None, {"proxy_clip_valid": False, "proxy_reason": "missing_face_box"}
+        video_width, video_height = int(video_size[0]), int(video_size[1])
+        x, y, width, height = [float(value) for value in proxy_box[:4]]
+        face_area_ratio = (width * height) / max(video_width * video_height, 1)
+        if face_area_ratio >= 0.8:
+            return None, {"proxy_clip_valid": False, "proxy_reason": "full_frame_fallback"}
+        face_track_summary = {
+            "video_width": video_width,
+            "video_height": video_height,
+            "selected_frame_index": selected_face.get("frame_index"),
+            "anchor_box": {
+                "x": x,
+                "y": y,
+                "width": width,
+                "height": height,
+            },
+        }
+        proxy_path, proxy_meta = self.create_focused_target_clip(
+            source_video_path=source_video_path,
+            output_path=output_path,
+            face_track_summary=face_track_summary,
+            crop_profile="proxy_extreme",
+        )
+        proxy_meta["proxy_clip_valid"] = proxy_path is not None
+        proxy_meta["proxy_reason"] = "selected_face_crop" if proxy_path is not None else str(proxy_meta.get("focus_mode") or "invalid_crop")
+        return proxy_path, proxy_meta
+
     async def build_target_faces(
         self,
         *,
@@ -446,6 +485,7 @@ class VideoFaceExtractor:
         focus_mode = "not_attempted"
         focus_face_ratio = None
         focus_crop_area_ratio = None
+        proxy_clip_meta: Dict[str, Any] = {"proxy_clip_valid": False, "proxy_reason": "not_attempted"}
         if create_focused_clip:
             focused_clip_path, focus_meta = self.create_focused_target_clip(
                 source_video_path=video_path,
@@ -467,10 +507,27 @@ class VideoFaceExtractor:
                 on_log(f"[swap][target-focus] focused_target_url={focused_clip_asset.public_url}")
             if on_log is not None and focused_clip_asset is None:
                 on_log(f"[swap][target-focus] focus_crop_valid=false focus_mode={focus_mode}")
-            if focused_clip_path is not None and selection_mode == "aggressive_mapping":
-                proxy_clip_asset = focused_clip_asset
+            if selection_mode == "aggressive_mapping":
+                if focused_clip_path is not None:
+                    proxy_clip_asset = focused_clip_asset
+                    proxy_clip_meta = {"proxy_clip_valid": True, "proxy_reason": "focused_clip_reused"}
+                else:
+                    proxy_path, proxy_clip_meta = self.create_proxy_target_clip(
+                        source_video_path=video_path,
+                        output_path=work_dir / "proxy_target.mp4",
+                        selected_face=selected_faces[0] if selected_faces else None,
+                        video_size=video_size,
+                    )
+                    if proxy_path is not None:
+                        proxy_clip_asset = await self.bridge.bridge_asset(
+                            source_path=str(proxy_path),
+                            service=service,
+                            asset_kind="proxy-target-video",
+                        )
                 if on_log is not None and proxy_clip_asset is not None:
                     on_log(f"[swap][target-proxy] proxy_target_url={proxy_clip_asset.public_url}")
+                if on_log is not None and proxy_clip_asset is None:
+                    on_log(f"[swap][target-proxy] proxy_clip_valid=false reason={proxy_clip_meta.get('proxy_reason')}")
         target_faces: List[Dict[str, Any]] = []
         target_mapping_face_score = None
         target_mapping_face_risk_tags: List[str] = []
@@ -549,6 +606,7 @@ class VideoFaceExtractor:
             "focused_target_url": focused_clip_asset.public_url if focused_clip_asset is not None else None,
             "proxy_target_asset": proxy_clip_asset,
             "proxy_target_url": proxy_clip_asset.public_url if proxy_clip_asset is not None else None,
+            "proxy_clip_meta": proxy_clip_meta,
             "replacement_mode": "focused_clip" if focused_clip_asset is not None else "raw_target_video",
             "focus_crop_valid": focus_crop_valid,
             "focus_mode": focus_mode,
