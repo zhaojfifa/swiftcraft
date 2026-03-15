@@ -59,6 +59,7 @@ class FalWan26R2VEngine:
 
     def __init__(self) -> None:
         self.model_id = os.getenv("SWIFT_AVATAR_FAL_MODEL_R2V", "wan/v2.6/reference-to-video").strip()
+        self.reference_video_model_id = os.getenv("SWIFT_AVATAR_FAL_MODEL", "wan/v2.6/image-to-video/flash").strip()
 
         allowed_durations = {"5", "10"}
         requested_duration = os.getenv("SWIFT_AVATAR_R2V_DURATION", "").strip() or os.getenv(
@@ -94,6 +95,14 @@ class FalWan26R2VEngine:
         self.prepare_timeout_sec = max(5, int(os.getenv("SWIFT_R2V_PREPARE_TIMEOUT_SEC", "120")))
         self.r2 = R2Client()
 
+    EXPERIMENTAL_REFERENCE_VIDEO_PROMPT = (
+        "Use @Video1 as the only human identity in the final video. Generate a 5-second solo dance performance "
+        "with steady rhythm, coordinated arm movements, small footwork, and natural torso motion. Preserve the facial "
+        "identity, hairstyle, outfit silhouette, and body shape of @Video1. Keep the shot stable, front-facing, medium "
+        "framing, and maintain background continuity. Do not introduce any second person, do not redesign clothing, do "
+        "not change the environment, and do not use aggressive camera movement."
+    )
+
     def _resolve_character_image_url(self, record: TaskRecord, inputs: Dict[str, Any]) -> str:
         return str(
             inputs.get("character_image_url")
@@ -104,6 +113,59 @@ class FalWan26R2VEngine:
 
     def _summarize_payload_keys(self, payload: Dict[str, Any]) -> str:
         return ",".join(sorted(str(key) for key in payload.keys()))
+
+    def _extract_video_url(self, result: Dict[str, Any]) -> str:
+        video_url = result.get("video_url") or result.get("video") or result.get("url")
+        if isinstance(video_url, dict):
+            video_url = video_url.get("url")
+        if isinstance(video_url, list) and video_url:
+            first = video_url[0]
+            video_url = first.get("url") if isinstance(first, dict) else first
+        return str(video_url or "").strip()
+
+    async def _generate_reference_video(
+        self,
+        *,
+        task_id: str,
+        fal_client: Any,
+        character_image_url: str,
+        on_log: Callable[[str], None],
+    ) -> Dict[str, Any]:
+        prompt = self.EXPERIMENTAL_REFERENCE_VIDEO_PROMPT
+        args = {
+            "image_url": character_image_url,
+            "prompt": prompt,
+            "duration": 5,
+            "aspect_ratio": self.aspect_ratio,
+            "width": 720,
+            "height": 1280,
+        }
+        on_log(f"[ar][reference-video] model_id={self.reference_video_model_id}")
+        on_log(f"[ar][reference-video] image_url_present={str(bool(character_image_url)).lower()}")
+        on_log(f"[ar][reference-video] prompt_len={len(prompt)}")
+        result = await asyncio.to_thread(
+            fal_client.subscribe,
+            self.reference_video_model_id,
+            arguments=args,
+            with_logs=False,
+        )
+        video_url = self._extract_video_url(self._to_dict(result))
+        if not video_url:
+            raise EngineRunError(f"reference video generation missing video url: {result}")
+        content = await self._download_bytes(video_url)
+        reference_video_key = f"outputs/{task_id}/reference_video.mp4"
+        reference_video_url = await asyncio.to_thread(
+            self.r2.upload_bytes,
+            key=reference_video_key,
+            content=content,
+            content_type="video/mp4",
+        )
+        on_log(f"[ar][reference-video] upload ok key={reference_video_key}")
+        return {
+            "reference_video_key": reference_video_key,
+            "reference_video_url": reference_video_url,
+            "final_prompt": prompt,
+        }
 
     async def _run_step(
         self,
@@ -264,11 +326,17 @@ class FalWan26R2VEngine:
             prompt = final_prompt
             duration_sec = int(duration_value)
             submit_video_url = record.input_video_url
+            submit_video_urls = [submit_video_url]
             slice_meta: Dict[str, Any] = {}
             policy_retry_count = 0
             policy_violation_type: Optional[str] = None
             policy_violation_url: Optional[str] = None
             r2v_logs: list[str] = []
+            reference_video_key: Optional[str] = None
+            reference_video_url: Optional[str] = None
+            experimental_reference_video = bool(
+                inputs.get("reference_video_experiment") or inputs.get("experimental_reference_video") or False
+            )
 
             risk_hints = {
                 "face_small": False,
@@ -299,12 +367,12 @@ class FalWan26R2VEngine:
                             r2v_logs.append(message)
                             on_log(f"[r2v][log] {message}")
 
-            def build_args(video_url: str) -> Dict[str, Any]:
+            def build_args(video_urls: list[str]) -> Dict[str, Any]:
                 return {
                     "image_url": character_image_url,
                     "prompt": prompt,
                     "negative_prompt": final_negative_prompt,
-                    "video_urls": [video_url],
+                    "video_urls": list(video_urls),
                     "aspect_ratio": aspect_ratio,
                     "resolution": resolution,
                     "duration": duration_value,
@@ -329,6 +397,35 @@ class FalWan26R2VEngine:
             last_request_id: Optional[str] = None
             video_url_for_log = submit_video_url
 
+            if experimental_reference_video:
+                reference_video_meta = await self._run_step(
+                    "prepare_reference_video",
+                    on_log,
+                    self._generate_reference_video(
+                        task_id=task_id,
+                        fal_client=fal_client,
+                        character_image_url=character_image_url,
+                        on_log=on_log,
+                    ),
+                    timeout_sec=self.prepare_timeout_sec,
+                )
+                reference_video_key = str(reference_video_meta.get("reference_video_key") or "").strip() or None
+                reference_video_url = str(reference_video_meta.get("reference_video_url") or "").strip() or None
+                prompt = str(reference_video_meta.get("final_prompt") or prompt).strip() or prompt
+                final_prompt = prompt
+                if reference_video_url:
+                    submit_video_urls = [reference_video_url, record.input_video_url]
+                    slice_meta = {
+                        **slice_meta,
+                        "reference_video_key": reference_video_key,
+                        "reference_video_url": reference_video_url,
+                        "source_video_url": record.input_video_url,
+                    }
+                    on_log(
+                        f"[ar][reference-video] enabled=true source_video_url_present={str(bool(record.input_video_url)).lower()} "
+                        f"reference_video_url_present={str(bool(reference_video_url)).lower()}"
+                    )
+
             def extract_submit_request_id(submit_info: Dict[str, Any]) -> str:
                 rid = str(
                     submit_info.get("request_id")
@@ -339,7 +436,30 @@ class FalWan26R2VEngine:
                 on_log(f"[r2v] submit accepted request_id={rid or 'n/a'}")
                 return rid
 
-            if self.policy_retry_enabled:
+            if experimental_reference_video:
+                args = build_args(submit_video_urls)
+                video_url_for_log = record.input_video_url
+                log_payload_summary(args)
+                on_log(
+                    f"[r2v][args] videos={len(args['video_urls'])} aspect={self.aspect_ratio} res={self.resolution} duration={self.duration}"
+                )
+                submit_info = await self._run_step(
+                    "fal_submit",
+                    on_log,
+                    self._submit_request(fal_client, args, on_queue_update, on_log),
+                )
+                rid = extract_submit_request_id(submit_info)
+                last_request_id = rid or last_request_id
+                if "result" in submit_info:
+                    result = submit_info["result"]
+                else:
+                    result = await self._run_poll_step(
+                        fal_client,
+                        rid,
+                        on_queue_update=on_queue_update,
+                        on_log=on_log,
+                    )
+            elif self.policy_retry_enabled:
                 offsets = self._offsets_for_duration(duration_sec)
                 max_attempts = max(1, self.max_policy_retries + 1)
                 offsets = offsets[:max_attempts]
@@ -369,7 +489,7 @@ class FalWan26R2VEngine:
                         "slice_duration_sec": duration_sec,
                     }
                     on_log(f"[slice] start={offset} dur={duration_sec} ref_clip_1_url={ref_clip_url}")
-                    args = build_args(submit_video_url)
+                    args = build_args([submit_video_url])
                     video_url_for_log = submit_video_url
                     log_payload_summary(args)
                     on_log(
@@ -461,7 +581,7 @@ class FalWan26R2VEngine:
                 on_log(
                     f"[slice] start={self.fixed_slice_start_sec} dur={duration_sec} ref_clip_1_url={ref_clip_url}"
                 )
-                args = build_args(submit_video_url)
+                args = build_args([submit_video_url])
                 video_url_for_log = submit_video_url
                 log_payload_summary(args)
                 on_log(
@@ -484,7 +604,7 @@ class FalWan26R2VEngine:
                         on_log=on_log,
                     )
             else:
-                args = build_args(submit_video_url)
+                args = build_args([submit_video_url])
                 video_url_for_log = submit_video_url
                 log_payload_summary(args)
                 on_log(
@@ -534,12 +654,7 @@ class FalWan26R2VEngine:
                 f"{(final_negative_prompt[:240] + '...') if len(final_negative_prompt) > 240 else final_negative_prompt}"
             )
 
-            video_url = result.get("video_url") or result.get("video") or result.get("url")
-            if isinstance(video_url, dict):
-                video_url = video_url.get("url")
-            if isinstance(video_url, list) and video_url:
-                first = video_url[0]
-                video_url = first.get("url") if isinstance(first, dict) else first
+            video_url = self._extract_video_url(result)
             if not video_url:
                 raise EngineRunError(f"r2v result missing video url: {result}")
 
@@ -613,6 +728,9 @@ class FalWan26R2VEngine:
                     "risk_hints": risk_hints,
                     "source_video_url": record.input_video_url,
                     "character_image_url": character_image_url,
+                    "reference_video_key": reference_video_key,
+                    "reference_video_url": reference_video_url,
+                    "experimental_reference_video": experimental_reference_video,
                     "reference_image_field": "image_url",
                     "request_payload_keys": [
                         "image_url",
