@@ -147,6 +147,31 @@ class AkoolSwapFaceEngine:
             return "provider_render", "generate_temp_file_error"
         return "provider_render", "provider_failed" if alg_msg else (None, None)
 
+    def _enforce_proxy_target_for_extreme(
+        self,
+        *,
+        replacement_intensity: str,
+        proxy_target_url: str | None,
+        focused_target_url: str | None,
+        source_video_vendor_url: str,
+        proxy_clip_valid: bool,
+        proxy_clip_used: bool,
+        fallback_reason: str | None,
+        on_log: Callable[[str], None],
+    ) -> tuple[str, str, bool, str | None, bool]:
+        if replacement_intensity != "extreme_replace":
+            submit_modify_video = focused_target_url or source_video_vendor_url
+            modify_video_source = "focused_target" if focused_target_url else "raw_target"
+            return replacement_intensity, submit_modify_video, False, fallback_reason, proxy_clip_used
+        if proxy_target_url and proxy_clip_valid:
+            on_log("[swap][route] extreme_replace accepted -> proxy_target")
+            return "extreme_replace", proxy_target_url, False, fallback_reason, True
+        downgrade_reason = fallback_reason or "proxy_target_required_for_extreme_replace"
+        on_log(f"[swap][route] extreme_replace blocked -> downgrade reason={downgrade_reason}")
+        submit_modify_video = focused_target_url or source_video_vendor_url
+        modify_video_source = "focused_target" if focused_target_url else "raw_target"
+        return "strong_identity", submit_modify_video, True, downgrade_reason, False
+
     async def _run_intelligence_vendor_job(
         self,
         *,
@@ -731,9 +756,9 @@ class AkoolSwapFaceEngine:
                         on_log(f"[swap][target-proxy] proxy_clip_used=true url={proxy_target_url}")
                     else:
                         on_log(f"[swap][target-proxy] proxy_clip_used=false")
-                        if focus_mode == "full_frame_fallback":
+                        if not fallback_reason and focus_mode == "full_frame_fallback":
                             fallback_reason = "full_frame_target"
-                        elif proxy_clip_reason:
+                        elif not fallback_reason and proxy_clip_reason:
                             fallback_reason = proxy_clip_reason
                 else:
                     modify_video_source = "focused_target" if focused_target_url else "raw_target"
@@ -774,8 +799,23 @@ class AkoolSwapFaceEngine:
                     else replacement_intensity
                 )
                 submit_face_enhance = face_enhance if downgrade_reason is None else True
-                submit_modify_video = proxy_target_url or focused_target_url or source_video_vendor_url
-                if submit_modify_video == proxy_target_url and proxy_target_url:
+                (
+                    effective_replacement_intensity,
+                    submit_modify_video,
+                    _downgraded_from_extreme,
+                    fallback_reason,
+                    proxy_clip_used,
+                ) = self._enforce_proxy_target_for_extreme(
+                    replacement_intensity=effective_replacement_intensity,
+                    proxy_target_url=proxy_target_url,
+                    focused_target_url=focused_target_url,
+                    source_video_vendor_url=source_video_vendor_url,
+                    proxy_clip_valid=proxy_clip_valid,
+                    proxy_clip_used=proxy_clip_used,
+                    fallback_reason=fallback_reason,
+                    on_log=on_log,
+                )
+                if effective_replacement_intensity == "extreme_replace":
                     modify_video_source = "proxy_target"
                 elif submit_modify_video == focused_target_url and focused_target_url:
                     modify_video_source = "focused_target"
@@ -1283,8 +1323,9 @@ class AkoolSwapFaceEngine:
                 else f"{str(record.mode or 'basic').lower()}_{api_version}_{route_execution_style}_{swap_strength}"
             )
             extreme_replace_selected = requested_replacement_intensity == "extreme_replace"
+            downgraded_from_extreme = extreme_replace_selected and replacement_intensity != "extreme_replace"
             extreme_replace_effective = (
-                extreme_replace_selected and proxy_clip_used and not degraded_fallback_used
+                extreme_replace_selected and replacement_intensity == "extreme_replace" and proxy_clip_used and not degraded_fallback_used
             )
             if downgrade_reason or (extreme_replace_selected and not focus_crop_valid and not proxy_clip_used and degraded_fallback_used):
                 extreme_replace_effective = False
@@ -1294,6 +1335,7 @@ class AkoolSwapFaceEngine:
                 "swap_strength": swap_strength,
                 "replacement_intensity": replacement_intensity,
                 "extreme_replace_selected": extreme_replace_selected,
+                "downgraded_from_extreme": downgraded_from_extreme,
                 "route_intent": route_intent,
                 "route_execution_style": route_execution_style,
                 "source_face_score": source_face_score,
@@ -1350,6 +1392,7 @@ class AkoolSwapFaceEngine:
                     "swap_strength": swap_strength,
                     "replacement_intensity": replacement_intensity,
                     "extreme_replace_selected": extreme_replace_selected,
+                    "downgraded_from_extreme": downgraded_from_extreme,
                     "route_intent": route_intent,
                     "route_execution_style": route_execution_style,
                     "source_video_key": source_video_key,
@@ -1474,6 +1517,7 @@ class AkoolSwapFaceEngine:
                     "swap_strength": swap_strength,
                     "replacement_intensity": replacement_intensity,
                     "extreme_replace_selected": extreme_replace_selected,
+                    "downgraded_from_extreme": downgraded_from_extreme,
                     "route_intent": route_intent,
                     "route_execution_style": route_execution_style,
                     "route_summary": quality_summary["route_summary"],
