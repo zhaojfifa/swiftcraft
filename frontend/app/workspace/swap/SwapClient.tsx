@@ -29,6 +29,23 @@ type Props = {
   service?: "swap" | "action_replica" | "avatar";
 };
 
+function getActionReplicaContract(modeLike: string | null | undefined): {
+  mode: "basic" | "intelligent";
+  provider: "wan26_r2v" | "kling_motioncontrol_v3_pro";
+} {
+  const value = String(modeLike || "").trim().toLowerCase();
+  if (value === "intelligent" || value === "intelligence") {
+    return {
+      mode: "intelligent",
+      provider: "kling_motioncontrol_v3_pro",
+    };
+  }
+  return {
+    mode: "basic",
+    provider: "wan26_r2v",
+  };
+}
+
 export default function SwapClient({ service = "swap" }: Props) {
   const serviceType = service;
   const isSwap = serviceType === "swap";
@@ -57,9 +74,6 @@ export default function SwapClient({ service = "swap" }: Props) {
   const [preserveTiming, setPreserveTiming] = useState(true);
   const [preserveBackground, setPreserveBackground] = useState(true);
   const [actionReplicaAudioStrategy, setActionReplicaAudioStrategy] = useState<"keep_original" | "mute_original">("keep_original");
-  const [actionReplicaProvider, setActionReplicaProvider] = useState<"wan26_r2v" | "kling_motioncontrol_v3_pro">(
-    "wan26_r2v",
-  );
   const [orientationStrategy, setOrientationStrategy] = useState<"auto" | "prefer_video_motion" | "prefer_image_identity">("auto");
   const [showPromptTips, setShowPromptTips] = useState(false);
   const [task, setTask] = useState<TaskRecord | null>(null);
@@ -113,9 +127,8 @@ export default function SwapClient({ service = "swap" }: Props) {
 
   useEffect(() => {
     if (!isAvatar) return;
-    const normalizedMode = mode === "intelligent" || mode === "intelligence" ? "intelligent" : "basic";
-    setActionReplicaProvider(normalizedMode === "intelligent" ? "kling_motioncontrol_v3_pro" : "wan26_r2v");
-    if (normalizedMode === "intelligent") {
+    const contract = getActionReplicaContract(mode);
+    if (contract.mode === "intelligent") {
       setExpressionMode("neutral");
       setFidelityBias("motion");
       setOrientationStrategy("prefer_video_motion");
@@ -143,7 +156,9 @@ export default function SwapClient({ service = "swap" }: Props) {
   const serviceApi = String(serviceType || "swap").toLowerCase();
   const modeApi = String(mode || "basic").toLowerCase() as SwapMode;
   const isIntelligenceMode = modeApi === "intelligent" || modeApi === "intelligence";
-  const actionReplicaMode = isIntelligenceMode ? "intelligent" : "basic";
+  const actionReplicaContract = getActionReplicaContract(modeApi);
+  const actionReplicaMode = actionReplicaContract.mode;
+  const actionReplicaProvider = actionReplicaContract.provider;
   const swapProvider = isIntelligenceMode ? "swap_intelligence_akool" : "akool_swap_face";
   const presetKey = resolvePresetInputKey(serviceApi, modeApi);
   const cdnBase = (process.env.NEXT_PUBLIC_CDN_BASE_URL || "").replace(/\/+$/, "");
@@ -365,15 +380,14 @@ export default function SwapClient({ service = "swap" }: Props) {
   const runAvatarTask = async (overrides?: { motionKey?: string; characterKey?: string; modeOverride?: SwapMode }) => {
     const characterKey = overrides?.characterKey || (await uploadFileToR2(imageFile as File));
     const motionKey = overrides?.motionKey || (await uploadFileToR2(videoFile as File));
-    const resolvedMode = String(overrides?.modeOverride || modeApi).toLowerCase();
-    const modeForRequest = resolvedMode === "intelligent" || resolvedMode === "intelligence" ? "intelligent" : "basic";
+    const contract = getActionReplicaContract(overrides?.modeOverride || modeApi);
     return createTask({
       service_type: "action_replica",
       model_id: "kling-v2.6-std-motion",
-      mode: modeForRequest,
+      mode: contract.mode,
       input_key: motionKey,
       inputs: {
-        provider: actionReplicaProvider,
+        provider: contract.provider,
         character_image_url: characterKey,
         source_video_url: motionKey,
         // legacy aliases kept for backward compatibility
@@ -1011,7 +1025,7 @@ export default function SwapClient({ service = "swap" }: Props) {
                             <option value="kling_motioncontrol_v3_pro">Kling Motion Control V3 Pro (Intelligent)</option>
                           </select>
                           <p className="text-[11px] text-slate-500">
-                            {mode === "intelligent"
+                            {actionReplicaMode === "intelligent"
                               ? "Intelligent mode is fixed to Kling Motion Control V3 Pro."
                               : "Baseline mode is fixed to WAN 2.6."}
                           </p>
