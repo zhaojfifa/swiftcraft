@@ -137,6 +137,37 @@ class AkoolClient:
                 return str(value)
         return None
 
+    @staticmethod
+    def _region_to_box(region: Any) -> tuple[float, float, float, float] | None:
+        if isinstance(region, dict):
+            try:
+                x = float(region.get("x") or region.get("left") or 0.0)
+                y = float(region.get("y") or region.get("top") or 0.0)
+                w = float(region.get("width") or region.get("w") or 0.0)
+                h = float(region.get("height") or region.get("h") or 0.0)
+                if w > 0 and h > 0:
+                    return x, y, w, h
+            except Exception:
+                return None
+        if isinstance(region, list) and len(region) >= 4:
+            try:
+                x1, y1, x2, y2 = float(region[0]), float(region[1]), float(region[2]), float(region[3])
+                w = abs(x2 - x1)
+                h = abs(y2 - y1)
+                if w > 0 and h > 0:
+                    return min(x1, x2), min(y1, y2), w, h
+            except Exception:
+                return None
+        return None
+
+    @classmethod
+    def _box_to_opts(cls, region: Any) -> str | None:
+        box = cls._region_to_box(region)
+        if box is None:
+            return None
+        x, y, w, h = box
+        return f"{round(x)},{round(y)},{round(x + w)},{round(y + h)}"
+
     @classmethod
     def normalize_detect_result(cls, result: Dict[str, Any], *, stage: str, input_url: str) -> Dict[str, Any]:
         faces_obj = cls._extract_faces_obj(result)
@@ -152,6 +183,8 @@ class AkoolClient:
                 path = str(input_url).strip()
             if not path:
                 raise RuntimeError("detect_faces returned no face_urls")
+            region = value.get("region") or value.get("box") or value.get("bbox")
+            bbox_present = cls._region_to_box(region) is not None
             crop_landmarks = value.get("crop_landmarks")
             landmarks_str = value.get("landmarks_str")
             opts = None
@@ -161,15 +194,36 @@ class AkoolClient:
                 opts = cls._landmarks_to_string(landmarks_str[0])
             elif cls._landmarks_to_string(value.get("landmarks")):
                 opts = cls._landmarks_to_string(value.get("landmarks"))
-            if not opts:
+            landmarks_present = bool(opts)
+            return_face_url_present = isinstance(face_urls, list) and bool(face_urls and str(face_urls[0]).strip())
+            usable_level = "unusable"
+            fail_reason = None
+            if landmarks_present:
+                usable_level = "full"
+            elif bbox_present:
+                usable_level = "bbox_only"
+                opts = cls._box_to_opts(region)
+            elif return_face_url_present:
+                usable_level = "weak"
+            else:
+                fail_reason = "bbox_crop_landmarks_absent"
+            if not opts and stage != "source_face_detect":
                 raise RuntimeError("detect_faces returned no crop_landmarks")
+            if stage == "source_face_detect" and usable_level == "unusable":
+                continue
             normalized.append(
                 {
                     "face_id": str(face_id),
                     "path": path,
                     "opts": opts,
-                    "region": value.get("region") or value.get("box") or value.get("bbox"),
+                    "region": region,
                     "frame_time": value.get("frame_time") or value.get("timestamp"),
+                    "detect_hit": True,
+                    "bbox_present": bbox_present,
+                    "landmarks_present": landmarks_present,
+                    "return_face_url_present": return_face_url_present,
+                    "usable_level": usable_level,
+                    "fail_reason": fail_reason,
                     "raw": value,
                 }
             )

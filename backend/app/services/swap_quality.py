@@ -76,6 +76,9 @@ class SwapQualityPipeline:
         service: str,
         output_dir: Path,
         crop_policy: str = "tight_identity_focus",
+        source_bbox: Any | None = None,
+        canonicalization_mode: str = "landmarks",
+        bbox_margin_scale: float = 0.18,
     ) -> Dict[str, Any]:
         output_dir.mkdir(parents=True, exist_ok=True)
         source_path = output_dir / "source_face_input.png"
@@ -86,7 +89,31 @@ class SwapQualityPipeline:
             source_path.write_bytes(response.content)
         with Image.open(source_path) as image:
             rgb = image.convert("RGB")
-            if crop_policy == "extreme_identity_core":
+            if canonicalization_mode == "bbox_fallback" and source_bbox:
+                region = _region_metrics(source_bbox, float(rgb.size[0]), float(rgb.size[1]))
+                if isinstance(source_bbox, dict):
+                    x = float(source_bbox.get("x") or source_bbox.get("left") or 0.0)
+                    y = float(source_bbox.get("y") or source_bbox.get("top") or 0.0)
+                    w = float(source_bbox.get("width") or source_bbox.get("w") or 0.0)
+                    h = float(source_bbox.get("height") or source_bbox.get("h") or 0.0)
+                else:
+                    x1 = float(source_bbox[0])
+                    y1 = float(source_bbox[1])
+                    x2 = float(source_bbox[2])
+                    y2 = float(source_bbox[3])
+                    x = min(x1, x2)
+                    y = min(y1, y2)
+                    w = abs(x2 - x1)
+                    h = abs(y2 - y1)
+                pad_x = max(16.0, w * float(bbox_margin_scale))
+                pad_y = max(16.0, h * float(bbox_margin_scale))
+                left = max(0, int(round(x - pad_x)))
+                top = max(0, int(round(y - pad_y)))
+                right = min(rgb.size[0], int(round(x + w + pad_x)))
+                bottom = min(rgb.size[1], int(round(y + h + pad_y)))
+                if right > left and bottom > top:
+                    rgb = rgb.crop((left, top, right, bottom))
+            elif crop_policy == "extreme_identity_core":
                 width, height = rgb.size
                 crop_w = max(128, int(width * 0.58))
                 crop_h = max(128, int(height * 0.62))
@@ -98,6 +125,7 @@ class SwapQualityPipeline:
             offset = ((512 - contained.width) // 2, (512 - contained.height) // 2)
             canvas.paste(contained, offset)
             canvas.save(canonical_path, format="PNG")
+        canonical_opts = f"{offset[0]},{offset[1]},{offset[0] + contained.width},{offset[1] + contained.height}"
         bridged = await self.bridge.bridge_asset(
             source_path=str(canonical_path),
             service=service,
@@ -107,6 +135,8 @@ class SwapQualityPipeline:
             "canonical_path": canonical_path,
             "canonical_source_face_url": bridged.public_url,
             "canonical_source_face_asset": bridged.to_dict() if hasattr(bridged, "to_dict") else None,
+            "canonicalization_mode": canonicalization_mode,
+            "canonical_opts": canonical_opts,
         }
 
     def score_source_face(self, image_path: Path, candidate: Dict[str, Any]) -> Dict[str, Any]:

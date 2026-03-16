@@ -195,6 +195,42 @@ class AkoolSwapFaceEngine:
             return "provider_render", "generate_temp_file_error"
         return "provider_render", "provider_failed" if alg_msg else (None, None)
 
+    @staticmethod
+    def _source_detect_mode(face: Dict[str, Any] | None) -> str:
+        face = dict(face or {})
+        level = str(face.get("usable_level") or "").strip().lower()
+        if not level:
+            if face.get("opts"):
+                level = "full"
+            elif face.get("region"):
+                level = "bbox_only"
+            elif face.get("path"):
+                level = "weak"
+        if level == "full":
+            return "landmarks"
+        if level == "bbox_only":
+            return "bbox_fallback"
+        if level == "weak":
+            return "face_crop_fallback"
+        return "failed"
+
+    @staticmethod
+    def _source_material_state(face: Dict[str, Any] | None) -> str:
+        face = dict(face or {})
+        level = str(face.get("usable_level") or "").strip().lower()
+        if not level:
+            if face.get("opts"):
+                level = "full"
+            elif face.get("region"):
+                level = "bbox_only"
+            elif face.get("path"):
+                level = "weak"
+        if level == "full":
+            return "usable"
+        if level in {"bbox_only", "weak"}:
+            return "weak"
+        return "blocked"
+
     def _enforce_proxy_target_for_extreme(
         self,
         *,
@@ -1077,6 +1113,12 @@ class AkoolSwapFaceEngine:
         selected_anchor_frame = None
         selected_anchor_reason = None
         anchor_quality_score = None
+        source_detect_mode = "failed"
+        source_material_state = "blocked"
+        source_detect_degraded = False
+        source_manual_review_recommended = False
+        source_quality_score = None
+        source_canonicalization_mode = None
         proxy_margin_top = None
         proxy_margin_bottom = None
         proxy_margin_left = None
@@ -1146,14 +1188,22 @@ class AkoolSwapFaceEngine:
             faces = list(detected.get("faces") or [])
             if not faces:
                 raise EngineRunError("source face not detected")
+            if len(faces) > 1:
+                raise EngineRunError("source face detect ambiguous: multiple faces found in single-face mode")
             detected_face = faces[0]
+            detect_mode = self._source_detect_mode(detected_face)
             with tempfile.TemporaryDirectory(prefix=f"swap-source-select-{task_id[:8]}-{source_index}-") as tmp_dir:
+                canonical_source_input_url = detected_face["path"] if detect_mode == "face_crop_fallback" else bridged.public_url
                 canonicalized = await self.swap_quality_pipeline.canonicalize_source_face(
-                    source_face_url=detected_face["path"],
+                    source_face_url=canonical_source_input_url,
                     service="swap",
                     output_dir=Path(tmp_dir),
                     crop_policy=source_crop_policy,
+                    source_bbox=detected_face.get("region") if detect_mode == "bbox_fallback" else None,
+                    canonicalization_mode=detect_mode,
                 )
+                if not detected_face.get("opts") and canonicalized.get("canonical_opts"):
+                    detected_face = {**dict(detected_face), "path": canonicalized["canonical_source_face_url"], "opts": canonicalized["canonical_opts"]}
                 source_score = self.swap_quality_pipeline.score_source_face(
                     canonicalized["canonical_path"],
                     detected_face,
@@ -1167,6 +1217,8 @@ class AkoolSwapFaceEngine:
                 "source_face_score": source_score["score"],
                 "source_face_risk_tags": list(source_score["risk_tags"]),
                 "source_score_breakdown": dict(source_score.get("breakdown") or {}),
+                "source_detect_mode": detect_mode,
+                "source_material_state": self._source_material_state(detected_face),
             }
 
         try:
@@ -1203,35 +1255,68 @@ class AkoolSwapFaceEngine:
             source_faces = list(source_detect.get("faces") or [])
             if not source_faces:
                 raise EngineRunError("source face not detected")
+            if len(source_faces) > 1:
+                raise EngineRunError("source face detect ambiguous: multiple faces found in single-face mode")
             source_face = source_faces[0]
-            vendor_runtime["source_face_detect"] = {"ok": True, "face_count": len(source_faces)}
+            source_detect_mode = self._source_detect_mode(source_face)
+            source_material_state = self._source_material_state(source_face)
+            source_detect_degraded = source_detect_mode != "landmarks"
+            source_manual_review_recommended = source_detect_degraded
+            if source_material_state == "blocked":
+                raise EngineRunError(f"source face detect unusable: {source_face.get('fail_reason') or 'bbox_crop_landmarks_absent'}")
+            vendor_runtime["source_face_detect"] = {
+                "ok": True,
+                "face_count": len(source_faces),
+                "source_detect_mode": source_detect_mode,
+                "source_material_state": source_material_state,
+                "source_detect_degraded": source_detect_degraded,
+                "source_manual_review_recommended": source_manual_review_recommended,
+            }
             on_log(f"[swap][detect] parsed_face_count={len(source_faces)}")
-            if is_intelligence_route:
+            on_log(
+                f"[swap][source-detect] mode={source_detect_mode} usable_level={source_face.get('usable_level')} "
+                f"detect_hit={str(bool(source_face.get('detect_hit', True))).lower()} "
+                f"bbox_present={str(bool(source_face.get('bbox_present'))).lower()} "
+                f"landmarks_present={str(bool(source_face.get('landmarks_present'))).lower()} "
+                f"return_face_url_present={str(bool(source_face.get('return_face_url_present'))).lower()} "
+                f"fail_reason={source_face.get('fail_reason') or 'none'}"
+            )
+            if is_intelligence_route or source_detect_degraded or not source_face.get("opts"):
                 if self.swap_quality_pipeline is None:
                     from app.services.swap_quality import SwapQualityPipeline
 
                     self.swap_quality_pipeline = SwapQualityPipeline(bridge=self.vendor_bridge)
                 with tempfile.TemporaryDirectory(prefix=f"swap-source-{task_id[:8]}-") as tmp_dir:
+                    canonical_source_input_url = source_face["path"] if source_detect_mode == "face_crop_fallback" else source_face_vendor_url
                     canonicalized = await self.swap_quality_pipeline.canonicalize_source_face(
-                        source_face_url=source_face["path"],
+                        source_face_url=canonical_source_input_url,
                         service="swap",
                         output_dir=Path(tmp_dir),
                         crop_policy=source_crop_policy,
+                        source_bbox=source_face.get("region") if source_detect_mode == "bbox_fallback" else None,
+                        canonicalization_mode=source_detect_mode,
                     )
                     canonical_source_face_url = canonicalized["canonical_source_face_url"]
+                    source_canonicalization_mode = canonicalized.get("canonicalization_mode")
+                    if not source_face.get("opts") and canonicalized.get("canonical_opts"):
+                        source_face = {**dict(source_face), "path": canonical_source_face_url, "opts": canonicalized["canonical_opts"]}
                     source_score = self.swap_quality_pipeline.score_source_face(
                         canonicalized["canonical_path"],
                         source_face,
                     )
                 source_face_score = source_score["score"]
+                source_quality_score = source_face_score
                 source_face_risk_tags = list(source_score["risk_tags"])
                 source_score_breakdown = dict(source_score.get("breakdown") or {})
                 on_log(
-                    f"[swap][source-canonicalize] canonical_source_face_url={canonical_source_face_url}"
+                    f"[swap][source-canonicalize] canonical_source_face_url={canonical_source_face_url} "
+                    f"canonicalization_mode={source_canonicalization_mode or source_detect_mode}"
                 )
                 on_log(
-                    f"[swap][source-score] score={source_face_score} risk_tags={source_face_risk_tags}"
+                    f"[swap][source-score] source_quality_score={source_face_score} risk_tags={source_face_risk_tags}"
                 )
+            else:
+                source_quality_score = source_face_score
             on_stage("running", 20)
 
             source_image_payload = [{"path": source_face["path"], "opts": source_face["opts"]}]
@@ -2410,6 +2495,12 @@ class AkoolSwapFaceEngine:
                 "source_candidate_scores": source_candidate_scores,
                 "source_rank_table": source_candidate_scores,
                 "source_rank_top3": list(source_candidate_scores[:3]),
+                "source_detect_mode": source_detect_mode,
+                "source_material_state": source_material_state,
+                "source_detect_degraded": source_detect_degraded,
+                "source_manual_review_recommended": source_manual_review_recommended,
+                "source_canonicalization_mode": source_canonicalization_mode,
+                "source_quality_score": source_quality_score,
                 "selected_target_frame_index": selected_target_frame_index,
                 "face_enhance_used": bool(face_enhance),
                 "target_mapping_face_rank_reason": target_mapping_face_rank_reason,
@@ -2580,6 +2671,12 @@ class AkoolSwapFaceEngine:
                     "route_execution_style": route_execution_style,
                     "route_summary": quality_summary["route_summary"],
                     "face_enhance_used": bool(face_enhance),
+                    "source_detect_mode": source_detect_mode,
+                    "source_material_state": source_material_state,
+                    "source_detect_degraded": source_detect_degraded,
+                    "source_manual_review_recommended": source_manual_review_recommended,
+                    "source_canonicalization_mode": source_canonicalization_mode,
+                    "source_quality_score": source_quality_score,
                     "source_face_score": source_face_score,
                     "source_face_risk_tags": source_face_risk_tags,
                     "source_pack_size": source_pack_size,
@@ -2593,6 +2690,12 @@ class AkoolSwapFaceEngine:
                     "selected_source_score": float((selected_source_ref or {}).get("selection_score") or source_face_score or 0.0),
                     "source_rank_table": source_candidate_scores,
                     "source_rank_top3": list(source_candidate_scores[:3]),
+                    "source_detect_mode": source_detect_mode,
+                    "source_material_state": source_material_state,
+                    "source_detect_degraded": source_detect_degraded,
+                    "source_manual_review_recommended": source_manual_review_recommended,
+                    "source_canonicalization_mode": source_canonicalization_mode,
+                    "source_quality_score": source_quality_score,
                     "canonical_source_face_url": canonical_source_face_url,
                     "original_target_url": original_target_url,
                     "focused_target_url": focused_target_url,
@@ -2780,6 +2883,12 @@ class AkoolSwapFaceEngine:
                     "route_execution_style": route_execution_style,
                     "route_summary": quality_summary["route_summary"],
                     "face_enhance_used": bool(face_enhance),
+                    "source_detect_mode": source_detect_mode,
+                    "source_material_state": source_material_state,
+                    "source_detect_degraded": source_detect_degraded,
+                    "source_manual_review_recommended": source_manual_review_recommended,
+                    "source_canonicalization_mode": source_canonicalization_mode,
+                    "source_quality_score": source_quality_score,
                     "source_face_score": source_face_score,
                     "source_face_risk_tags": source_face_risk_tags,
                     "source_pack_size": source_pack_size,

@@ -102,7 +102,45 @@ def test_detect_faces_parser_raises_when_empty():
         AkoolClient.normalize_detect_result({"error_code": 0, "error_msg": "SUCCESS", "faces_obj": {}}, stage="source_video_detect", input_url="https://cdn.example/video.mp4")
 
 
-def test_detect_faces_parser_raises_when_missing_opts():
+def test_detect_faces_parser_source_face_accepts_bbox_only():
+    payload = {
+        "error_code": 0,
+        "error_msg": "SUCCESS",
+        "faces_obj": {
+            "0": {
+                "face_urls": ["https://cdn.example/source-face.png"],
+                "crop_landmarks": [],
+                "landmarks_str": [],
+                "bbox": [10, 20, 110, 220],
+            }
+        },
+    }
+    faces = AkoolClient.normalize_detect_result(payload, stage="source_face_detect", input_url="https://cdn.example/original.png")
+    assert faces["faces"][0]["usable_level"] == "bbox_only"
+    assert faces["faces"][0]["bbox_present"] is True
+    assert faces["faces"][0]["landmarks_present"] is False
+    assert faces["faces"][0]["opts"] == "10,20,110,220"
+
+
+def test_detect_faces_parser_source_face_accepts_return_face_url_only():
+    payload = {
+        "error_code": 0,
+        "error_msg": "SUCCESS",
+        "faces_obj": {
+            "0": {
+                "face_urls": ["https://cdn.example/source-face.png"],
+                "crop_landmarks": [],
+                "landmarks_str": [],
+            }
+        },
+    }
+    faces = AkoolClient.normalize_detect_result(payload, stage="source_face_detect", input_url="https://cdn.example/original.png")
+    assert faces["faces"][0]["usable_level"] == "weak"
+    assert faces["faces"][0]["return_face_url_present"] is True
+    assert faces["faces"][0]["opts"] is None
+
+
+def test_detect_faces_parser_source_video_still_raises_when_missing_opts():
     payload = {
         "error_code": 0,
         "error_msg": "SUCCESS",
@@ -115,7 +153,7 @@ def test_detect_faces_parser_raises_when_missing_opts():
         },
     }
     with pytest.raises(RuntimeError, match="returned no crop_landmarks"):
-        AkoolClient.normalize_detect_result(payload, stage="source_face_detect", input_url="https://cdn.example/original.png")
+        AkoolClient.normalize_detect_result(payload, stage="source_video_detect", input_url="https://cdn.example/original.png")
 
 
 def test_submit_video_faceswap_soft_accepted_returns_pending(monkeypatch):
@@ -408,6 +446,61 @@ class _FakeClient:
         return int(value) if value is not None else None
 
     def faceswap_status_label(self, value):
+        return "success" if value == 3 else "processing"
+
+    def extract_result_url(self, payload):
+        item = self.extract_result_item(payload) or {}
+        return item.get("url")
+
+    async def probe_result(self, _url):
+        return 200, "video/mp4"
+
+    async def download_result(self, _url):
+        return b"video"
+
+
+class _BBoxOnlySourceClient(_FakeClient):
+    async def detect_faces(self, url, *args, **kwargs):
+        if "canonical-source-face" in str(url):
+            return {"faces": [{"path": str(url), "opts": "20,20,492,492", "usable_level": "full", "bbox_present": True, "landmarks_present": True}]}
+        return {"faces": [{"path": "https://vendor.example/source-face.jpg", "opts": "10,20,110,220", "region": [10, 20, 110, 220], "usable_level": "bbox_only", "bbox_present": True, "landmarks_present": False, "return_face_url_present": True}]}
+
+
+class _FaceCropOnlySourceClient(_FakeClient):
+    async def detect_faces(self, url, *args, **kwargs):
+        if "canonical-source-face" in str(url):
+            return {"faces": [{"path": str(url), "opts": "16,16,496,496", "usable_level": "full", "bbox_present": True, "landmarks_present": True}]}
+        return {"faces": [{"path": "https://vendor.example/source-crop.jpg", "opts": None, "region": None, "usable_level": "weak", "bbox_present": False, "landmarks_present": False, "return_face_url_present": True}]}
+
+
+class _MultiFaceSourceClient(_FakeClient):
+    async def detect_faces(self, *_args, **_kwargs):
+        return {"faces": [{"path": "https://vendor.example/a.jpg", "opts": "1,2,3,4"}, {"path": "https://vendor.example/b.jpg", "opts": "5,6,7,8"}]}
+
+    def extract_result_item(self, payload):
+        result = payload.get("result")
+        if isinstance(result, list) and result:
+            return result[0]
+        data = payload.get("data")
+        if isinstance(data, dict):
+            nested_result = data.get("result")
+            if isinstance(nested_result, list) and nested_result:
+                return nested_result[0]
+        return None
+
+    def extract_remote_status(self, payload):
+        item = self.extract_result_item(payload) or {}
+        value = item.get("faceswap_status")
+        if value == 3:
+            return "completed"
+        return str(payload.get("status") or "submitted")
+
+    def extract_faceswap_status(self, payload):
+        item = self.extract_result_item(payload) or {}
+        value = item.get("faceswap_status")
+        return int(value) if value is not None else None
+
+    def faceswap_status_label(self, value):
         mapping = {1: "queued", 2: "processing", 3: "success", 4: "failed"}
         return mapping.get(value, "unknown")
 
@@ -672,6 +765,8 @@ class _FakeQualityPipeline:
             "canonical_path": Path("backend/tests/fixtures/canonical_source_face.png"),
             "canonical_source_face_url": f"https://vendor.example/canonical-source-face-{self.canonicalize_calls}.png",
             "canonical_source_face_asset": {"cdn_url": f"https://vendor.example/canonical-source-face-{self.canonicalize_calls}.png"},
+            "canonicalization_mode": _kwargs.get("canonicalization_mode"),
+            "canonical_opts": "16,16,496,496",
         }
 
     def score_source_face(self, *_args, **_kwargs):
@@ -1614,3 +1709,123 @@ def test_swap_engine_retries_provider_temp_file_error_with_raw_target_reason():
     assert result.metadata["retry_reason"] == "raw_target_provider_temp_error"
     assert result.metadata["modify_video_source"] == "raw_target"
     assert result.metadata["output_url"] == "https://cdn.example/outputs/task-v4-retry-temp/result.mp4"
+
+
+def test_swap_engine_source_detect_bbox_only_fallback_continues():
+    engine = AkoolSwapFaceEngine.__new__(AkoolSwapFaceEngine)
+    engine.provider = "akool_swap_face"
+    engine.service_type = "swap"
+    engine.poll_interval_sec = 1
+    engine.timeout_sec = 30
+    engine.watchdog_timeout_sec = 30
+    engine.client = _BBoxOnlySourceClient()
+    engine.r2 = _FakeR2Upload()
+    engine.vendor_bridge = _FakeBridge()
+    engine.video_face_extractor = _FakeExtractor()
+    engine.swap_quality_pipeline = _StrongSourceQualityPipeline()
+    engine.swap_segmenter = _FakeSegmenter(segment_count=1)
+    engine._apply_audio_strategy = lambda content, _keep: content
+    engine._apply_intelligence_postprocess = lambda content, _on_log: (content, {"attempted": True, "applied": True, "reason": None, "filters": "test"})
+
+    record = TaskRecord(
+        task_id="task-source-bbox-only",
+        service="swap",
+        mode="intelligence",
+        input_key="uploads/source.mp4",
+        input_image_key="uploads/source-face.png",
+        metadata={
+            "provider": "swap_intelligence_akool",
+            "run_config_snapshot": {
+                "provider": "swap_intelligence_akool",
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+                "replacement_intensity": "strong_identity",
+                "face_enhance": False,
+            },
+        },
+    )
+    result = asyncio.run(engine.run("task-source-bbox-only", record, {}, on_log=lambda _m: None, on_stage=lambda _s, _p: None))
+    assert result.metadata["source_detect_mode"] == "bbox_fallback"
+    assert result.metadata["source_material_state"] == "weak"
+    assert result.metadata["source_detect_degraded"] is True
+    assert result.metadata["source_manual_review_recommended"] is True
+    assert result.metadata["source_canonicalization_mode"] == "bbox_fallback"
+    assert result.metadata["source_quality_score"] is not None
+
+
+def test_swap_engine_source_detect_face_crop_fallback_continues():
+    engine = AkoolSwapFaceEngine.__new__(AkoolSwapFaceEngine)
+    engine.provider = "akool_swap_face"
+    engine.service_type = "swap"
+    engine.poll_interval_sec = 1
+    engine.timeout_sec = 30
+    engine.watchdog_timeout_sec = 30
+    engine.client = _FaceCropOnlySourceClient()
+    engine.r2 = _FakeR2Upload()
+    engine.vendor_bridge = _FakeBridge()
+    engine.video_face_extractor = _FakeExtractor()
+    engine.swap_quality_pipeline = _StrongSourceQualityPipeline()
+    engine.swap_segmenter = _FakeSegmenter(segment_count=1)
+    engine._apply_audio_strategy = lambda content, _keep: content
+    engine._apply_intelligence_postprocess = lambda content, _on_log: (content, {"attempted": True, "applied": True, "reason": None, "filters": "test"})
+
+    record = TaskRecord(
+        task_id="task-source-face-crop-only",
+        service="swap",
+        mode="intelligence",
+        input_key="uploads/source.mp4",
+        input_image_key="uploads/source-face.png",
+        metadata={
+            "provider": "swap_intelligence_akool",
+            "run_config_snapshot": {
+                "provider": "swap_intelligence_akool",
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+                "replacement_intensity": "strong_identity",
+                "face_enhance": False,
+            },
+        },
+    )
+    result = asyncio.run(engine.run("task-source-face-crop-only", record, {}, on_log=lambda _m: None, on_stage=lambda _s, _p: None))
+    assert result.metadata["source_detect_mode"] == "face_crop_fallback"
+    assert result.metadata["source_material_state"] == "weak"
+    assert result.metadata["source_detect_degraded"] is True
+    assert result.metadata["source_manual_review_recommended"] is True
+    assert result.metadata["source_canonicalization_mode"] == "face_crop_fallback"
+
+
+def test_swap_engine_source_detect_fails_on_multiple_faces_in_single_face_mode():
+    engine = AkoolSwapFaceEngine.__new__(AkoolSwapFaceEngine)
+    engine.provider = "akool_swap_face"
+    engine.service_type = "swap"
+    engine.poll_interval_sec = 1
+    engine.timeout_sec = 30
+    engine.watchdog_timeout_sec = 30
+    engine.client = _MultiFaceSourceClient()
+    engine.r2 = _FakeR2Upload()
+    engine.vendor_bridge = _FakeBridge()
+    engine.video_face_extractor = _FakeExtractor()
+    engine.swap_quality_pipeline = _StrongSourceQualityPipeline()
+    engine.swap_segmenter = _FakeSegmenter(segment_count=1)
+    engine._apply_audio_strategy = lambda content, _keep: content
+    engine._apply_intelligence_postprocess = lambda content, _on_log: (content, {"attempted": True, "applied": True, "reason": None, "filters": "test"})
+
+    record = TaskRecord(
+        task_id="task-source-multi-face",
+        service="swap",
+        mode="intelligence",
+        input_key="uploads/source.mp4",
+        input_image_key="uploads/source-face.png",
+        metadata={
+            "provider": "swap_intelligence_akool",
+            "run_config_snapshot": {
+                "provider": "swap_intelligence_akool",
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+                "replacement_intensity": "strong_identity",
+                "face_enhance": False,
+            },
+        },
+    )
+    with pytest.raises(Exception, match="multiple faces found in single-face mode"):
+        asyncio.run(engine.run("task-source-multi-face", record, {}, on_log=lambda _m: None, on_stage=lambda _s, _p: None))
