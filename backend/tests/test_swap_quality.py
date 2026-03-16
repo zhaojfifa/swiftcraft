@@ -33,3 +33,32 @@ def test_video_face_extractor_candidate_box_uses_opts_when_region_missing():
     extractor = VideoFaceExtractor.__new__(VideoFaceExtractor)
     box = extractor._candidate_face_box({"opts": "10,20,110,170", "region": None, "raw_box": None})
     assert box == (10.0, 20.0, 100.0, 150.0)
+
+
+def test_video_face_extractor_proxy_profiles_produce_distinct_crop_ratios():
+    extractor = VideoFaceExtractor.__new__(VideoFaceExtractor)
+    anchor_box = {"x": 440.0, "y": 120.0, "width": 320.0, "height": 420.0}
+
+    _, _, _, _, standard_ratio, _ = extractor._resolve_proxy_crop_geometry(
+        video_width=1280,
+        video_height=720,
+        anchor_box=anchor_box,
+        crop_profile="standard",
+    )
+    _, _, _, _, tight_ratio, _ = extractor._resolve_proxy_crop_geometry(
+        video_width=1280,
+        video_height=720,
+        anchor_box=anchor_box,
+        crop_profile="tight",
+    )
+    _, _, _, _, extreme_ratio, _ = extractor._resolve_proxy_crop_geometry(
+        video_width=1280,
+        video_height=720,
+        anchor_box=anchor_box,
+        crop_profile="extreme_close",
+    )
+
+    assert 0.8 <= standard_ratio <= 0.85
+    assert 0.6 <= tight_ratio <= 0.7
+    assert 0.4 <= extreme_ratio <= 0.5
+    assert standard_ratio > tight_ratio > extreme_ratio

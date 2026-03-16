@@ -16,6 +16,64 @@ from app.services.vendor_asset_bridge import VendorAssetBridge
 
 
 class VideoFaceExtractor:
+    @staticmethod
+    def _proxy_profile_target_ratio(crop_profile: str) -> float | None:
+        profile = str(crop_profile or "").strip().lower()
+        if profile in {"standard", "proxy_standard"}:
+            return 0.84
+        if profile in {"tight", "proxy_tight"}:
+            return 0.66
+        if profile in {"extreme_close", "proxy_extreme_close", "proxy_extreme"}:
+            return 0.46
+        return None
+
+    @classmethod
+    def _resolve_proxy_crop_geometry(
+        cls,
+        *,
+        video_width: int,
+        video_height: int,
+        anchor_box: Dict[str, Any],
+        crop_profile: str,
+    ) -> tuple[int, int, int, int, float, float]:
+        x = float(anchor_box.get("x") or 0.0)
+        y = float(anchor_box.get("y") or 0.0)
+        width = float(anchor_box.get("width") or video_width or 0.0)
+        height = float(anchor_box.get("height") or video_height or 0.0)
+        center_x = x + width / 2.0
+        center_y = y + height / 2.0
+        video_area = max(video_width * video_height, 1)
+        aspect_ratio = video_width / max(video_height, 1)
+        target_area_ratio = cls._proxy_profile_target_ratio(crop_profile)
+        if target_area_ratio is None:
+            if crop_profile == "standard":
+                margin_x_scale = 1.2
+                margin_y_scale = 1.3
+                crop_w = min(video_width, cls._even_int(width * margin_x_scale))
+                crop_h = min(video_height, cls._even_int(height * margin_y_scale))
+            else:
+                crop_w = video_width
+                crop_h = video_height
+        else:
+            min_margin_map = {
+                0.84: (1.12, 1.18),
+                0.66: (1.05, 1.10),
+                0.46: (1.02, 1.05),
+            }
+            min_margin_x, min_margin_y = min_margin_map.get(target_area_ratio, (1.08, 1.14))
+            target_area = video_area * target_area_ratio
+            crop_w = cls._even_int((target_area * aspect_ratio) ** 0.5)
+            crop_h = cls._even_int(crop_w / max(aspect_ratio, 0.01))
+            crop_w = max(crop_w, cls._even_int(width * min_margin_x))
+            crop_h = max(crop_h, cls._even_int(height * min_margin_y))
+            crop_w = min(video_width, crop_w)
+            crop_h = min(video_height, crop_h)
+        crop_x = max(0, min(video_width - crop_w, cls._even_int(center_x - crop_w / 2.0, minimum=0)))
+        crop_y = max(0, min(video_height - crop_h, cls._even_int(center_y - crop_h / 2.0, minimum=0)))
+        crop_area_ratio = (crop_w * crop_h) / video_area
+        focus_face_ratio = (width * height) / max(crop_w * crop_h, 1)
+        return crop_x, crop_y, crop_w, crop_h, crop_area_ratio, focus_face_ratio
+
     def __init__(self, *, client: AkoolClient, bridge: VendorAssetBridge, quality: SwapQualityPipeline | None = None) -> None:
         self.client = client
         self.bridge = bridge
@@ -338,39 +396,24 @@ class VideoFaceExtractor:
         video_width = int(face_track_summary.get("video_width") or 0)
         video_height = int(face_track_summary.get("video_height") or 0)
         anchor_box = dict(face_track_summary.get("smoothed_anchor_box") or face_track_summary.get("anchor_box") or face_track_summary.get("avg_box") or {})
-        x = float(anchor_box.get("x") or 0.0)
-        y = float(anchor_box.get("y") or 0.0)
-        width = float(anchor_box.get("width") or video_width or 0.0)
-        height = float(anchor_box.get("height") or video_height or 0.0)
         if video_width <= 0 or video_height <= 0:
             raise EngineRunError("target_face_extraction failed: focused clip missing video dimensions")
-        if crop_profile in {"extreme_close", "proxy_extreme_close", "proxy_extreme"}:
-            margin_x_scale = 0.95
-            margin_y_scale = 1.02
-        elif crop_profile in {"tight", "proxy_tight"}:
-            margin_x_scale = 1.0
-            margin_y_scale = 1.08
-        elif crop_profile in {"standard", "proxy_standard"}:
-            margin_x_scale = 1.08
-            margin_y_scale = 1.16
-        else:
-            margin_x_scale = 1.2
-            margin_y_scale = 1.3
-        crop_w = min(video_width, self._even_int(width * margin_x_scale))
-        crop_h = min(video_height, self._even_int(height * margin_y_scale))
-        center_x = x + width / 2.0
-        center_y = y + height / 2.0
-        crop_x = max(0, min(video_width - crop_w, self._even_int(center_x - crop_w / 2.0, minimum=0)))
-        crop_y = max(0, min(video_height - crop_h, self._even_int(center_y - crop_h / 2.0, minimum=0)))
-        crop_area_ratio = (crop_w * crop_h) / max(video_width * video_height, 1)
-        focus_face_ratio = (width * height) / max(crop_w * crop_h, 1)
-        suspicious_overexpanded = crop_area_ratio > 0.75 and ((width * height) / max(video_width * video_height, 1)) < 0.45
+        crop_x, crop_y, crop_w, crop_h, crop_area_ratio, focus_face_ratio = self._resolve_proxy_crop_geometry(
+            video_width=video_width,
+            video_height=video_height,
+            anchor_box=anchor_box,
+            crop_profile=crop_profile,
+        )
+        width = float(anchor_box.get("width") or video_width or 0.0)
+        height = float(anchor_box.get("height") or video_height or 0.0)
+        target_ratio = self._proxy_profile_target_ratio(crop_profile)
+        suspicious_overexpanded = crop_area_ratio > 0.9 if target_ratio is None else crop_area_ratio > min(0.9, target_ratio + 0.08)
         focus_mode = "focused_crop"
         focus_crop_valid = True
         if bool(face_track_summary.get("full_frame_fallback")):
             focus_crop_valid = False
             focus_mode = "full_frame_fallback"
-        elif crop_area_ratio > 0.8 or suspicious_overexpanded:
+        elif suspicious_overexpanded:
             focus_crop_valid = False
             focus_mode = "suspicious_overexpanded"
         crop_filter = f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}"
