@@ -7,6 +7,7 @@ from app.services.task_service import (
 )
 from app.schemas.task import TaskStatus
 from app.models.task import TaskRecord
+from types import SimpleNamespace
 
 
 def _svc() -> TaskService:
@@ -352,3 +353,61 @@ def test_extract_swap_run_config_keeps_force_proxy_override():
         "intelligence",
     )
     assert cfg["force_proxy_override"] is True
+
+
+class _RunnerStore:
+    def __init__(self, record: TaskRecord):
+        self.record = record
+        self.logs = []
+
+    def get_task(self, task_id: str):
+        return self.record if task_id == self.record.task_id else None
+
+    def get_artifacts(self, _task_id: str):
+        return {}
+
+    def append_log(self, _task_id: str, message: str):
+        self.logs.append(message)
+
+    def set_stage(self, task_id: str, stage: str, progress: int):
+        if task_id == self.record.task_id:
+            self.record = self.record.copy(update={"stage": stage, "progress": progress})
+
+    def save(self, record: TaskRecord):
+        self.record = record
+
+
+def test_swap_runner_marks_degraded_outcome_when_business_status_degraded(monkeypatch):
+    svc = _svc()
+    record = TaskRecord(task_id="swap-runner-1", service="swap", mode="intelligence", status="queued", metadata={})
+    store = _RunnerStore(record)
+    svc.store = store
+    monkeypatch.setattr("app.services.task_service.get_engine", lambda _provider: SimpleNamespace())
+    monkeypatch.setattr(svc, "_resolve_provider_from_record", lambda _record: "swap_intelligence_akool")
+    monkeypatch.setattr(svc, "_run_engine_with_watchdog", lambda **_kwargs: {"ok": True})
+
+    def _persist(_task_id, _result):
+        degraded_meta = {
+            "provider_status": "completed",
+            "business_status": "degraded",
+            "delivery_status": "blocked",
+            "quality_grade": "success_degraded",
+            "final_decision": {
+                "provider_status": "completed",
+                "business_status": "degraded",
+                "delivery_status": "blocked",
+                "quality_grade": "success_degraded",
+                "requires_manual_review": True,
+            },
+        }
+        store.record = store.record.copy(update={"status": "success_degraded", "stage": "DONE", "progress": 100, "metadata": degraded_meta, "output_url": "https://cdn.example/result.mp4"})
+        return True
+
+    monkeypatch.setattr(svc, "_persist_success_result", _persist)
+
+    svc.run_task_background("swap-runner-1")
+
+    assert any("[runner] outcome=degraded" in line for line in store.logs)
+    assert store.record.metadata["runner_outcome"] == "degraded"
+    assert store.record.metadata["final_decision"]["runner_outcome"] == "degraded"
+

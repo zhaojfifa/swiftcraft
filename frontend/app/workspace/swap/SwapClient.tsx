@@ -88,9 +88,9 @@ function normalizeSwapProxyProfile(value: string | null | undefined): "standard"
 
 function getQualityGradeTone(value: string | null | undefined): string {
   const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "success_strong") return "text-emerald-700 bg-emerald-50 border-emerald-200";
-  if (normalized === "success_weak") return "text-amber-700 bg-amber-50 border-amber-200";
+  if (normalized === "success_clean") return "text-emerald-700 bg-emerald-50 border-emerald-200";
   if (normalized === "success_degraded") return "text-rose-700 bg-rose-50 border-rose-200";
+  if (normalized === "failed") return "text-rose-700 bg-rose-50 border-rose-200";
   return "text-slate-600 bg-slate-50 border-slate-200";
 }
 
@@ -713,6 +713,7 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskDeliveryStatus = String(finalDecision.delivery_status ?? "");
   const taskDeliveryAllowed = String(finalDecision.delivery_status === "allowed");
   const taskRequiresManualReview = String(finalDecision.requires_manual_review ?? "");
+  const taskRunnerOutcome = String(finalDecision.runner_outcome ?? taskMetadata.runner_outcome ?? "");
   const taskModeSummary = String(taskMetadata.mode || (task?.mode || "") || "");
   const taskProviderSummary = String(taskMetadata.provider || (isSwap ? swapProvider : ""));
   const taskEngineSummary = String(taskMetadata.engine || "");
@@ -758,6 +759,10 @@ export default function SwapClient({ service = "swap" }: Props) {
   const proxyThresholdRequired = String(taskMetadata.proxy_face_ratio_threshold_required ?? "");
   const proxyFaceRatioActual = String(taskMetadata.proxy_face_ratio_after_actual ?? "");
   const proxyRejectedReason = String(finalDecision.proxy_rejected_reason ?? "");
+  const primaryGateReason = String(finalDecision.primary_gate_reason ?? "");
+  const proxyChannelGateReason = String(finalDecision.proxy_channel_gate_reason ?? "");
+  const rawChannelGateReason = String(finalDecision.raw_channel_gate_reason ?? "");
+  const reviewQueueCandidate = String(finalDecision.review_queue_candidate ?? taskMetadata.review_queue_candidate ?? "");
   const rerunRecommended = String(finalDecision.rerun_recommended ?? "");
   const rerunStrategy = String(finalDecision.rerun_strategy ?? "");
   const manualMaterialFixRequired = String(finalDecision.manual_material_fix_required ?? "");
@@ -1791,11 +1796,13 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Route Summary: {taskRouteSummary || "-"}</div>
                         <div>Quality Grade: <span className={`inline-flex rounded border px-2 py-0.5 ${getQualityGradeTone(finalQualityGrade)}`}>{finalQualityGrade || "-"}</span></div>
                         <div>Final Submission Mode: {finalSubmissionMode || "-"}</div>
+                        <div>Outcome: {taskRunnerOutcome || "-"}</div>
                         <div>Provider Status: {taskProviderStatus || "-"}</div>
                         <div>Business Status: {taskBusinessStatus || "-"}</div>
                         <div>Delivery Status: {taskDeliveryStatus || "-"}</div>
                         <div>Delivery Allowed: {taskDeliveryAllowed || "-"}</div>
                         <div>Requires Manual Review: {taskRequiresManualReview || "-"}</div>
+                        <div>Review Queue Candidate: {reviewQueueCandidate || "-"}</div>
                         <div>Single-Face Only: {taskSingleFaceOnly ? taskSingleFaceOnly : "true"}</div>
                         <div>Face Count Limit: {taskFaceCountLimit || "1"}</div>
                         <div>Request ID: {taskRequestId || "-"}</div>
@@ -1817,6 +1824,9 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Final ModifyVideo Source: {finalModifyVideoSource || "-"}</div>
                         <div>Primary Gate Result: {finalGatePrimaryResult || "-"}</div>
                         <div>Final Gate Result: {finalGateResult || "-"}</div>
+                        <div>Primary Gate Reason: {primaryGateReason || "-"}</div>
+                        <div>Proxy Channel Gate Reason: {proxyChannelGateReason || "-"}</div>
+                        <div>Raw Channel Gate Reason: {rawChannelGateReason || "-"}</div>
                         <div>Override Applied: {finalOverrideApplied || "false"}</div>
                         <div>Replacement Mode: {taskReplacementMode || "-"}</div>
                         <div>Degrade Reason: {finalDegradeReason || "-"}</div>
@@ -1903,7 +1913,12 @@ export default function SwapClient({ service = "swap" }: Props) {
                   <div className="space-y-2">
                     {outputUrl ? (
                       <div>
-                        Video: <a href={outputUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline">Open result.mp4</a>
+                        Video: <a href={outputUrl} target="_blank" rel="noreferrer" className={`underline ${taskDeliveryStatus === "blocked" ? "text-amber-700" : "text-blue-600"}`}>{taskDeliveryStatus === "blocked" ? "Open review-only result.mp4" : "Open result.mp4"}</a>
+                      </div>
+                    ) : null}
+                    {taskDeliveryStatus === "blocked" ? (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        This result is not recommended for delivery.
                       </div>
                     ) : null}
                     <div className="grid gap-4 text-xs text-slate-600 sm:grid-cols-2">
@@ -1922,6 +1937,8 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Quality Grade: <span className={`inline-flex rounded border px-2 py-0.5 ${getQualityGradeTone(finalQualityGrade)}`}>{finalQualityGrade || "-"}</span></div>
                         <div>Result Grade: {finalResultGrade || "-"}</div>
                         <div>Result Bucket: {finalResultBucket || "-"}</div>
+                        <div>Delivery Status: {taskDeliveryStatus || "-"}</div>
+                        <div>Requires Manual Review: {taskRequiresManualReview || "-"}</div>
                       </div>
                     </div>
                     <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
@@ -1935,6 +1952,9 @@ export default function SwapClient({ service = "swap" }: Props) {
                       <div>Selected Anchor Frame: {taskSelectedTargetFrameIndex || "-"}</div>
                       <div>Primary Gate Result: {finalGatePrimaryResult || "-"}</div>
                       <div>Final Gate Result: {finalGateResult || "-"}</div>
+                      <div>Primary Gate Reason: {primaryGateReason || "-"}</div>
+                      <div>Proxy Channel Gate Reason: {proxyChannelGateReason || "-"}</div>
+                      <div>Raw Channel Gate Reason: {rawChannelGateReason || "-"}</div>
                       <div>Override Applied: {finalOverrideApplied || "false"}</div>
                       <div>Proxy Threshold Required: {proxyThresholdRequired || "-"}</div>
                       <div>Proxy Face Ratio Actual: {proxyFaceRatioActual || "-"}</div>
@@ -1943,6 +1963,8 @@ export default function SwapClient({ service = "swap" }: Props) {
                       <div>Rerun Recommended: {rerunRecommended || "false"}</div>
                       <div>Rerun Strategy: {rerunStrategy || "-"}</div>
                       <div>Manual Material Fix Required: {manualMaterialFixRequired || "false"}</div>
+                      <div>Outcome: {taskRunnerOutcome || "-"}</div>
+                      <div>Review Queue Candidate: {reviewQueueCandidate || "-"}</div>
                       <div>Route Channel Requested: {routeChannelRequested || "-"}</div>
                       <div>Route Channel Effective: {routeChannelEffective || "-"}</div>
                       <div>Channel Switch Reason: {channelSwitchReason || "-"}</div>

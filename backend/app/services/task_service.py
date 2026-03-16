@@ -1433,12 +1433,12 @@ class TaskService:
                 )
 
         final_decision = metadata.get("final_decision") if isinstance(metadata.get("final_decision"), dict) else {}
-        quality_grade = str(final_decision.get("quality_grade") or metadata.get("quality_grade") or "").strip().lower() or "success_weak"
+        quality_grade = str(final_decision.get("quality_grade") or metadata.get("quality_grade") or "").strip().lower() or "success_clean"
         provider_status = str(final_decision.get("provider_status") or metadata.get("provider_status") or "completed").strip().lower() or "completed"
-        business_status = str(final_decision.get("business_status") or metadata.get("business_status") or ("degraded" if quality_grade == "success_degraded" else "passed")).strip().lower()
-        delivery_status = str(final_decision.get("delivery_status") or metadata.get("delivery_status") or ("blocked" if business_status != "passed" else "allowed")).strip().lower()
-        requires_manual_review = bool(final_decision.get("requires_manual_review") if final_decision else metadata.get("requires_manual_review") or business_status != "passed")
-        final_status = "failed" if business_status == "failed" else "success_degraded" if business_status == "degraded" else "success"
+        business_status = str(final_decision.get("business_status") or metadata.get("business_status") or ("degraded" if quality_grade == "success_degraded" else "success")).strip().lower()
+        delivery_status = str(final_decision.get("delivery_status") or metadata.get("delivery_status") or ("blocked" if business_status != "success" else "allowed")).strip().lower()
+        requires_manual_review = bool(final_decision.get("requires_manual_review") if final_decision else metadata.get("requires_manual_review") or business_status != "success")
+        final_status = "failed" if business_status == "failed" else "success_degraded" if business_status == "degraded" or delivery_status == "blocked" else "success"
         metadata["provider_status"] = provider_status
         metadata["business_status"] = business_status
         metadata["delivery_status"] = delivery_status
@@ -1446,12 +1446,14 @@ class TaskService:
         metadata["delivery_allowed"] = delivery_status == "allowed"
         metadata["requires_manual_review"] = requires_manual_review
         metadata["delivery_decision"] = "deliverable" if delivery_status == "allowed" else "manual_review_required"
+        metadata["review_queue_candidate"] = bool(metadata.get("review_queue_candidate") or delivery_status == "blocked" or requires_manual_review or business_status == "degraded")
         if final_decision:
             final_decision["provider_status"] = provider_status
             final_decision["business_status"] = business_status
             final_decision["delivery_status"] = delivery_status
             final_decision["requires_manual_review"] = requires_manual_review
             final_decision["quality_grade"] = quality_grade
+            final_decision["review_queue_candidate"] = metadata["review_queue_candidate"]
             metadata["final_decision"] = final_decision
         updated = record.copy(
             update={
@@ -1597,9 +1599,30 @@ class TaskService:
         if self._persist_success_result(task_id, result):
             self.store.append_log(task_id, "[runner] outputs persisted to SSOT before DONE")
             elapsed_ms = int((time.perf_counter() - run_started) * 1000)
-            self.store.append_log(task_id, f"[runner] outcome=success elapsed_ms={elapsed_ms}")
             done_record = self.store.get_task(task_id)
             done_status = done_record.status if done_record is not None else "success"
+            outcome = "success"
+            if record.service == "swap" and done_record is not None:
+                done_meta = dict(done_record.metadata or {})
+                done_final_decision = done_meta.get("final_decision") if isinstance(done_meta.get("final_decision"), dict) else {}
+                provider_status = str(done_final_decision.get("provider_status") or done_meta.get("provider_status") or "unknown").strip().lower()
+                business_status = str(done_final_decision.get("business_status") or done_meta.get("business_status") or "").strip().lower()
+                delivery_status = str(done_final_decision.get("delivery_status") or done_meta.get("delivery_status") or "").strip().lower()
+                if provider_status in {"failed", "timeout", "unknown"} or business_status == "failed":
+                    outcome = "failed"
+                elif provider_status == "completed" and business_status == "success" and delivery_status == "allowed":
+                    outcome = "success"
+                elif provider_status == "completed" and (business_status == "degraded" or delivery_status == "blocked"):
+                    outcome = "degraded"
+                else:
+                    outcome = "failed"
+                done_meta["runner_outcome"] = outcome
+                if done_final_decision:
+                    done_final_decision["runner_outcome"] = outcome
+                    done_meta["final_decision"] = done_final_decision
+                self.store.save(done_record.copy(update={"metadata": done_meta}))
+                done_record = self.store.get_task(task_id) or done_record
+            self.store.append_log(task_id, f"[runner] outcome={outcome} elapsed_ms={elapsed_ms}")
             self.store.append_log(task_id, f"[runner] thread done pid={pid} task_id={task_id} status={done_status}")
             return
 
