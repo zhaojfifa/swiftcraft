@@ -617,6 +617,38 @@ class _WeakTrackProxyExtractor(_FakeExtractor):
         return payload
 
 
+class _ComparisonLogWeakTrackExtractor(_FakeExtractor):
+    async def build_target_faces(self, **_kwargs):
+        payload = await super().build_target_faces(**_kwargs)
+        payload["face_track_summary"] = {
+            **dict(payload["face_track_summary"]),
+            "target_detection_mode": "frame_sampling_fallback",
+            "detect_hit_ratio": 0.875,
+            "usable_box_ratio": 0.0,
+            "track_usable_ratio": 0.0,
+            "true_detect_frame_ratio": 0.0,
+            "fallback_frame_ratio": 1.0,
+            "stability_score": 0.0,
+            "coverage_ratio": 0.125,
+        }
+        payload["target_detection_mode"] = "frame_sampling_fallback"
+        payload["target_track_stability_score"] = 0.0
+        payload["target_track_coverage_ratio"] = 0.125
+        payload["detect_hit_ratio"] = 0.875
+        payload["usable_box_ratio"] = 0.0
+        payload["track_usable_ratio"] = 0.0
+        payload["target_anchor_quality"] = {
+            "score": 60.6,
+            "risk_tags": ["fallback_track"],
+            "valid_for_extreme": False,
+        }
+        payload["proxy_face_ratio_before"] = 0.2604
+        payload["proxy_face_ratio_after"] = 0.6012
+        payload["proxy_is_true_close_crop"] = True
+        payload["proxy_quality"] = "sampled"
+        return payload
+
+
 class _FakeQualityPipeline:
     def __init__(self):
         self.canonicalize_calls = 0
@@ -1208,19 +1240,22 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
         },
     )
 
+    logs = []
     result = asyncio.run(
         engine.run(
             "task-v4-extreme-fallback",
             record,
             {},
-            on_log=lambda _message: None,
+            on_log=logs.append,
             on_stage=lambda _stage, _progress: None,
         )
     )
 
+    assert any("[swap][extreme-gate] accepted=false" in message for message in logs)
+    assert not any("[swap][extreme-gate] accepted=true" in message for message in logs)
     assert result.metadata["degraded_fallback_used"] is True
     assert result.metadata["extreme_replace_effective"] is False
-    assert result.metadata["downgrade_reason"] == "target_mapping_face_below_extreme_threshold"
+    assert result.metadata["downgrade_reason"] == "full_frame_target"
     assert result.metadata["proxy_clip_valid"] is False
     assert result.metadata["proxy_clip_used"] is False
     assert result.metadata["modify_video_source"] == "raw_target"
@@ -1229,10 +1264,10 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert result.metadata["downgraded_from_extreme"] is True
     assert result.metadata["replacement_intensity"] == "strong_identity"
     assert result.metadata["route_gate_passed"] is False
-    assert result.metadata["route_gate_fail_reason"] == "target_mapping_face_below_extreme_threshold"
+    assert result.metadata["route_gate_fail_reason"] == "full_frame_target"
     assert result.metadata["extreme_gate_accepted"] is False
-    assert result.metadata["extreme_gate_reason"] == "target_mapping_face_below_extreme_threshold"
-    assert result.metadata["fallback_reason"] == "target_mapping_face_below_extreme_threshold"
+    assert result.metadata["extreme_gate_reason"] == "full_frame_target"
+    assert result.metadata["fallback_reason"] == "full_frame_target"
     assert result.metadata["requested_proxy_profile"] == "extreme_close"
     assert result.metadata["effective_proxy_profile"] is None
     assert result.metadata["target_detection_mode"] == "frame_sampling_fallback"
@@ -1319,6 +1354,71 @@ def test_swap_engine_intelligence_allows_guarded_proxy_on_weak_track(monkeypatch
     assert result.metadata["final_decision"]["modify_video_source_final"] == "proxy_target"
     assert result.metadata["final_decision"]["extreme_gate_final_result"] == "accepted"
     assert result.metadata["final_decision"]["submission_mode_final"] == "extreme_probe_proxy"
+
+def test_swap_engine_intelligence_allows_proxy_probe_with_comparison_log_pattern(monkeypatch):
+    import app.engines.akool_swap_face_engine as swap_engine_module
+
+    original_settings = swap_engine_module.settings
+    monkeypatch.setattr(
+        swap_engine_module,
+        "settings",
+        type("_Settings", (), {**vars(original_settings), "SWAP_EXTREME_ALLOW_PROXY_ON_WEAK_TRACK": True})(),
+    )
+
+    engine = AkoolSwapFaceEngine.__new__(AkoolSwapFaceEngine)
+    engine.provider = "swap_intelligence_akool"
+    engine.service_type = "swap"
+    engine.poll_interval_sec = 1
+    engine.timeout_sec = 30
+    engine.watchdog_timeout_sec = 30
+    engine.client = _FakeClient()
+    engine.r2 = _FakeR2Upload()
+    engine.vendor_bridge = _FakeBridge()
+    engine.video_face_extractor = _ComparisonLogWeakTrackExtractor()
+    engine.swap_quality_pipeline = _StrongSourceQualityPipeline()
+    engine.swap_segmenter = _FakeSegmenter(segment_count=1)
+    engine._apply_audio_strategy = lambda content, _keep: content
+    engine._apply_intelligence_postprocess = lambda content, _on_log: (
+        content,
+        {"attempted": True, "applied": True, "reason": None, "filters": "test"},
+    )
+
+    record = TaskRecord(
+        task_id="task-v4-comparison-log-proxy",
+        service="swap",
+        mode="intelligence",
+        input_key="uploads/source.mp4",
+        input_image_key="uploads/source-face.png",
+        metadata={
+            "provider": "swap_intelligence_akool",
+            "run_config_snapshot": {
+                "provider": "swap_intelligence_akool",
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+                "face_fidelity": "extreme_replace",
+                "replacement_intensity": "extreme_replace",
+                "swap_strength": "extreme_replace",
+                "source_crop_policy": "extreme_identity_core",
+                "target_anchor_policy": "extreme_mapping_primary",
+                "keep_original_audio": True,
+                "face_enhance": False,
+            },
+        },
+    )
+
+    result = asyncio.run(engine.run("task-v4-comparison-log-proxy", record, {}, on_log=lambda _message: None, on_stage=lambda _stage, _progress: None))
+
+    assert result.metadata["replacement_intensity"] == "extreme_replace"
+    assert result.metadata["route_gate_passed"] is True
+    assert result.metadata["gate_primary_channel"] == "proxy_override"
+    assert result.metadata["gate_primary_reason"] == "usable_box_ratio_below_threshold"
+    assert result.metadata["gate_override_applied"] is True
+    assert result.metadata["modifyVideoSource_final"] == "proxy_target"
+    assert result.metadata["submission_mode_final"] == "extreme_probe_proxy"
+    assert result.metadata["final_decision"]["final_extreme_submission_accepted"] is True
+    assert result.metadata["final_decision"]["modify_video_source_final"] == "proxy_target"
+    assert result.metadata["final_decision"]["degrade_reason_final"] == "none"
+
 
 def test_swap_engine_intelligence_force_proxy_override_on_weak_track(monkeypatch):
     import app.engines.akool_swap_face_engine as swap_engine_module

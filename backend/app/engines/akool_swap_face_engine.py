@@ -271,8 +271,6 @@ class AkoolSwapFaceEngine:
             return False, "selected_source_score_below_extreme_threshold", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "selected_source_score_below_extreme_threshold", "raw_detect", False
         if (target_track_face_score or 0) < 70:
             return False, "target_track_score_below_extreme_threshold", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "target_track_score_below_extreme_threshold", "raw_detect", False
-        if (target_track_stability_score or 0.0) < 0.45:
-            return False, "target_track_unstable", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "target_track_unstable", "raw_detect", False
         if not proxy_clip_used:
             return False, "proxy_target_missing", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "proxy_target_missing", "proxy_override", False
         if proxy_quality == "synthetic_fallback":
@@ -287,13 +285,12 @@ class AkoolSwapFaceEngine:
             and (usable_box_ratio or 0.0) >= 0.35
             and (track_usable_ratio or 0.0) >= 0.4
             and (true_detect_frame_ratio or 0.0) >= 0.4
+            and (target_track_stability_score or 0.0) >= 0.45
         )
         if detected_track_lane:
             return True, None, False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, None, "raw_detect", False
 
         gate_primary_reason = None
-        gate_primary_channel = None
-        gate_secondary_blocker = None
         force_proxy_override_used = False
         if str(target_detect_mode or "") != "detected_track":
             gate_primary_reason = "target_detect_mode_not_detected_track"
@@ -303,6 +300,8 @@ class AkoolSwapFaceEngine:
             gate_primary_reason = "track_usable_ratio_below_threshold"
         elif (true_detect_frame_ratio or 0.0) < 0.4:
             gate_primary_reason = "true_detect_frame_ratio_below_threshold"
+        elif (target_track_stability_score or 0.0) < 0.45:
+            gate_primary_reason = "target_track_unstable"
 
         allow_weak_track = bool(getattr(settings, "SWAP_EXTREME_ALLOW_PROXY_ON_WEAK_TRACK", False))
         force_proxy_override = bool(force_proxy_override or getattr(settings, "SWAP_EXTREME_FORCE_PROXY_OVERRIDE", False))
@@ -311,15 +310,13 @@ class AkoolSwapFaceEngine:
             and proxy_is_true_close_crop
             and (proxy_face_ratio_after or 0.0) >= 0.55
             and (source_face_score or 0.0) >= 90
-            and track_quality_confidence >= 0.75
-            and (face_presence_ratio or 0.0) >= 0.95
             and (selected_source_score or 0.0) >= 96
+            and proxy_replace_confidence >= 0.82
         )
         weak_track_lane = (
             (allow_weak_track or force_proxy_override)
             and (detect_hit_ratio or 0.0) >= 0.8
             and proxy_override_ready
-            and proxy_replace_confidence >= 0.82
         )
         if weak_track_lane:
             override_reason = "proxy_face_ratio_sufficient"
@@ -1221,13 +1218,13 @@ class AkoolSwapFaceEngine:
                         if requested_proxy_profile in {"tight", "extreme_close"} and bool(proxy_clip_reason) and proxy_clip_reason.startswith("downgraded_to_standard")
                         else ""
                     )
+                preliminary_extreme_block_reason = None
                 if replacement_intensity == "extreme_replace":
                     target_anchor_valid = bool((target_anchor_quality or {}).get("valid_for_extreme"))
                     if not target_anchor_valid:
-                        downgrade_reason = "target_mapping_face_below_extreme_threshold"
-                        fallback_reason = downgrade_reason
-                        on_log("[swap][target-map] extreme gate failed; downgrade to strong_identity")
-                    proxy_clip_used = bool(proxy_target_url and target_anchor_valid)
+                        preliminary_extreme_block_reason = "target_mapping_face_below_extreme_threshold"
+                        on_log("[swap][target-map] extreme precheck failed reason=target_mapping_face_below_extreme_threshold")
+                    proxy_clip_used = bool(proxy_target_url)
                     modify_video_source = "proxy_target" if proxy_clip_used else "raw_target"
                     if proxy_clip_used:
                         on_log(
@@ -1245,6 +1242,7 @@ class AkoolSwapFaceEngine:
                             fallback_reason = proxy_clip_reason
                 else:
                     modify_video_source = "focused_target" if focused_target_url else "raw_target"
+                    preliminary_extreme_block_reason = None
                 if replacement_intensity != "extreme_replace" and proxy_clip_reason and not fallback_reason:
                     fallback_reason = proxy_clip_reason
                 intelligence_source_detect = await self.client.detect_faces(
@@ -1275,13 +1273,9 @@ class AkoolSwapFaceEngine:
                             source_face_variants[ref_index] = dict(candidate_faces[0])
                 replacement_mode = "explicit_mapping_enhanced"
                 on_stage("running", 35)
-                effective_replacement_intensity = (
-                    "extreme_replace"
-                    if replacement_intensity == "extreme_replace" and downgrade_reason is None
-                    else "strong_identity" if replacement_intensity == "extreme_replace"
-                    else replacement_intensity
-                )
-                submit_face_enhance = face_enhance if downgrade_reason is None else True
+                extreme_requested = replacement_intensity == "extreme_replace"
+                effective_replacement_intensity = "extreme_replace" if extreme_requested else replacement_intensity
+                submit_face_enhance = face_enhance if not downgrade_reason else True
                 (
                     effective_replacement_intensity,
                     submit_modify_video,
@@ -1337,13 +1331,17 @@ class AkoolSwapFaceEngine:
                     ),
                     force_proxy_override=force_proxy_override_requested,
                 )
+                if preliminary_extreme_block_reason and effective_replacement_intensity == "extreme_replace" and not route_gate_passed:
+                    route_gate_fail_reason = route_gate_fail_reason or preliminary_extreme_block_reason
+                    gate_primary_reason = gate_primary_reason or preliminary_extreme_block_reason
                 if _downgraded_from_extreme and route_gate_passed:
                     route_gate_passed = False
                     route_gate_fail_reason = fallback_reason or "proxy_target_required_for_extreme_replace"
                     weak_track_proxy_override_used = False
                     weak_track_proxy_override_reason = None
-                if not route_gate_passed and effective_replacement_intensity == "extreme_replace":
-                    downgrade_reason = route_gate_fail_reason or "extreme_route_gate_failed"
+                final_extreme_gate_accepted = bool(extreme_requested and route_gate_passed and effective_replacement_intensity == "extreme_replace")
+                if extreme_requested and not final_extreme_gate_accepted:
+                    downgrade_reason = route_gate_fail_reason or preliminary_extreme_block_reason or downgrade_reason or "extreme_route_gate_failed"
                     fallback_reason = downgrade_reason
                     gate_failed_metric = "proxy_face_ratio_after" if downgrade_reason == "proxy_face_ratio_after_below_threshold" else downgrade_reason
                     gate_secondary_blocker = gate_primary_reason or downgrade_reason
@@ -1359,11 +1357,12 @@ class AkoolSwapFaceEngine:
                     modify_video_source = "focused_target" if focused_target_url else "raw_target"
                 else:
                     gate_secondary_blocker = gate_primary_reason
-                    on_log(
-                        f"[swap][extreme-gate] accepted=true channel={gate_primary_channel or 'raw_detect'} "
-                        f"reason={weak_track_proxy_override_reason or 'none'} "
-                        f"primary_reason={gate_primary_reason or 'none'} override={str(weak_track_proxy_override_used).lower()}"
-                    )
+                    if extreme_requested:
+                        on_log(
+                            f"[swap][extreme-gate] accepted=true channel={gate_primary_channel or 'raw_detect'} "
+                            f"reason={weak_track_proxy_override_reason or 'none'} "
+                            f"primary_reason={gate_primary_reason or 'none'} override={str(weak_track_proxy_override_used).lower()}"
+                        )
                 if effective_replacement_intensity == "extreme_replace":
                     modify_video_source = "proxy_target"
                     if gate_primary_channel == "proxy_override":
