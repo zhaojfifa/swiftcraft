@@ -212,6 +212,7 @@ def test_localization_multi_segment_translation(monkeypatch, tmp_path: Path):
     )
     monkeypatch.setattr(module, "srt_to_text", lambda s: s.replace("\n", " "))
     monkeypatch.setattr(module, "synthesize_mp3", _fake_synthesize_mp3)
+    monkeypatch.setattr(module, "render_audio_track", lambda *_args, **_kwargs: _args[1].write_bytes(b"mixed"))
     monkeypatch.setattr(module, "mix_ducking", lambda *_args, **_kwargs: _args[2].write_bytes(b"mixed"))
     monkeypatch.setattr(module, "render_with_original_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"orig-audio"))
     monkeypatch.setattr(module, "mux", lambda *_args, **_kwargs: _args[2].write_bytes(b"localized-mp4"))
@@ -630,3 +631,92 @@ def test_localization_manifest_contains_translation_qa(monkeypatch, tmp_path: Pa
     assert manifest["translation"]["qa"]["translated_lines"] >= 1
     assert "translated_segments_path" in manifest["translation"]
     assert result.metadata["translation"]["provider"] == "gemini"
+
+
+def test_localization_normalizes_short_mixed_audio_before_mux(monkeypatch, tmp_path: Path):
+    from app.engines import localization_engine as module
+
+    _patch_engine_runtime(monkeypatch, module, tmp_path)
+    monkeypatch.setattr(module, "extract_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"wav"))
+    monkeypatch.setattr(module, "normalize_audio_for_asr", lambda *_args, **_kwargs: _args[1].write_bytes(b"norm"))
+    monkeypatch.setattr(module, "audio_rms_db", lambda *_args, **_kwargs: -18.0)
+    monkeypatch.setattr(module, "transcribe", lambda *_args, **_kwargs: [_Seg(start=0.0, end=2.0, text="hello world")])
+    monkeypatch.setattr(
+        module,
+        "segments_to_srt",
+        lambda *_args, **_kwargs: "1\n00:00:00,000 --> 00:00:02,000\nhello world\n",
+    )
+    monkeypatch.setattr(
+        module,
+        "retry_missing_segments_with_gemini",
+        lambda segments, **_kwargs: _GeminiResult(
+            translated_segments=[
+                {
+                    "index": 1,
+                    "start": segments[0]["start"],
+                    "end": segments[0]["end"],
+                    "origin": segments[0]["text"],
+                    "translated": "??-????",
+                }
+            ],
+            missing_indexes=[],
+            retry_used=False,
+        ),
+    )
+    monkeypatch.setattr(module, "srt_to_text", lambda s: s.replace("\n", " "))
+    monkeypatch.setattr(module, "synthesize_mp3", _fake_synthesize_mp3)
+    monkeypatch.setattr(module, "mix_ducking", lambda *_args, **_kwargs: _args[2].write_bytes(b"mixed"))
+    monkeypatch.setattr(module, "render_audio_track", lambda *_args, **_kwargs: _args[1].write_bytes(b"mixed"))
+    monkeypatch.setattr(module, "render_with_original_audio", lambda *_args, **_kwargs: _args[1].write_bytes(b"orig-audio"))
+
+    def _normalize_audio_duration(inp, out, *, target_duration_sec, tolerance_sec=0.15, on_log=None):
+        Path(out).write_bytes(Path(inp).read_bytes())
+        return {
+            "applied": True,
+            "mode": "pad_silence",
+            "input_duration_sec": 36.967,
+            "output_duration_sec": 41.667,
+        }
+
+    monkeypatch.setattr(module, "normalize_audio_duration", _normalize_audio_duration)
+    monkeypatch.setattr(module, "mux", lambda *_args, **_kwargs: _args[2].write_bytes(b"localized-mp4"))
+    monkeypatch.setattr(module, "burn_subtitles", lambda *_args, **_kwargs: _args[2].write_bytes(b"localized-final"))
+
+    def _probe_duration(p):
+        name = Path(p).name
+        if name in {"source.mp4", "source.wav", "source_norm.wav"}:
+            return 41.667
+        if name == "mixed.wav":
+            return 36.967
+        if name == "mixed_fixed.wav":
+            return 41.667
+        if name in {"localized_audio_only.mp4", "localized.mp4"}:
+            return 41.62
+        if name == "dub.mp3":
+            return 36.967
+        return None
+
+    monkeypatch.setattr(module, "probe_duration_sec", _probe_duration)
+    monkeypatch.setattr(
+        module,
+        "probe_av_streams",
+        lambda *_args, **_kwargs: {
+            "has_audio": True,
+            "has_subtitle_stream": False,
+            "subtitle_codecs": [],
+            "audio_codecs": ["aac"],
+        },
+    )
+
+    engine = LocalizationEngine()
+    record = TaskRecord(task_id="task-duration-fix-1", service="localization", mode="baseline", input_video_url="https://example/video.mp4")
+
+    result, _logs, _stages = _run_engine(engine, record)
+
+    assert result.output_url is not None
+    assert result.metadata["duration_fix_applied"] is True
+    assert result.metadata["duration_fix_mode"] == "pad_silence"
+    assert result.metadata["source_video_sec"] == 41.667
+    assert result.metadata["mixed_audio_sec_before_fix"] == 36.967
+    assert result.metadata["mixed_audio_sec_after_fix"] == 41.667
+    assert result.metadata["final_output_sec"] == 41.62

@@ -29,6 +29,7 @@ from app.utils.ffmpeg_localization import (
     mix_ducking,
     mux,
     normalize_audio_for_asr,
+    normalize_audio_duration,
     probe_av_streams,
     probe_duration_sec,
     render_audio_track,
@@ -74,6 +75,11 @@ class LocalizationEngine:
         dub_aligned_peak_db: float | None = None
         mixed_rms_db: float | None = None
         mixed_peak_db: float | None = None
+        mixed_audio_duration_sec_before_fix: float | None = None
+        mixed_audio_duration_sec_after_fix: float | None = None
+        final_output_sec: float | None = None
+        duration_fix_applied = False
+        duration_fix_mode = "copy"
         localized_rms_db: float | None = None
         localized_peak_db: float | None = None
         workspace = Path(__file__).resolve().parents[3] / "video_workspace" / "tasks" / task_id / "localization"
@@ -980,6 +986,7 @@ class LocalizationEngine:
             end_step("synthesizing", step)
 
             mixed_wav = workspace / "mixed.wav"
+            mixed_fixed_wav = workspace / "mixed_fixed.wav"
             localized_mp4_path = workspace / "localized.mp4"
             source_video_duration_sec = _probe_duration(source_video)
             mixed_audio_duration_sec = None
@@ -1035,6 +1042,7 @@ class LocalizationEngine:
                         on_log=on_log,
                     )
                 mixed_audio_duration_sec = _probe_duration(mixed_wav)
+                mixed_audio_duration_sec_before_fix = mixed_audio_duration_sec
                 on_log(
                     "[loc][render_audio] mix_end "
                     f"elapsed_ms={int((time.perf_counter() - mix_started) * 1000)} "
@@ -1069,11 +1077,31 @@ class LocalizationEngine:
                             f"[loc][audio_guard] applied mixed_rms_db={mixed_rms_db if mixed_rms_db is not None else 'n/a'} "
                             f"mixed_peak_db={mixed_peak_db if mixed_peak_db is not None else 'n/a'}"
                         )
+                if source_video_duration_sec is not None and source_video_duration_sec > 0:
+                    duration_fix = normalize_audio_duration(
+                        mixed_wav,
+                        mixed_fixed_wav,
+                        target_duration_sec=source_video_duration_sec,
+                        tolerance_sec=0.15,
+                        on_log=on_log,
+                    )
+                    duration_fix_applied = bool(duration_fix.get("applied"))
+                    duration_fix_mode = str(duration_fix.get("mode") or "copy")
+                    mixed_audio_duration_sec_after_fix = duration_fix.get("output_duration_sec")
+                    mixed_wav = mixed_fixed_wav if mixed_fixed_wav.exists() else mixed_wav
+                    on_log(
+                        "[loc][duration] audio_fix "
+                        f"source_video_sec={source_video_duration_sec:.3f} "
+                        f"mixed_audio_sec_before_fix={mixed_audio_duration_sec_before_fix if mixed_audio_duration_sec_before_fix is not None else 'n/a'} "
+                        f"mixed_audio_sec_after_fix={mixed_audio_duration_sec_after_fix if mixed_audio_duration_sec_after_fix is not None else 'n/a'} "
+                        f"duration_fix_applied={str(duration_fix_applied).lower()} "
+                        f"duration_fix_mode={duration_fix_mode}"
+                    )
                 on_log(
                     "[loc][duration] pre_mux "
                     f"source_video_sec={source_video_duration_sec if source_video_duration_sec is not None else 'n/a'} "
                     f"dub_audio_sec={dub_duration_sec if dub_duration_sec is not None else 'n/a'} "
-                    f"mixed_audio_sec={mixed_audio_duration_sec if mixed_audio_duration_sec is not None else 'n/a'}"
+                    f"mixed_audio_sec={mixed_audio_duration_sec_after_fix if mixed_audio_duration_sec_after_fix is not None else mixed_audio_duration_sec if mixed_audio_duration_sec is not None else 'n/a'}"
                 )
             except Exception as render_exc:
                 on_log(
@@ -1125,6 +1153,7 @@ class LocalizationEngine:
                     on_log=on_log,
                 )
                 output_video_duration_sec = _probe_duration(localized_mp4_path)
+                final_output_sec = output_video_duration_sec
                 _log_audio_diagnostics("localized_mp4", localized_mp4_path)
                 on_log(
                     "[loc][burn_subtitle] burn_ass_end "
@@ -1140,7 +1169,7 @@ class LocalizationEngine:
                     source_video_duration_sec is not None
                     and output_video_duration_sec is not None
                     and source_video_duration_sec >= 3.0
-                    and output_video_duration_sec < (source_video_duration_sec - 1.0)
+                    and output_video_duration_sec < (source_video_duration_sec - 0.20)
                 ):
                     raise EngineRunError(
                         "localized output duration regression detected: "
@@ -1296,6 +1325,12 @@ class LocalizationEngine:
                     "voice_speed": voice_speed,
                     "dub_rms_db": dub_aligned_rms_db,
                     "dub_peak_db": dub_aligned_peak_db,
+                    "source_video_sec": source_video_duration_sec,
+                    "mixed_audio_sec_before_fix": mixed_audio_duration_sec_before_fix,
+                    "mixed_audio_sec_after_fix": mixed_audio_duration_sec_after_fix,
+                    "duration_fix_applied": duration_fix_applied,
+                    "duration_fix_mode": duration_fix_mode,
+                    "final_output_sec": final_output_sec,
                     "mixed_rms_db": mixed_rms_db,
                     "mixed_peak_db": mixed_peak_db,
                     "localized_rms_db": localized_rms_db,
@@ -1303,6 +1338,12 @@ class LocalizationEngine:
                     "audio_qa": {
                         "dub_rms_db": dub_aligned_rms_db,
                         "dub_peak_db": dub_aligned_peak_db,
+                        "source_video_sec": source_video_duration_sec,
+                        "mixed_audio_sec_before_fix": mixed_audio_duration_sec_before_fix,
+                        "mixed_audio_sec_after_fix": mixed_audio_duration_sec_after_fix,
+                        "duration_fix_applied": duration_fix_applied,
+                        "duration_fix_mode": duration_fix_mode,
+                        "final_output_sec": final_output_sec,
                         "mixed_rms_db": mixed_rms_db,
                         "mixed_peak_db": mixed_peak_db,
                         "localized_rms_db": localized_rms_db,
@@ -1366,6 +1407,12 @@ class LocalizationEngine:
                     "tts": tts_meta,
                     "policy": {"enforced": policy_flags},
                     "source_probe": source_probe,
+                    "source_video_sec": source_video_duration_sec,
+                    "mixed_audio_sec_before_fix": mixed_audio_duration_sec_before_fix,
+                    "mixed_audio_sec_after_fix": mixed_audio_duration_sec_after_fix,
+                    "duration_fix_applied": duration_fix_applied,
+                    "duration_fix_mode": duration_fix_mode,
+                    "final_output_sec": final_output_sec,
                 },
             )
         except Exception as exc:

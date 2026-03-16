@@ -748,10 +748,76 @@ def mux(
         "48000",
         "-ac",
         "1",
-        "-shortest",
         str(mp4_out),
     ]
     run_ffmpeg(cmd, timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MUX", "180")), tag="ffmpeg_mux", on_log=on_log)
+
+
+def normalize_audio_duration(
+    input_audio: Path,
+    output_audio: Path,
+    *,
+    target_duration_sec: float,
+    tolerance_sec: float = 0.15,
+    on_log: Optional[Callable[[str], None]] = None,
+) -> dict[str, Any]:
+    output_audio.parent.mkdir(parents=True, exist_ok=True)
+    input_duration_sec = probe_duration_sec(input_audio, on_log=on_log)
+    if input_duration_sec is None or target_duration_sec <= 0:
+        return {
+            "applied": False,
+            "mode": "unknown",
+            "input_duration_sec": input_duration_sec,
+            "output_duration_sec": input_duration_sec,
+        }
+    delta = input_duration_sec - target_duration_sec
+    if abs(delta) <= tolerance_sec:
+        if input_audio != output_audio:
+            output_audio.write_bytes(input_audio.read_bytes())
+        return {
+            "applied": False,
+            "mode": "copy",
+            "input_duration_sec": input_duration_sec,
+            "output_duration_sec": input_duration_sec,
+        }
+    if delta < 0:
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-nostdin",
+            "-y",
+            "-i",
+            str(input_audio),
+            "-af",
+            "apad",
+            "-t",
+            f"{target_duration_sec:.3f}",
+            str(output_audio),
+        ]
+        mode = "pad_silence"
+        tag = "ffmpeg_audio_pad"
+    else:
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-nostdin",
+            "-y",
+            "-i",
+            str(input_audio),
+            "-t",
+            f"{target_duration_sec:.3f}",
+            str(output_audio),
+        ]
+        mode = "trim"
+        tag = "ffmpeg_audio_trim"
+    run_ffmpeg(cmd, timeout_sec=int(os.getenv("FFMPEG_TIMEOUT_SEC_MIX", "180")), tag=tag, on_log=on_log)
+    output_duration_sec = probe_duration_sec(output_audio, on_log=on_log)
+    return {
+        "applied": True,
+        "mode": mode,
+        "input_duration_sec": input_duration_sec,
+        "output_duration_sec": output_duration_sec,
+    }
 
 
 def burn_subtitles(
