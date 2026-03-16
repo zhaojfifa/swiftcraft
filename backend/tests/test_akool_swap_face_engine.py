@@ -1267,7 +1267,7 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert not any("[swap][extreme-gate]" in message for message in logs)
     assert result.metadata["degraded_fallback_used"] is True
     assert result.metadata["extreme_replace_effective"] is False
-    assert result.metadata["downgrade_reason"] == "full_frame_target"
+    assert result.metadata["downgrade_reason"] == "usable_box_ratio_below_threshold"
     assert result.metadata["proxy_clip_valid"] is False
     assert result.metadata["proxy_clip_used"] is False
     assert result.metadata["modify_video_source"] == "raw_target"
@@ -1276,10 +1276,10 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert result.metadata["downgraded_from_extreme"] is True
     assert result.metadata["replacement_intensity"] == "strong_identity"
     assert result.metadata["route_gate_passed"] is False
-    assert result.metadata["route_gate_fail_reason"] == "full_frame_target"
+    assert result.metadata["route_gate_fail_reason"] == "usable_box_ratio_below_threshold"
     assert result.metadata["extreme_gate_accepted"] is False
-    assert result.metadata["extreme_gate_reason"] == "full_frame_target"
-    assert result.metadata["fallback_reason"] == "full_frame_target"
+    assert result.metadata["extreme_gate_reason"] == "usable_box_ratio_below_threshold"
+    assert result.metadata["fallback_reason"] == "usable_box_ratio_below_threshold"
     assert result.metadata["requested_proxy_profile"] == "extreme_close"
     assert result.metadata["effective_proxy_profile"] is None
     assert result.metadata["provider_status"] == "completed"
