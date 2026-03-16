@@ -565,27 +565,27 @@ class VideoFaceExtractor:
         track_usable_frames = 0
         frame_boxes: List[Dict[str, Any]] = []
         face_ratios: List[float] = []
+        bad_frame_reasons = {"no_face_item", "missing_face_box", "full_frame_fallback", "bbox_suspicious"}
         for candidate in candidates:
-            if bool(candidate.get("detect_hit")):
+            detect_hit = bool(candidate.get("detect_hit"))
+            box_usable = bool(candidate.get("box_usable"))
+            track_usable = bool(candidate.get("track_usable"))
+            unusable_reason = str(candidate.get("unusable_reason") or "").strip() or None
+            used_bbox_fallback = bool(candidate.get("used_bbox_fallback"))
+            if detect_hit:
                 detect_hit_frames += 1
-            if bool(candidate.get("box_usable")):
+            if box_usable:
                 box_usable_frames += 1
-            if bool(candidate.get("track_usable")):
+            if track_usable:
                 track_usable_frames += 1
-            box = self._region_to_box(candidate.get("region")) or self._opts_to_box(candidate.get("opts"))
-            if box is None:
-                frame_path = Path(str(candidate.get("frame_path") or ""))
-                if frame_path.exists():
-                    width, height = self._image_size(frame_path)
-                    box = (0.0, 0.0, float(width), float(height))
-            if box is None:
-                continue
-            if bool(candidate.get("used_bbox_fallback")):
+            if used_bbox_fallback or unusable_reason in bad_frame_reasons:
                 fallback_frames += 1
-            boxes.append(box)
+            box = self._region_to_box(candidate.get("region")) or self._opts_to_box(candidate.get("opts"))
             frame_index = int(candidate.get("frame_index") or 0)
-            frames.append(frame_index)
-            face_ratios.append(float(candidate.get("face_area_ratio") or 0.0))
+            if track_usable and box is not None and not used_bbox_fallback and unusable_reason not in bad_frame_reasons:
+                boxes.append(box)
+                frames.append(frame_index)
+                face_ratios.append(float(candidate.get("face_area_ratio") or 0.0))
             frame_boxes.append(
                 {
                     "frame_index": frame_index,
@@ -595,14 +595,14 @@ class VideoFaceExtractor:
                         "y": round(box[1], 2),
                         "width": round(box[2], 2),
                         "height": round(box[3], 2),
-                    },
-                    "used_bbox_fallback": bool(candidate.get("used_bbox_fallback")),
+                    } if box is not None else None,
+                    "used_bbox_fallback": used_bbox_fallback,
                     "detect_source": str(candidate.get("detect_source") or "unknown"),
                     "detect_success": bool(candidate.get("detect_success")),
-                    "detect_hit": bool(candidate.get("detect_hit")),
-                    "box_usable": bool(candidate.get("box_usable")),
-                    "track_usable": bool(candidate.get("track_usable")),
-                    "unusable_reason": candidate.get("unusable_reason"),
+                    "detect_hit": detect_hit,
+                    "box_usable": box_usable,
+                    "track_usable": track_usable,
+                    "unusable_reason": unusable_reason,
                     "face_ratio": round(float(candidate.get("face_area_ratio") or 0.0), 4),
                     "sharpness_score": round(float(candidate.get("sharpness") or 0.0), 4),
                     "frontalness": round(float(candidate.get("frontalness") or 0.0), 4),

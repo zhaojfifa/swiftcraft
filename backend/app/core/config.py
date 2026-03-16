@@ -23,6 +23,7 @@ class Settings:
     SWIFT_SWAP_FACE_FIDELITY_DEFAULT: str = os.getenv("SWIFT_SWAP_FACE_FIDELITY_DEFAULT", "balanced")
     SWAP_INTEL_AB_COMPARE: bool = _get_bool(os.getenv("SWAP_INTEL_AB_COMPARE"), False)
     SWAP_EXTREME_ALLOW_PROXY_ON_WEAK_TRACK: bool = _get_bool(os.getenv("SWAP_EXTREME_ALLOW_PROXY_ON_WEAK_TRACK"), False)
+    SWAP_EXTREME_FORCE_PROXY_OVERRIDE: bool = _get_bool(os.getenv("SWAP_EXTREME_FORCE_PROXY_OVERRIDE"), False)
     AKOOL_CLIENT_ID: str = os.getenv("AKOOL_CLIENT_ID", "")
     AKOOL_API_KEY: str = os.getenv("AKOOL_API_KEY", "")
     WAVESPEED_API_KEY: str = os.getenv("WAVESPEED_API_KEY", "")

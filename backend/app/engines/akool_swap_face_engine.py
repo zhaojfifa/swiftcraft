@@ -207,9 +207,10 @@ class AkoolSwapFaceEngine:
         proxy_quality: str,
         proxy_face_ratio_after: float | None,
         selected_source_score: float | None,
-    ) -> tuple[bool, str | None, bool, str | None, float, float, float, str | None]:
+        face_presence_ratio: float | None,
+    ) -> tuple[bool, str | None, bool, str | None, float, float, float, str | None, str | None, bool]:
         if replacement_intensity != "extreme_replace":
-            return True, None, False, None, 0.0, 0.0, 0.0, None
+            return True, None, False, None, 0.0, 0.0, 0.0, None, "raw_detect", False
         source_score_norm = min(1.0, max(0.0, (source_face_score or 0.0) / 100.0))
         selected_score_norm = min(1.0, max(0.0, (selected_source_score or 0.0) / 120.0))
         raw_detect_confidence = round(
@@ -264,21 +265,21 @@ class AkoolSwapFaceEngine:
             4,
         )
         if (source_face_score or 0) < 80:
-            return False, "source_score_below_extreme_threshold", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "source_score_below_extreme_threshold"
+            return False, "source_score_below_extreme_threshold", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "source_score_below_extreme_threshold", "raw_detect", False
         if (selected_source_score or 0) < 96:
-            return False, "selected_source_score_below_extreme_threshold", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "selected_source_score_below_extreme_threshold"
+            return False, "selected_source_score_below_extreme_threshold", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "selected_source_score_below_extreme_threshold", "raw_detect", False
         if (target_track_face_score or 0) < 70:
-            return False, "target_track_score_below_extreme_threshold", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "target_track_score_below_extreme_threshold"
+            return False, "target_track_score_below_extreme_threshold", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "target_track_score_below_extreme_threshold", "raw_detect", False
         if (target_track_stability_score or 0.0) < 0.45:
-            return False, "target_track_unstable", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "target_track_unstable"
+            return False, "target_track_unstable", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "target_track_unstable", "raw_detect", False
         if not proxy_clip_used:
-            return False, "proxy_target_missing", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "proxy_target_missing"
+            return False, "proxy_target_missing", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "proxy_target_missing", "proxy_override", False
         if proxy_quality == "synthetic_fallback":
-            return False, "proxy_quality_synthetic_fallback", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "proxy_quality_synthetic_fallback"
+            return False, "proxy_quality_synthetic_fallback", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "proxy_quality_synthetic_fallback", "proxy_override", False
         if (proxy_face_ratio_after or 0.0) < 0.55:
-            return False, "proxy_face_ratio_after_below_threshold", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "proxy_face_ratio_after_below_threshold"
+            return False, "proxy_face_ratio_after_below_threshold", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "proxy_face_ratio_after_below_threshold", "proxy_override", False
         if not proxy_is_true_close_crop:
-            return False, "proxy_not_true_close_crop", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "proxy_not_true_close_crop"
+            return False, "proxy_not_true_close_crop", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, "proxy_not_true_close_crop", "proxy_override", False
 
         detected_track_lane = (
             str(target_detect_mode or "") == "detected_track"
@@ -287,9 +288,12 @@ class AkoolSwapFaceEngine:
             and (true_detect_frame_ratio or 0.0) >= 0.4
         )
         if detected_track_lane:
-            return True, None, False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, None
+            return True, None, False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, None, "raw_detect", False
 
         gate_primary_reason = None
+        gate_primary_channel = None
+        gate_secondary_blocker = None
+        force_proxy_override_used = False
         if str(target_detect_mode or "") != "detected_track":
             gate_primary_reason = "target_detect_mode_not_detected_track"
         if (usable_box_ratio or 0.0) < 0.35:
@@ -300,21 +304,31 @@ class AkoolSwapFaceEngine:
             gate_primary_reason = "true_detect_frame_ratio_below_threshold"
 
         allow_weak_track = bool(getattr(settings, "SWAP_EXTREME_ALLOW_PROXY_ON_WEAK_TRACK", False))
-        weak_track_lane = (
-            allow_weak_track
-            and (detect_hit_ratio or 0.0) >= 0.8
+        force_proxy_override = bool(getattr(settings, "SWAP_EXTREME_FORCE_PROXY_OVERRIDE", False))
+        proxy_override_ready = (
+            proxy_clip_used
             and proxy_is_true_close_crop
             and (proxy_face_ratio_after or 0.0) >= 0.55
-            and (source_face_score or 0.0) >= 80
+            and (source_face_score or 0.0) >= 90
+            and track_quality_confidence >= 0.75
+            and (face_presence_ratio or 0.0) >= 0.95
             and (selected_source_score or 0.0) >= 96
-            and track_quality_confidence >= 0.38
+        )
+        weak_track_lane = (
+            (allow_weak_track or force_proxy_override)
+            and (detect_hit_ratio or 0.0) >= 0.8
+            and proxy_override_ready
             and proxy_replace_confidence >= 0.82
         )
         if weak_track_lane:
-            return True, None, True, "proxy_face_ratio_sufficient", weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, gate_primary_reason
-        return False, gate_primary_reason or "weak_track_proxy_override_not_allowed", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, gate_primary_reason
+            override_reason = "proxy_face_ratio_sufficient"
+            if force_proxy_override:
+                override_reason = "force_proxy_override"
+            return True, None, True, override_reason, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, gate_primary_reason, "proxy_override", force_proxy_override
+        return False, gate_primary_reason or "weak_track_proxy_override_not_allowed", False, None, weak_track_proxy_confidence, raw_detect_confidence, proxy_replace_confidence, gate_primary_reason, "raw_detect", False
 
     async def _run_intelligence_vendor_job(
+
         self,
         *,
         source_face: Dict[str, Any],
@@ -704,6 +718,9 @@ class AkoolSwapFaceEngine:
         raw_detect_confidence = 0.0
         proxy_replace_confidence = 0.0
         gate_primary_reason = None
+        gate_primary_channel = None
+        gate_secondary_blocker = None
+        force_proxy_override_used = False
         ab_compare_runtime: Dict[str, Any] | None = None
         quality_summary: Dict[str, Any] | None = None
         degraded_fallback_used = False
@@ -1228,6 +1245,8 @@ class AkoolSwapFaceEngine:
                     raw_detect_confidence,
                     proxy_replace_confidence,
                     gate_primary_reason,
+                    gate_primary_channel,
+                    force_proxy_override_used,
                 ) = self._evaluate_extreme_route_gate(
                     replacement_intensity=effective_replacement_intensity,
                     target_detect_mode=target_detect_mode,
@@ -1243,6 +1262,17 @@ class AkoolSwapFaceEngine:
                     proxy_quality=proxy_quality,
                     proxy_face_ratio_after=proxy_face_ratio_after,
                     selected_source_score=(selected_source_ref or {}).get("selection_score") or source_face_score,
+                    face_presence_ratio=min(
+                        1.0,
+                        max(
+                            0.0,
+                            (0.45 if proxy_clip_used else 0.0)
+                            + (0.2 if proxy_is_true_close_crop else 0.0)
+                            + min(0.25, max(0.0, ((proxy_face_ratio_after or 0.0) - 0.35) / 0.2) * 0.25)
+                            + min(0.1, max(0.0, (detect_hit_ratio or 0.0) - 0.8) * 0.5)
+                            + (0.05 if (source_face_score or 0.0) >= 90 else 0.0),
+                        ),
+                    ),
                 )
                 if _downgraded_from_extreme and route_gate_passed:
                     route_gate_passed = False
@@ -1253,15 +1283,21 @@ class AkoolSwapFaceEngine:
                     downgrade_reason = route_gate_fail_reason or "extreme_route_gate_failed"
                     fallback_reason = downgrade_reason
                     gate_failed_metric = "proxy_face_ratio_after" if downgrade_reason == "proxy_face_ratio_after_below_threshold" else downgrade_reason
-                    on_log(f"[swap][extreme-gate] accepted=false reason={downgrade_reason}")
+                    gate_secondary_blocker = gate_primary_reason or downgrade_reason
+                    on_log(
+                        f"[swap][extreme-gate] accepted=false channel={gate_primary_channel or 'raw_detect'} "
+                        f"reason={downgrade_reason} secondary_blocker={gate_secondary_blocker or downgrade_reason}"
+                    )
                     on_log(f"[swap][route] extreme_replace blocked -> downgrade reason={downgrade_reason}")
                     effective_replacement_intensity = "strong_identity"
                     proxy_clip_used = False
                     submit_modify_video = focused_target_url or source_video_vendor_url
                     modify_video_source = "focused_target" if focused_target_url else "raw_target"
                 else:
+                    gate_secondary_blocker = gate_primary_reason
                     on_log(
-                        f"[swap][extreme-gate] accepted=true reason={weak_track_proxy_override_reason or 'none'} "
+                        f"[swap][extreme-gate] accepted=true channel={gate_primary_channel or 'raw_detect'} "
+                        f"reason={weak_track_proxy_override_reason or 'none'} "
                         f"primary_reason={gate_primary_reason or 'none'} override={str(weak_track_proxy_override_used).lower()}"
                     )
                 if effective_replacement_intensity == "extreme_replace":
@@ -1881,8 +1917,13 @@ class AkoolSwapFaceEngine:
                 "extreme_gate_accepted": route_gate_passed,
                 "extreme_gate_reason": route_gate_fail_reason or "none",
                 "gate_primary_reason": gate_primary_reason or "none",
+                "gate_primary_channel": gate_primary_channel or "raw_detect",
+                "gate_secondary_blocker": gate_secondary_blocker or "none",
                 "gate_override_applied": weak_track_proxy_override_used,
+                "extreme_override_applied": weak_track_proxy_override_used,
                 "gate_override_reason": weak_track_proxy_override_reason or "none",
+                "extreme_gate_override_by_proxy": weak_track_proxy_override_used,
+                "force_proxy_override_used": force_proxy_override_used,
                 "downgrade_reason": downgrade_reason,
                 "fallback_reason": fallback_reason,
                 "target_anchor_quality": target_anchor_quality,
@@ -2030,8 +2071,13 @@ class AkoolSwapFaceEngine:
                     "extreme_gate_accepted": route_gate_passed,
                     "extreme_gate_reason": route_gate_fail_reason or "none",
                     "gate_primary_reason": gate_primary_reason or "none",
+                    "gate_primary_channel": gate_primary_channel or "raw_detect",
+                    "gate_secondary_blocker": gate_secondary_blocker or "none",
                     "gate_override_applied": weak_track_proxy_override_used,
+                    "extreme_override_applied": weak_track_proxy_override_used,
                     "gate_override_reason": weak_track_proxy_override_reason or "none",
+                    "extreme_gate_override_by_proxy": weak_track_proxy_override_used,
+                    "force_proxy_override_used": force_proxy_override_used,
                     "downgrade_reason": downgrade_reason,
                     "fallback_reason": fallback_reason,
                     "target_detection_mode": target_detection_mode,
@@ -2219,8 +2265,13 @@ class AkoolSwapFaceEngine:
                     "extreme_gate_accepted": route_gate_passed,
                     "extreme_gate_reason": route_gate_fail_reason or "none",
                     "gate_primary_reason": gate_primary_reason or "none",
+                    "gate_primary_channel": gate_primary_channel or "raw_detect",
+                    "gate_secondary_blocker": gate_secondary_blocker or "none",
                     "gate_override_applied": weak_track_proxy_override_used,
+                    "extreme_override_applied": weak_track_proxy_override_used,
                     "gate_override_reason": weak_track_proxy_override_reason or "none",
+                    "extreme_gate_override_by_proxy": weak_track_proxy_override_used,
+                    "force_proxy_override_used": force_proxy_override_used,
                     "extreme_replace_effective": extreme_replace_effective,
                     "downgrade_reason": downgrade_reason,
                     "fallback_reason": fallback_reason,
