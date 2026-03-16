@@ -1285,7 +1285,7 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert result.metadata["downgraded_from_extreme"] is True
     assert result.metadata["replacement_intensity"] == "strong_identity"
     assert result.metadata["route_gate_passed"] is False
-    assert result.metadata["route_gate_fail_reason"] == "usable_box_ratio_below_threshold"
+    assert result.metadata["route_gate_fail_reason"] == "target_mapping_face_below_extreme_threshold"
     assert result.metadata["extreme_gate_accepted"] is False
     assert result.metadata["extreme_gate_reason"] == "usable_box_ratio_below_threshold"
     assert result.metadata["fallback_reason"] == "usable_box_ratio_below_threshold"
@@ -1296,10 +1296,10 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert result.metadata["delivery_status"] == "blocked"
     assert result.metadata["result_grade"] == "warn"
     assert result.metadata["result_bucket"] == "review_required"
-    assert result.metadata["proxy_rejected_reason"] == "channel_gate_blocked_due_to_track_unusable"
-    assert result.metadata["primary_gate_reason"] == "usable_box_ratio_below_threshold"
-    assert result.metadata["proxy_channel_gate_reason"] == "channel_gate_blocked_due_to_track_unusable"
-    assert result.metadata["raw_channel_gate_reason"] == "usable_box_ratio_below_threshold"
+    assert result.metadata["proxy_rejected_reason"] == "proxy_target_missing"
+    assert result.metadata["primary_gate_reason"] == "target_mapping_face_below_extreme_threshold"
+    assert result.metadata["proxy_channel_gate_reason"] == "proxy_target_missing"
+    assert result.metadata["raw_channel_gate_reason"] == "raw_channel_identity_overwrite_below_threshold"
     assert result.metadata["route_channel_requested"] == "extreme_proxy_channel"
     assert result.metadata["route_channel_effective"] == "strong_identity_raw_channel"
     assert result.metadata["channel_switch_occurred"] is True
@@ -1392,7 +1392,7 @@ def test_swap_engine_intelligence_allows_guarded_proxy_on_weak_track(monkeypatch
     assert result.metadata["final_decision"]["extreme_gate_final_result"] == "accepted"
     assert result.metadata["final_decision"]["submission_mode_final"] == "extreme_probe_proxy"
     assert result.metadata["final_decision"]["proxy_rejected_reason"] == "none"
-    assert result.metadata["final_decision"]["proxy_channel_gate_reason"] == "proxy_face_ratio_sufficient"
+    assert result.metadata["final_decision"]["proxy_channel_gate_reason"] == "none"
 
 def test_swap_engine_intelligence_allows_proxy_probe_with_comparison_log_pattern(monkeypatch):
     import app.engines.akool_swap_face_engine as swap_engine_module
@@ -1456,8 +1456,8 @@ def test_swap_engine_intelligence_allows_proxy_probe_with_comparison_log_pattern
     assert result.metadata["submission_mode_final"] == "extreme_probe_proxy"
     assert result.metadata["final_decision"]["final_extreme_submission_accepted"] is True
     assert result.metadata["final_decision"]["modify_video_source_final"] == "proxy_target"
-    assert result.metadata["final_decision"]["degrade_reason_final"] == "result_analysis_face_presence_below_threshold"
-    assert result.metadata["final_decision"]["final_degrade_reason"] == "result_analysis_face_presence_below_threshold"
+    assert result.metadata["final_decision"]["degrade_reason_final"] == "usable_box_ratio_below_threshold"
+    assert result.metadata["final_decision"]["final_degrade_reason"] == "usable_box_ratio_below_threshold"
     assert result.metadata["final_decision"]["business_status"] == "degraded"
     assert result.metadata["final_decision"]["delivery_status"] == "blocked"
     assert result.metadata["final_decision"]["route_channel_effective"] == "extreme_proxy_channel"

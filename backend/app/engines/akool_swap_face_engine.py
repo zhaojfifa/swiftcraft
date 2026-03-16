@@ -23,10 +23,17 @@ from app.services.vendor_asset_bridge import VendorAssetBridge, VendorAssetBridg
 DEGRADE_REASON_ENUMS = {
     "none",
     "target_detect_failed_no_landmarks",
+    "target_track_unusable",
     "usable_box_ratio_below_threshold",
     "track_usable_ratio_below_threshold",
     "proxy_face_ratio_after_below_threshold",
     "target_mapping_face_below_extreme_threshold",
+    "proxy_channel_gate_blocked_due_to_track_unusable",
+    "proxy_quality_insufficient",
+    "requested_extreme_not_satisfied_on_raw_channel",
+    "raw_channel_identity_overwrite_below_threshold",
+    "raw_channel_only_allowed_as_degraded_fallback",
+    "provider_quality_low",
     "result_analysis_face_presence_below_threshold",
     "result_analysis_identity_overwrite_below_threshold",
     "provider_completed_but_quality_degraded",
@@ -658,6 +665,109 @@ class AkoolSwapFaceEngine:
             "channel_switch_occurred": requested_channel != effective_channel,
             "review_queue_candidate": effective_channel == "strong_identity_raw_channel" and extreme_requested,
         }
+
+    def _classify_gate_reasons(
+        self,
+        *,
+        extreme_requested: bool,
+        requested_proxy_profile: str | None,
+        route_gate_passed: bool,
+        modify_video_source: str,
+        gate_primary_reason: str | None,
+        proxy_rejected_reason: str | None,
+        degrade_reason_final: str,
+        usable_box_ratio: float,
+        track_usable_ratio: float,
+        proxy_clip_valid: bool,
+        proxy_clip_used: bool,
+        proxy_is_true_close_crop: bool,
+        proxy_face_ratio_after: float,
+        proxy_face_ratio_threshold_required: float,
+        result_analysis: Dict[str, Any],
+    ) -> tuple[str, str, str, str]:
+        primary_reason = self._normalize_degrade_reason(
+            gate_primary_reason,
+            result_analysis={},
+            quality_grade="success_clean",
+        )
+        if extreme_requested and not route_gate_passed:
+            if track_usable_ratio <= 0.0:
+                primary_reason = "target_track_unusable"
+            elif usable_box_ratio <= 0.0:
+                primary_reason = "usable_box_ratio_below_threshold"
+            elif primary_reason == "none":
+                primary_reason = "target_mapping_face_below_extreme_threshold"
+
+        proxy_reason = "none"
+        if requested_proxy_profile:
+            if modify_video_source != "proxy_target":
+                if not proxy_clip_valid:
+                    proxy_reason = "proxy_target_missing"
+                elif track_usable_ratio <= 0.0:
+                    proxy_reason = "proxy_channel_gate_blocked_due_to_track_unusable"
+                elif not proxy_is_true_close_crop:
+                    proxy_reason = "proxy_quality_insufficient"
+                elif proxy_face_ratio_after < proxy_face_ratio_threshold_required:
+                    proxy_reason = "proxy_face_ratio_after_below_threshold"
+                else:
+                    proxy_reason = self._normalize_degrade_reason(
+                        proxy_rejected_reason,
+                        result_analysis={},
+                        quality_grade="success_clean",
+                    )
+
+        raw_reason = "none"
+        if extreme_requested and modify_video_source == "raw_target":
+            identity_overwrite_confidence = float(result_analysis.get("identity_overwrite_confidence") or 0.0)
+            if identity_overwrite_confidence < 0.55:
+                raw_reason = "raw_channel_identity_overwrite_below_threshold"
+            elif route_gate_passed:
+                raw_reason = "requested_extreme_not_satisfied_on_raw_channel"
+            else:
+                raw_reason = "raw_channel_only_allowed_as_degraded_fallback"
+
+        switch_reason = "none"
+        if extreme_requested and modify_video_source != "proxy_target":
+            switch_reason = primary_reason if primary_reason != "none" else proxy_reason
+        return primary_reason, proxy_reason, raw_reason, switch_reason
+
+    def _select_final_degrade_reason(
+        self,
+        *,
+        primary_gate_reason: str,
+        proxy_channel_gate_reason: str,
+        raw_channel_gate_reason: str,
+        quality_grade: str,
+        result_analysis: Dict[str, Any],
+        fallback_reason: str,
+    ) -> str:
+        ordered = [
+            primary_gate_reason,
+            proxy_channel_gate_reason,
+            raw_channel_gate_reason,
+            fallback_reason,
+        ]
+        preference = [
+            "target_track_unusable",
+            "usable_box_ratio_below_threshold",
+            "target_mapping_face_below_extreme_threshold",
+            "proxy_face_ratio_after_below_threshold",
+            "provider_quality_low",
+        ]
+        for preferred in preference:
+            if preferred in ordered:
+                return preferred
+        if quality_grade == "success_degraded":
+            face_presence_ratio = float(result_analysis.get("face_presence_ratio") or 0.0)
+            identity_overwrite_confidence = float(result_analysis.get("identity_overwrite_confidence") or 0.0)
+            if face_presence_ratio < 0.6:
+                return "provider_quality_low"
+            if identity_overwrite_confidence < 0.55:
+                return "provider_quality_low"
+        for reason in ordered:
+            if reason and reason != "none":
+                return reason
+        return "none"
 
     def _build_manual_review_entry(
         self,
@@ -2150,11 +2260,6 @@ class AkoolSwapFaceEngine:
                 proxy_quality=proxy_quality,
             )
             quality_grade = self._derive_quality_grade(result_analysis)
-            degrade_reason_final = self._normalize_degrade_reason(
-                downgrade_reason or fallback_reason or route_gate_fail_reason,
-                result_analysis=result_analysis,
-                quality_grade=quality_grade,
-            )
             provider_status, business_status, delivery_status, requires_manual_review = self._derive_status_triad(quality_grade)
             result_grade, result_bucket = self._derive_result_labels(business_status)
             rerun_guidance = self._derive_rerun_guidance(result_analysis)
@@ -2169,32 +2274,51 @@ class AkoolSwapFaceEngine:
                 replacement_intensity=replacement_intensity,
                 modify_video_source=modify_video_source,
                 gate_primary_channel=gate_primary_channel,
-                degrade_reason_final=degrade_reason_final,
+                degrade_reason_final=str(downgrade_reason or fallback_reason or route_gate_fail_reason or "none"),
             )
             proxy_rejected_reason = "none"
             if requested_proxy_profile and modify_video_source != "proxy_target":
-                proxy_rejected_reason = (
-                    "channel_gate_blocked_due_to_track_unusable"
-                    if degrade_reason_final in {"usable_box_ratio_below_threshold", "track_usable_ratio_below_threshold", "target_mapping_face_below_extreme_threshold"}
-                    else degrade_reason_final
-                )
-            primary_gate_reason = self._normalize_degrade_reason(
-                gate_primary_reason,
-                result_analysis={},
-                quality_grade="success_clean",
+                if float(track_usable_ratio or 0.0) <= 0.0 or float(usable_box_ratio or 0.0) <= 0.0:
+                    proxy_rejected_reason = "proxy_channel_gate_blocked_due_to_track_unusable"
+                else:
+                    proxy_rejected_reason = downgrade_reason or fallback_reason or route_gate_fail_reason or "none"
+            primary_gate_reason, proxy_channel_gate_reason, raw_channel_gate_reason, channel_switch_reason = self._classify_gate_reasons(
+                extreme_requested=extreme_replace_selected,
+                requested_proxy_profile=requested_proxy_profile,
+                route_gate_passed=route_gate_passed,
+                modify_video_source=modify_video_source,
+                gate_primary_reason=gate_primary_reason,
+                proxy_rejected_reason=proxy_rejected_reason,
+                degrade_reason_final=downgrade_reason or fallback_reason or route_gate_fail_reason or "none",
+                usable_box_ratio=float(usable_box_ratio or 0.0),
+                track_usable_ratio=float(track_usable_ratio or 0.0),
+                proxy_clip_valid=bool(proxy_clip_valid),
+                proxy_clip_used=bool(proxy_clip_used),
+                proxy_is_true_close_crop=bool(proxy_is_true_close_crop),
+                proxy_face_ratio_after=float(proxy_face_ratio_after or 0.0),
+                proxy_face_ratio_threshold_required=float(proxy_face_ratio_threshold_required or 0.0),
+                result_analysis=result_analysis,
             )
-            proxy_channel_gate_reason = self._normalize_degrade_reason(
-                weak_track_proxy_override_reason or proxy_rejected_reason,
-                result_analysis={},
-                quality_grade="success_clean",
+            if requested_proxy_profile and modify_video_source != "proxy_target":
+                proxy_rejected_reason = proxy_channel_gate_reason
+            degrade_reason_final = self._select_final_degrade_reason(
+                primary_gate_reason=primary_gate_reason,
+                proxy_channel_gate_reason=proxy_channel_gate_reason,
+                raw_channel_gate_reason=raw_channel_gate_reason,
+                quality_grade=quality_grade,
+                result_analysis=result_analysis,
+                fallback_reason=self._normalize_degrade_reason(
+                    downgrade_reason or fallback_reason or route_gate_fail_reason,
+                    result_analysis=result_analysis,
+                    quality_grade=quality_grade,
+                ),
             )
-            raw_channel_gate_reason = self._normalize_degrade_reason(
-                gate_primary_reason or downgrade_reason or route_gate_fail_reason,
-                result_analysis={},
-                quality_grade="success_clean",
-            )
-            if primary_gate_reason == "none" and extreme_replace_selected and not route_gate_passed:
-                primary_gate_reason = raw_channel_gate_reason if raw_channel_gate_reason != "none" else proxy_channel_gate_reason
+            if route_gate_passed:
+                route_gate_fail_reason = None
+            elif primary_gate_reason != "none":
+                route_gate_fail_reason = primary_gate_reason
+            route_channels["channel_switch_reason"] = channel_switch_reason
+            route_channels["review_queue_candidate"] = bool(route_channels.get("review_queue_candidate") or delivery_status == "blocked" or requires_manual_review)
             final_decision = self._build_final_decision(
                 requested_swap_strength=swap_strength,
                 requested_proxy_profile=requested_proxy_profile,
@@ -2310,7 +2434,7 @@ class AkoolSwapFaceEngine:
                 "proxy_center_offset": proxy_center_offset,
                 "proxy_track_based": proxy_quality == "track_based",
                 "route_gate_passed": route_gate_passed,
-                "route_gate_fail_reason": degrade_reason_final if degrade_reason_final != "none" else None,
+                "route_gate_fail_reason": route_gate_fail_reason,
                 "gate_failed_metric": gate_failed_metric,
                 "proxy_clip_valid": proxy_clip_valid,
                 "proxy_clip_used": proxy_clip_used,
@@ -2489,7 +2613,7 @@ class AkoolSwapFaceEngine:
                     "proxy_center_offset": proxy_center_offset,
                     "proxy_track_based": proxy_quality == "track_based",
                     "route_gate_passed": route_gate_passed,
-                    "route_gate_fail_reason": degrade_reason_final if degrade_reason_final != "none" else None,
+                    "route_gate_fail_reason": route_gate_fail_reason,
                     "gate_failed_metric": gate_failed_metric,
                     "replacement_mode": replacement_mode,
                     "modify_video_source": modify_video_source,
@@ -2667,7 +2791,7 @@ class AkoolSwapFaceEngine:
                     "proxy_center_offset": proxy_center_offset,
                     "proxy_track_based": proxy_quality == "track_based",
                     "route_gate_passed": route_gate_passed,
-                    "route_gate_fail_reason": degrade_reason_final if degrade_reason_final != "none" else None,
+                    "route_gate_fail_reason": route_gate_fail_reason,
                     "gate_failed_metric": gate_failed_metric,
                     "extreme_gate_accepted": route_gate_passed,
                     "extreme_gate_reason": degrade_reason_final,
