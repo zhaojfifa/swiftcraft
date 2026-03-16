@@ -86,6 +86,20 @@ function normalizeSwapProxyProfile(value: string | null | undefined): "standard"
   return "standard";
 }
 
+function getQualityGradeTone(value: string | null | undefined): string {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "success_strong") return "text-emerald-700 bg-emerald-50 border-emerald-200";
+  if (normalized === "success_weak") return "text-amber-700 bg-amber-50 border-amber-200";
+  if (normalized === "success_degraded") return "text-rose-700 bg-rose-50 border-rose-200";
+  return "text-slate-600 bg-slate-50 border-slate-200";
+}
+
+function getMetricTone(value: number): string {
+  if (value >= 0.75) return "text-emerald-700";
+  if (value >= 0.55) return "text-amber-700";
+  return "text-rose-700";
+}
+
 export default function SwapClient({ service = "swap" }: Props) {
   const serviceType = service;
   const isSwap = serviceType === "swap";
@@ -637,6 +651,14 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskMetadata = task?.metadata && typeof task.metadata === "object"
     ? (task.metadata as Record<string, unknown>)
     : {};
+  const finalDecision = taskMetadata.final_decision && typeof taskMetadata.final_decision === "object"
+    ? (taskMetadata.final_decision as Record<string, unknown>)
+    : {};
+  const resultAnalysis = taskMetadata.result_analysis && typeof taskMetadata.result_analysis === "object"
+    ? (taskMetadata.result_analysis as Record<string, unknown>)
+    : taskMetadata.quality_analysis && typeof taskMetadata.quality_analysis === "object"
+      ? (taskMetadata.quality_analysis as Record<string, unknown>)
+      : {};
   const taskRequestId = String(taskMetadata.request_id || "");
   const taskModeSummary = String(taskMetadata.mode || (task?.mode || "") || "");
   const taskProviderSummary = String(taskMetadata.provider || (isSwap ? swapProvider : ""));
@@ -666,6 +688,23 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskFaceCountLimit = String(taskMetadata.face_count_limit ?? "");
   const taskSourceFaceScore = String(taskMetadata.source_face_score ?? "");
   const taskReplacementIntensity = String(taskMetadata.replacement_intensity ?? taskMetadata.swap_strength ?? "");
+  const taskRequestedProxyProfile = String(finalDecision.requested_proxy_profile ?? "");
+  const taskEffectiveProxyProfile = String(finalDecision.effective_proxy_profile ?? "");
+  const finalModifyVideoSource = String(finalDecision.modify_video_source_final ?? taskMetadata.modifyVideoSource_final ?? "");
+  const finalDegradeReason = String(finalDecision.degrade_reason_final ?? taskMetadata.downgrade_reason ?? taskMetadata.fallback_reason ?? "");
+  const finalSubmissionMode = String(finalDecision.submission_mode_final ?? "");
+  const finalExtremeRequested = String(finalDecision.extreme_requested ?? taskMetadata.extreme_requested ?? "");
+  const finalExtremeExecuted = String(finalDecision.extreme_executed ?? taskMetadata.extreme_executed ?? "");
+  const finalExtremeEffective = String(finalDecision.extreme_effective ?? taskMetadata.extreme_replace_effective ?? "");
+  const finalGatePrimaryResult = String(finalDecision.extreme_gate_primary_result ?? "");
+  const finalGateResult = String(finalDecision.extreme_gate_final_result ?? "");
+  const finalOverrideApplied = String(finalDecision.override_applied ?? taskMetadata.gate_override_applied ?? "");
+  const finalQualityGrade = String(taskMetadata.quality_grade ?? finalDecision.quality_grade ?? "");
+  const resultFacePresenceRatio = Number(resultAnalysis.face_presence_ratio ?? 0);
+  const resultFaceStabilityScore = Number(resultAnalysis.face_stability_score ?? 0);
+  const resultOverwriteConfidence = Number(resultAnalysis.identity_overwrite_confidence ?? 0);
+  const resultTrackQualityConfidence = Number(resultAnalysis.track_quality_confidence ?? 0);
+  const resultProxyExecutionConfidence = Number(resultAnalysis.proxy_execution_confidence ?? 0);
   const taskSourcePackSize = String(taskMetadata.source_pack_size ?? "");
   const taskSelectedSourceFaceIndex = String(taskMetadata.selected_source_face_index ?? "");
   const taskSelectedSourceFaceReason = String(taskMetadata.source_selection_reason ?? "");
@@ -673,11 +712,9 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskTargetMappingFaceScore = String(taskMetadata.target_mapping_face_score ?? taskMetadata.target_face_score ?? "");
   const taskSelectedTargetFrameIndex = String(taskMetadata.selected_target_frame_index ?? "");
   const taskReplacementMode = String(taskMetadata.replacement_mode ?? "");
-  const taskProxyProfile = taskMetadata.proxy_profile ? normalizeSwapProxyProfile(String(taskMetadata.proxy_profile)) : "";
   const taskDegradedFallbackUsed = String(taskMetadata.degraded_fallback_used ?? "");
   const taskFaceEnhanceUsed = String(taskMetadata.face_enhance_used ?? taskMetadata.face_enhance ?? "");
   const taskTargetRankReason = String(taskMetadata.target_rank_reason ?? taskMetadata.target_mapping_face_rank_reason ?? "");
-  const taskExtremeReplaceEffective = String(taskMetadata.extreme_replace_effective ?? "");
   const taskRiskTags = Array.isArray(taskMetadata.risk_tags)
     ? (taskMetadata.risk_tags as unknown[]).map((value) => String(value)).filter(Boolean)
     : [];
@@ -1670,6 +1707,8 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Route Intent: {taskRouteIntent || "-"}</div>
                         <div>Execution Style: {taskRouteExecutionStyle || "-"}</div>
                         <div>Route Summary: {taskRouteSummary || "-"}</div>
+                        <div>Quality Grade: {finalQualityGrade || "-"}</div>
+                        <div>Final Submission Mode: {finalSubmissionMode || "-"}</div>
                         <div>Single-Face Only: {taskSingleFaceOnly ? taskSingleFaceOnly : "true"}</div>
                         <div>Face Count Limit: {taskFaceCountLimit || "1"}</div>
                         <div>Request ID: {taskRequestId || "-"}</div>
@@ -1686,10 +1725,18 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Target Track Face Score: {taskTargetTrackFaceScore || "-"}</div>
                         <div>Target Rank Reason: {taskTargetRankReason || "-"}</div>
                         <div>Selected Anchor Frame: {taskSelectedTargetFrameIndex || "-"}</div>
-                        <div>Proxy Profile: {taskProxyProfile || "-"}</div>
+                        <div>Requested Proxy Profile: {taskRequestedProxyProfile || "-"}</div>
+                        <div>Effective Proxy Profile: {taskEffectiveProxyProfile || "-"}</div>
+                        <div>Final ModifyVideo Source: {finalModifyVideoSource || "-"}</div>
+                        <div>Primary Gate Result: {finalGatePrimaryResult || "-"}</div>
+                        <div>Final Gate Result: {finalGateResult || "-"}</div>
+                        <div>Override Applied: {finalOverrideApplied || "false"}</div>
                         <div>Replacement Mode: {taskReplacementMode || "-"}</div>
+                        <div>Degrade Reason: {finalDegradeReason || "-"}</div>
                         <div>Degraded Fallback Used: {taskDegradedFallbackUsed || "false"}</div>
-                        <div>Extreme Replace Effective: {taskExtremeReplaceEffective || "false"}</div>
+                        <div>Extreme Requested: {finalExtremeRequested || "false"}</div>
+                        <div>Extreme Executed: {finalExtremeExecuted || "false"}</div>
+                        <div>Extreme Effective: {finalExtremeEffective || "false"}</div>
                         <div>Risk Tags: {taskRiskTags.length ? taskRiskTags.join(", ") : "-"}</div>
                         <div>Remote Status: {taskRemoteStatus || "-"}</div>
                         <div>Elapsed: {taskElapsedMs ? `${taskElapsedMs} ms` : "-"}</div>
@@ -1772,7 +1819,23 @@ export default function SwapClient({ service = "swap" }: Props) {
                         Video: <a href={outputUrl} target="_blank" rel="noreferrer" className="text-blue-600 underline">Open result.mp4</a>
                       </div>
                     ) : null}
-                    <div className="grid gap-1 text-xs text-slate-600 sm:grid-cols-2">
+                    <div className="grid gap-4 text-xs text-slate-600 sm:grid-cols-2">
+                      <div className="space-y-1 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Requested</div>
+                        <div>Replacement Intensity: {taskReplacementIntensity || "-"}</div>
+                        <div>Proxy Profile: {taskRequestedProxyProfile || "-"}</div>
+                        <div>Face Enhance: {taskFaceEnhance || "-"}</div>
+                      </div>
+                      <div className="space-y-1 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Effective</div>
+                        <div>Effective Proxy Profile: {taskEffectiveProxyProfile || "-"}</div>
+                        <div>Extreme Effective: {finalExtremeEffective || "false"}</div>
+                        <div>Final ModifyVideo Source: {finalModifyVideoSource || "-"}</div>
+                        <div>Degrade Reason: {finalDegradeReason || "-"}</div>
+                        <div>Quality Grade: <span className={`inline-flex rounded border px-2 py-0.5 ${getQualityGradeTone(finalQualityGrade)}`}>{finalQualityGrade || "-"}</span></div>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
                       <div>Mode: {taskModeSummary || task?.mode || "-"}</div>
                       <div>Swap Strength: {taskSwapStrength || "-"}</div>
                       <div>Route Summary: {taskRouteSummary || "-"}</div>
@@ -1781,9 +1844,20 @@ export default function SwapClient({ service = "swap" }: Props) {
                       <div>Target Mapping Face Score: {taskTargetMappingFaceScore || "-"}</div>
                       <div>Target Track Face Score: {taskTargetTrackFaceScore || "-"}</div>
                       <div>Selected Anchor Frame: {taskSelectedTargetFrameIndex || "-"}</div>
-                      <div>Proxy Profile: {taskProxyProfile || "-"}</div>
-                      <div>Degraded Fallback Used: {taskDegradedFallbackUsed || "false"}</div>
+                      <div>Primary Gate Result: {finalGatePrimaryResult || "-"}</div>
+                      <div>Final Gate Result: {finalGateResult || "-"}</div>
+                      <div>Override Applied: {finalOverrideApplied || "false"}</div>
                       <div>Risk Tags: {taskRiskTags.length ? taskRiskTags.join(", ") : "-"}</div>
+                    </div>
+                    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                      <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">Result Analysis</div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <div className={getMetricTone(resultFacePresenceRatio)}>Face Presence Ratio: {resultFacePresenceRatio.toFixed(4)}</div>
+                        <div className={getMetricTone(resultFaceStabilityScore)}>Face Stability Score: {resultFaceStabilityScore.toFixed(4)}</div>
+                        <div className={getMetricTone(resultOverwriteConfidence)}>Identity Overwrite Confidence: {resultOverwriteConfidence.toFixed(4)}</div>
+                        <div className={getMetricTone(resultTrackQualityConfidence)}>Track Quality Confidence: {resultTrackQualityConfidence.toFixed(4)}</div>
+                        <div className={getMetricTone(resultProxyExecutionConfidence)}>Proxy Execution Confidence: {resultProxyExecutionConfidence.toFixed(4)}</div>
+                      </div>
                     </div>
                   </div>
                 ) : (

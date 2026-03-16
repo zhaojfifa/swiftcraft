@@ -1315,6 +1315,10 @@ def test_swap_engine_intelligence_allows_guarded_proxy_on_weak_track(monkeypatch
     assert result.metadata["modifyVideoSource_final"] == "proxy_target"
     assert result.metadata["proxy_requested_profile"] == result.metadata["requested_proxy_profile"]
     assert result.metadata["proxy_effective_profile"] == result.metadata["effective_proxy_profile"]
+    assert result.metadata["quality_grade"] in {"success_strong", "success_weak", "success_degraded"}
+    assert result.metadata["final_decision"]["modify_video_source_final"] == "proxy_target"
+    assert result.metadata["final_decision"]["extreme_gate_final_result"] == "accepted"
+    assert result.metadata["final_decision"]["submission_mode_final"] == "v3_explicit_mapping"
 
 def test_swap_engine_intelligence_force_proxy_override_on_weak_track(monkeypatch):
     import app.engines.akool_swap_face_engine as swap_engine_module
@@ -1381,6 +1385,8 @@ def test_swap_engine_intelligence_force_proxy_override_on_weak_track(monkeypatch
     assert result.metadata["gate_override_reason"] == "force_proxy_override"
     assert result.metadata["force_proxy_override_used"] is True
     assert result.metadata["modifyVideoSource_final"] == "proxy_target"
+    assert result.metadata["final_decision"]["override_applied"] is True
+    assert result.metadata["final_decision"]["quality_grade"] in {"success_strong", "success_weak", "success_degraded"}
 
 
 
