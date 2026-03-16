@@ -612,8 +612,14 @@ class _WeakTrackProxyExtractor(_FakeExtractor):
         payload["target_track_stability_score"] = 0.92
         payload["target_track_coverage_ratio"] = 0.42
         payload["detect_hit_ratio"] = 0.85
+        payload["usable_detection_ratio"] = 0.85
         payload["usable_box_ratio"] = 0.0
         payload["track_usable_ratio"] = 0.0
+        payload["target_track_state"] = "unusable"
+        payload["no_track_constructed"] = True
+        payload["proxy_crop_constructed"] = True
+        payload["proxy_crop_confidence"] = 0.82
+        payload["track_required_but_missing"] = True
         return payload
 
 
@@ -635,8 +641,14 @@ class _ComparisonLogWeakTrackExtractor(_FakeExtractor):
         payload["target_track_stability_score"] = 0.0
         payload["target_track_coverage_ratio"] = 0.125
         payload["detect_hit_ratio"] = 0.875
+        payload["usable_detection_ratio"] = 0.875
         payload["usable_box_ratio"] = 0.0
         payload["track_usable_ratio"] = 0.0
+        payload["target_track_state"] = "unusable"
+        payload["no_track_constructed"] = True
+        payload["proxy_crop_constructed"] = True
+        payload["proxy_crop_confidence"] = 0.79
+        payload["track_required_but_missing"] = True
         payload["target_anchor_quality"] = {
             "score": 60.6,
             "risk_tags": ["fallback_track"],
@@ -1382,6 +1394,10 @@ def test_swap_engine_intelligence_allows_guarded_proxy_on_weak_track(monkeypatch
     assert result.metadata["proxy_replace_confidence"] >= 0.82
     assert result.metadata["usable_box_ratio"] == 0.0
     assert result.metadata["track_usable_ratio"] == 0.0
+    assert result.metadata["target_track_state"] in {"weak", "unusable", "absent"}
+    assert result.metadata["proxy_crop_constructed"] is True
+    assert result.metadata["proxy_crop_confidence"] >= 0.5
+    assert result.metadata["track_required_but_missing"] is True
     assert result.metadata["proxy_clip_used"] is True
     assert result.metadata["proxy_executed"] is True
     assert result.metadata["modifyVideoSource_final"] == "proxy_target"
@@ -1462,6 +1478,9 @@ def test_swap_engine_intelligence_allows_proxy_probe_with_comparison_log_pattern
     assert result.metadata["final_decision"]["delivery_status"] == "blocked"
     assert result.metadata["final_decision"]["route_channel_effective"] == "extreme_proxy_channel"
     assert result.metadata["final_decision"]["review_queue_candidate"] is True
+    assert result.metadata["target_track_state"] in {"weak", "unusable", "absent"}
+    assert result.metadata["proxy_crop_constructed"] is True
+    assert result.metadata["track_required_but_missing"] is True
 
 
 def test_swap_engine_intelligence_force_proxy_override_on_weak_track(monkeypatch):

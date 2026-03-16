@@ -139,10 +139,92 @@ def test_summarize_face_track_uses_track_usable_for_ratios():
     )
 
     assert summary["detect_hit_ratio"] == 0.6667
+    assert summary["usable_detection_ratio"] == 0.3333
     assert summary["usable_box_ratio"] == 0.3333
     assert summary["track_usable_ratio"] == 0.3333
     assert summary["true_detect_frame_ratio"] == 0.3333
     assert summary["fallback_frame_ratio"] == 0.3333
+    assert summary["target_track_state"] == "weak"
+    assert summary["no_track_constructed"] is False
+
+
+def test_detect_semantics_separates_detect_hit_from_usable_detection():
+    extractor = VideoFaceExtractor.__new__(VideoFaceExtractor)
+
+    missing_box = extractor._detect_semantics(
+        face={"face_id": "hit"},
+        raw_box=None,
+        landmarks=None,
+        used_bbox_fallback=False,
+    )
+    bbox_only = extractor._detect_semantics(
+        face={"face_id": "bbox-only"},
+        raw_box=(10.0, 20.0, 100.0, 120.0),
+        landmarks=None,
+        used_bbox_fallback=False,
+    )
+
+    assert missing_box["detect_hit"] is True
+    assert missing_box["bbox_present"] is False
+    assert missing_box["landmarks_present"] is False
+    assert missing_box["usable_detection"] is False
+    assert missing_box["usable_for_tracking"] is False
+    assert missing_box["unusable_reason"] == "missing_face_box"
+
+    assert bbox_only["detect_hit"] is True
+    assert bbox_only["bbox_present"] is True
+    assert bbox_only["landmarks_present"] is False
+    assert bbox_only["usable_detection"] is True
+    assert bbox_only["usable_for_tracking"] is True
+    assert bbox_only["unusable_reason"] == "missing_landmarks"
+
+
+def test_summarize_face_track_marks_absent_when_no_usable_track_exists():
+    extractor = VideoFaceExtractor.__new__(VideoFaceExtractor)
+    summary = extractor.summarize_face_track(
+        [
+            {
+                "frame_index": 0,
+                "detect_hit": True,
+                "bbox_present": False,
+                "landmarks_present": False,
+                "usable_detection": False,
+                "box_usable": False,
+                "track_usable": False,
+                "used_bbox_fallback": False,
+                "unusable_reason": "missing_face_box",
+                "raw_box": None,
+                "region": None,
+                "opts": None,
+            },
+            {
+                "frame_index": 1,
+                "detect_hit": False,
+                "bbox_present": False,
+                "landmarks_present": False,
+                "usable_detection": False,
+                "box_usable": False,
+                "track_usable": False,
+                "used_bbox_fallback": True,
+                "unusable_reason": "no_face_item",
+                "raw_box": (0.0, 0.0, 1280.0, 720.0),
+                "region": [0, 0, 1280, 720],
+                "opts": "0,0,1280,720",
+            },
+        ],
+        video_size=(1280, 720),
+        selected_face={"frame_index": 0, "region": None, "opts": None},
+        detection_mode="frame_sampling_fallback",
+    )
+
+    assert summary["usable_detection_ratio"] == 0.0
+    assert summary["usable_box_ratio"] == 0.0
+    assert summary["track_usable_ratio"] == 0.0
+    assert summary["true_detect_frame_ratio"] == 0.0
+    assert summary["coverage_ratio"] == 0.0
+    assert summary["stability_score"] == 0.0
+    assert summary["no_track_constructed"] is True
+    assert summary["target_track_state"] == "unusable"
 
 
 def test_rank_source_references_returns_candidate_scores():
