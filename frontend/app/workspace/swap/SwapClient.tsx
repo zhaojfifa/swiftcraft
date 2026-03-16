@@ -8,7 +8,7 @@ import { ApiHttpError, createTask, getTask, getUploadUrl, TaskRecord } from "../
 import { SwapMode, resolvePresetInputKey } from "../../../lib/presets";
 import { resolveAssetUrl } from "../../../lib/url";
 
-const TERMINAL_STATUSES = new Set(["succeeded", "failed", "done"]);
+const TERMINAL_STATUSES = new Set(["succeeded", "success", "success_degraded", "failed", "done"]);
 const POLL_INITIAL_MS = 1000;
 const POLL_MAX_MS = 15000;
 const POLL_STILL_PROCESSING_MS = 60000;
@@ -660,6 +660,9 @@ export default function SwapClient({ service = "swap" }: Props) {
       ? (taskMetadata.quality_analysis as Record<string, unknown>)
       : {};
   const taskRequestId = String(taskMetadata.request_id || "");
+  const taskProviderStatus = String(taskMetadata.provider_status || "");
+  const taskDeliveryAllowed = String(taskMetadata.delivery_allowed ?? "");
+  const taskRequiresManualReview = String(taskMetadata.requires_manual_review ?? "");
   const taskModeSummary = String(taskMetadata.mode || (task?.mode || "") || "");
   const taskProviderSummary = String(taskMetadata.provider || (isSwap ? swapProvider : ""));
   const taskEngineSummary = String(taskMetadata.engine || "");
@@ -700,6 +703,8 @@ export default function SwapClient({ service = "swap" }: Props) {
   const finalGateResult = String(finalDecision.extreme_gate_final_result ?? "");
   const finalOverrideApplied = String(finalDecision.override_applied ?? taskMetadata.gate_override_applied ?? "");
   const finalQualityGrade = String(taskMetadata.quality_grade ?? finalDecision.quality_grade ?? "");
+  const taskStatusNormalized = String(task?.status || "").trim().toLowerCase();
+  const isDegradedStatus = taskStatusNormalized === "success_degraded";
   const resultFacePresenceRatio = Number(resultAnalysis.face_presence_ratio ?? 0);
   const resultFaceStabilityScore = Number(resultAnalysis.face_stability_score ?? 0);
   const resultOverwriteConfidence = Number(resultAnalysis.identity_overwrite_confidence ?? 0);
@@ -1707,8 +1712,11 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Route Intent: {taskRouteIntent || "-"}</div>
                         <div>Execution Style: {taskRouteExecutionStyle || "-"}</div>
                         <div>Route Summary: {taskRouteSummary || "-"}</div>
-                        <div>Quality Grade: {finalQualityGrade || "-"}</div>
+                        <div>Quality Grade: <span className={`inline-flex rounded border px-2 py-0.5 ${getQualityGradeTone(finalQualityGrade)}`}>{finalQualityGrade || "-"}</span></div>
                         <div>Final Submission Mode: {finalSubmissionMode || "-"}</div>
+                        <div>Provider Status: {taskProviderStatus || "-"}</div>
+                        <div>Delivery Allowed: {taskDeliveryAllowed || "-"}</div>
+                        <div>Requires Manual Review: {taskRequiresManualReview || "-"}</div>
                         <div>Single-Face Only: {taskSingleFaceOnly ? taskSingleFaceOnly : "true"}</div>
                         <div>Face Count Limit: {taskFaceCountLimit || "1"}</div>
                         <div>Request ID: {taskRequestId || "-"}</div>

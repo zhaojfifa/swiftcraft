@@ -63,7 +63,8 @@ class ServiceType(str, Enum):
 class TaskStatus(str, Enum):
     queued = "queued"
     running = "running"
-    succeeded = "succeeded"
+    success = "success"
+    success_degraded = "success_degraded"
     failed = "failed"
 
 

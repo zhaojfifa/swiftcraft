@@ -16,7 +16,7 @@ class TaskRecord(BaseModel):
     service: Literal["swap", "avatar", "localization", "follow_video"] = "swap"
     mode: Literal["baseline", "intelligent", "basic", "intelligence"] = "baseline"
 
-    status: Literal["queued", "running", "done", "failed"] = "queued"
+    status: Literal["queued", "running", "done", "success", "success_degraded", "succeeded", "failed"] = "queued"
     stage: str = "queued"
     progress: int = 0
 

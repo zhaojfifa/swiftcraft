@@ -259,8 +259,8 @@ class TaskStore:
         update: Dict[str, Any] = {"stage": stage, "progress": _clamp(progress)}
         if stage == "failed":
             update["status"] = "failed"
-        elif stage == "completed":
-            update["status"] = "done"
+        elif str(stage).upper() == "DONE" or stage == "completed":
+            update["status"] = "success"
         else:
             update["status"] = "running"
         self._update(task_id, update)
@@ -285,7 +285,7 @@ class TaskStore:
         self._update(
             task_id,
             {
-                "status": "done",
+                "status": "success",
                 "stage": "completed",
                 "progress": 100,
                 "output_url": output_url,
@@ -296,7 +296,7 @@ class TaskStore:
         self._update(
             task_id,
             {
-                "status": "done",
+                "status": "success",
                 "stage": "completed",
                 "progress": 100,
                 "output_key": output_key,
@@ -306,7 +306,7 @@ class TaskStore:
 
     def complete_task(self, task_id: str, output_url: str, output_key: Optional[str] = None) -> None:
         fields: Dict[str, Any] = {
-            "status": "done",
+            "status": "success",
             "stage": "DONE",
             "progress": 100,
             "output_url": output_url,

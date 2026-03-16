@@ -10,7 +10,7 @@ export type CreateTaskResponse = {
   task_id: string;
 };
 
-export type TaskStatus = 'queued' | 'running' | 'done' | 'failed';
+export type TaskStatus = 'queued' | 'running' | 'done' | 'success' | 'success_degraded' | 'failed';
 
 export type TaskRecord = {
   task_id: string;

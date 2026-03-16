@@ -3,7 +3,9 @@ from app.services.task_service import (
     _extract_action_replica_run_config,
     _extract_swap_run_config,
     _normalize_action_replica_mode,
+    _status_from_record,
 )
+from app.schemas.task import TaskStatus
 from app.models.task import TaskRecord
 
 
@@ -326,3 +328,13 @@ def test_action_replica_provider_from_record_normalizes_legacy_intelligence_mode
         metadata={},
     )
     assert svc._resolve_provider_from_record(record) == "kling_motioncontrol_v3_pro"
+
+
+def test_status_from_record_maps_success_degraded():
+    record = TaskRecord(task_id="swap-degraded-1", service="swap", mode="intelligence", status="success_degraded", stage="DONE")
+    assert _status_from_record(record) == TaskStatus.success_degraded
+
+
+def test_status_from_record_maps_legacy_done_to_success():
+    record = TaskRecord(task_id="swap-done-1", service="swap", mode="intelligence", status="done", stage="DONE")
+    assert _status_from_record(record) == TaskStatus.success

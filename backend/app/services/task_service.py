@@ -550,8 +550,10 @@ def _service_type_from_legacy(service: str) -> ServiceType:
 
 def _status_from_record(record: TaskRecord) -> TaskStatus:
     status = (record.status or "").lower()
-    if status == "done" or status == "succeeded":
-        return TaskStatus.succeeded
+    if status in {"done", "succeeded", "success"}:
+        return TaskStatus.success
+    if status == "success_degraded":
+        return TaskStatus.success_degraded
     if status == "failed":
         return TaskStatus.failed
     if status == "running":
@@ -584,7 +586,7 @@ def _stage_from_record(record: TaskRecord) -> TaskStage:
     }
     if record.status == "failed":
         return TaskStage.FAILED
-    if record.status == "done":
+    if record.status in {"done", "success", "success_degraded", "succeeded"}:
         return TaskStage.DONE
     return mapping.get(stage, TaskStage.SUBMITTED)
 
@@ -1422,13 +1424,21 @@ class TaskService:
                     manifest_exc,
                 )
 
+        quality_grade = str(metadata.get("quality_grade") or "").strip().lower()
+        provider_status = "provider_done"
+        final_status = "success_degraded" if quality_grade == "success_degraded" else "success"
+        metadata["provider_status"] = provider_status
+        metadata["quality_grade"] = quality_grade or metadata.get("quality_grade") or "success_weak"
+        metadata["delivery_allowed"] = final_status == "success"
+        metadata["requires_manual_review"] = final_status != "success"
+        metadata["delivery_decision"] = "deliverable" if final_status == "success" else "manual_review_required"
         updated = record.copy(
             update={
                 "output_url": output_url or record.output_url,
                 "output_key": output_key or record.output_key,
                 "metadata": metadata,
                 "stage": "DONE",
-                "status": "done",
+                "status": final_status,
                 "progress": 100,
             }
         )
@@ -1464,7 +1474,7 @@ class TaskService:
         record = self.store.get_task(task_id)
         if record is None:
             return
-        if (record.status or "").lower() in ("done", "failed"):
+        if (record.status or "").lower() in ("done", "success", "success_degraded", "failed"):
             self.store.append_log(task_id, f"[runner] skip terminal status={record.status}")
             return
 
@@ -1568,7 +1578,7 @@ class TaskService:
             elapsed_ms = int((time.perf_counter() - run_started) * 1000)
             self.store.append_log(task_id, f"[runner] outcome=success elapsed_ms={elapsed_ms}")
             done_record = self.store.get_task(task_id)
-            done_status = done_record.status if done_record is not None else "done"
+            done_status = done_record.status if done_record is not None else "success"
             self.store.append_log(task_id, f"[runner] thread done pid={pid} task_id={task_id} status={done_status}")
             return
 
