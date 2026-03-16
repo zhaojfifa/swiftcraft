@@ -207,38 +207,72 @@ class AkoolSwapFaceEngine:
         proxy_quality: str,
         proxy_face_ratio_after: float | None,
         selected_source_score: float | None,
-    ) -> tuple[bool, str | None]:
+    ) -> tuple[bool, str | None, bool, float]:
         if replacement_intensity != "extreme_replace":
-            return True, None
+            return True, None, False, 0.0
+        source_score_norm = min(1.0, max(0.0, (source_face_score or 0.0) / 100.0))
+        selected_score_norm = min(1.0, max(0.0, (selected_source_score or 0.0) / 120.0))
+        weak_track_proxy_confidence = round(
+            min(
+                1.0,
+                max(
+                    0.0,
+                    (detect_hit_ratio or 0.0) * 0.28
+                    + min(1.0, max(0.0, (proxy_face_ratio_after or 0.0) / 0.7)) * 0.26
+                    + (0.22 if proxy_is_true_close_crop else 0.0)
+                    + source_score_norm * 0.12
+                    + selected_score_norm * 0.12,
+                ),
+            ),
+            4,
+        )
         if (source_face_score or 0) < 80:
-            return False, "source_score_below_extreme_threshold"
+            return False, "source_score_below_extreme_threshold", False, weak_track_proxy_confidence
         if (selected_source_score or 0) < 96:
-            return False, "selected_source_score_below_extreme_threshold"
+            return False, "selected_source_score_below_extreme_threshold", False, weak_track_proxy_confidence
         if (target_track_face_score or 0) < 70:
-            return False, "target_track_score_below_extreme_threshold"
+            return False, "target_track_score_below_extreme_threshold", False, weak_track_proxy_confidence
         if (target_track_stability_score or 0.0) < 0.45:
-            return False, "target_track_unstable"
-        if (usable_box_ratio or 0.0) < 0.35:
-            return False, "usable_box_ratio_below_threshold"
-        if (track_usable_ratio or 0.0) < 0.4:
-            allow_weak_track = bool(getattr(settings, "SWAP_EXTREME_ALLOW_PROXY_ON_WEAK_TRACK", False))
-            if allow_weak_track and (detect_hit_ratio or 0.0) >= 0.6:
-                weak_track_override = True
-            else:
-                return False, "track_usable_ratio_below_threshold"
-        else:
-            weak_track_override = False
-        if (true_detect_frame_ratio or 0.0) < 0.4 and not weak_track_override:
-            return False, "true_detect_frame_ratio_below_threshold"
+            return False, "target_track_unstable", False, weak_track_proxy_confidence
         if not proxy_clip_used:
-            return False, "proxy_target_missing"
+            return False, "proxy_target_missing", False, weak_track_proxy_confidence
         if proxy_quality == "synthetic_fallback":
-            return False, "proxy_quality_synthetic_fallback"
+            return False, "proxy_quality_synthetic_fallback", False, weak_track_proxy_confidence
         if (proxy_face_ratio_after or 0.0) < 0.55:
-            return False, "proxy_face_ratio_after_below_threshold"
+            return False, "proxy_face_ratio_after_below_threshold", False, weak_track_proxy_confidence
         if not proxy_is_true_close_crop:
-            return False, "proxy_not_true_close_crop"
-        return True, "weak_track_proxy_override" if weak_track_override else None
+            return False, "proxy_not_true_close_crop", False, weak_track_proxy_confidence
+
+        detected_track_lane = (
+            str(target_detect_mode or "") == "detected_track"
+            and (usable_box_ratio or 0.0) >= 0.35
+            and (track_usable_ratio or 0.0) >= 0.4
+            and (true_detect_frame_ratio or 0.0) >= 0.4
+        )
+        if detected_track_lane:
+            return True, None, False, weak_track_proxy_confidence
+
+        allow_weak_track = bool(getattr(settings, "SWAP_EXTREME_ALLOW_PROXY_ON_WEAK_TRACK", False))
+        weak_track_lane = (
+            allow_weak_track
+            and (detect_hit_ratio or 0.0) >= 0.8
+            and proxy_is_true_close_crop
+            and (proxy_face_ratio_after or 0.0) >= 0.55
+            and (source_face_score or 0.0) >= 80
+            and (selected_source_score or 0.0) >= 96
+            and weak_track_proxy_confidence >= 0.78
+        )
+        if weak_track_lane:
+            return True, "weak_track_proxy_override", True, weak_track_proxy_confidence
+        if (usable_box_ratio or 0.0) < 0.35:
+            return False, "usable_box_ratio_below_threshold", False, weak_track_proxy_confidence
+        if (track_usable_ratio or 0.0) < 0.4:
+            return False, "track_usable_ratio_below_threshold", False, weak_track_proxy_confidence
+        if (true_detect_frame_ratio or 0.0) < 0.4:
+            return False, "true_detect_frame_ratio_below_threshold", False, weak_track_proxy_confidence
+        if str(target_detect_mode or "") != "detected_track":
+            return False, "target_detect_mode_not_detected_track", False, weak_track_proxy_confidence
+        return False, "weak_track_proxy_override_not_allowed", False, weak_track_proxy_confidence
 
     async def _run_intelligence_vendor_job(
         self,
@@ -619,6 +653,9 @@ class AkoolSwapFaceEngine:
         proxy_center_offset = None
         route_gate_passed = True
         route_gate_fail_reason = None
+        weak_track_proxy_override_used = False
+        weak_track_proxy_override_reason = None
+        weak_track_proxy_confidence = 0.0
         ab_compare_runtime: Dict[str, Any] | None = None
         quality_summary: Dict[str, Any] | None = None
         degraded_fallback_used = False
@@ -1131,7 +1168,12 @@ class AkoolSwapFaceEngine:
                     fallback_reason=fallback_reason,
                     on_log=on_log,
                 )
-                route_gate_passed, route_gate_fail_reason = self._evaluate_extreme_route_gate(
+                (
+                    route_gate_passed,
+                    route_gate_fail_reason,
+                    weak_track_proxy_override_used,
+                    weak_track_proxy_confidence,
+                ) = self._evaluate_extreme_route_gate(
                     replacement_intensity=effective_replacement_intensity,
                     target_detect_mode=target_detect_mode,
                     detect_hit_ratio=detect_hit_ratio,
@@ -1147,9 +1189,12 @@ class AkoolSwapFaceEngine:
                     proxy_face_ratio_after=proxy_face_ratio_after,
                     selected_source_score=(selected_source_ref or {}).get("selection_score") or source_face_score,
                 )
+                weak_track_proxy_override_reason = route_gate_fail_reason if weak_track_proxy_override_used else None
                 if _downgraded_from_extreme and route_gate_passed:
                     route_gate_passed = False
                     route_gate_fail_reason = fallback_reason or "proxy_target_required_for_extreme_replace"
+                    weak_track_proxy_override_used = False
+                    weak_track_proxy_override_reason = None
                 if not route_gate_passed and effective_replacement_intensity == "extreme_replace":
                     downgrade_reason = route_gate_fail_reason or "extreme_route_gate_failed"
                     fallback_reason = downgrade_reason
@@ -1746,6 +1791,9 @@ class AkoolSwapFaceEngine:
                 "replacement_intensity": replacement_intensity,
                 "extreme_requested": extreme_replace_selected,
                 "extreme_executed": replacement_intensity == "extreme_replace",
+                "weak_track_proxy_override_used": weak_track_proxy_override_used,
+                "weak_track_proxy_override_reason": weak_track_proxy_override_reason,
+                "weak_track_proxy_confidence": weak_track_proxy_confidence,
                 "extreme_replace_selected": extreme_replace_selected,
                 "downgraded_from_extreme": downgraded_from_extreme,
                 "route_intent": route_intent,
@@ -1799,8 +1847,10 @@ class AkoolSwapFaceEngine:
                 "proxy_clip_reason": proxy_clip_reason,
                 "requested_proxy_profile": requested_proxy_profile,
                 "proxy_profile_requested": requested_proxy_profile,
+                "proxy_requested_profile": requested_proxy_profile,
                 "effective_proxy_profile": effective_proxy_profile or None,
                 "proxy_profile_effective": effective_proxy_profile or None,
+                "proxy_effective_profile": effective_proxy_profile or None,
                 "proxy_profile": effective_proxy_profile or requested_proxy_profile,
                 "proxy_crop_ratio": focus_crop_area_ratio if proxy_clip_used else None,
                 "postprocess_profile": postprocess_profile,
@@ -1877,6 +1927,9 @@ class AkoolSwapFaceEngine:
                     "replacement_intensity": replacement_intensity,
                     "extreme_requested": extreme_replace_selected,
                     "extreme_executed": replacement_intensity == "extreme_replace",
+                    "weak_track_proxy_override_used": weak_track_proxy_override_used,
+                    "weak_track_proxy_override_reason": weak_track_proxy_override_reason,
+                    "weak_track_proxy_confidence": weak_track_proxy_confidence,
                     "route_intent": route_intent,
                     "route_execution_style": route_execution_style,
                     "route_summary": quality_summary["route_summary"],
@@ -1937,8 +1990,10 @@ class AkoolSwapFaceEngine:
                     "proxy_clip_reason": proxy_clip_reason,
                     "requested_proxy_profile": requested_proxy_profile,
                     "proxy_profile_requested": requested_proxy_profile,
+                    "proxy_requested_profile": requested_proxy_profile,
                     "effective_proxy_profile": effective_proxy_profile or None,
                     "proxy_profile_effective": effective_proxy_profile or None,
+                    "proxy_effective_profile": effective_proxy_profile or None,
                     "proxy_profile": effective_proxy_profile or requested_proxy_profile,
                     "proxy_crop_ratio": quality_summary["proxy_crop_ratio"],
                     "postprocess_profile": postprocess_profile,
@@ -2022,6 +2077,9 @@ class AkoolSwapFaceEngine:
                     "replacement_intensity": replacement_intensity,
                     "extreme_requested": extreme_replace_selected,
                     "extreme_executed": replacement_intensity == "extreme_replace",
+                    "weak_track_proxy_override_used": weak_track_proxy_override_used,
+                    "weak_track_proxy_override_reason": weak_track_proxy_override_reason,
+                    "weak_track_proxy_confidence": weak_track_proxy_confidence,
                     "extreme_replace_selected": extreme_replace_selected,
                     "downgraded_from_extreme": downgraded_from_extreme,
                     "route_intent": route_intent,
@@ -2085,8 +2143,10 @@ class AkoolSwapFaceEngine:
                     "proxy_clip_reason": proxy_clip_reason,
                     "requested_proxy_profile": requested_proxy_profile,
                     "proxy_profile_requested": requested_proxy_profile,
+                    "proxy_requested_profile": requested_proxy_profile,
                     "effective_proxy_profile": effective_proxy_profile or None,
                     "proxy_profile_effective": effective_proxy_profile or None,
+                    "proxy_effective_profile": effective_proxy_profile or None,
                     "proxy_profile": effective_proxy_profile or requested_proxy_profile,
                     "proxy_crop_ratio": quality_summary["proxy_crop_ratio"],
                     "postprocess_profile": postprocess_profile,

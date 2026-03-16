@@ -600,10 +600,10 @@ class _WeakTrackProxyExtractor(_FakeExtractor):
         payload["face_track_summary"] = {
             **dict(payload["face_track_summary"]),
             "target_detection_mode": "frame_sampling_fallback",
-            "detect_hit_ratio": 0.75,
-            "usable_box_ratio": 0.42,
-            "track_usable_ratio": 0.25,
-            "true_detect_frame_ratio": 0.25,
+            "detect_hit_ratio": 0.85,
+            "usable_box_ratio": 0.0,
+            "track_usable_ratio": 0.0,
+            "true_detect_frame_ratio": 0.0,
             "fallback_frame_ratio": 0.75,
             "stability_score": 0.58,
             "coverage_ratio": 0.42,
@@ -611,9 +611,9 @@ class _WeakTrackProxyExtractor(_FakeExtractor):
         payload["target_detection_mode"] = "frame_sampling_fallback"
         payload["target_track_stability_score"] = 0.58
         payload["target_track_coverage_ratio"] = 0.42
-        payload["detect_hit_ratio"] = 0.75
-        payload["usable_box_ratio"] = 0.42
-        payload["track_usable_ratio"] = 0.25
+        payload["detect_hit_ratio"] = 0.85
+        payload["usable_box_ratio"] = 0.0
+        payload["track_usable_ratio"] = 0.0
         return payload
 
 
@@ -1268,9 +1268,16 @@ def test_swap_engine_intelligence_allows_guarded_proxy_on_weak_track(monkeypatch
     assert result.metadata["replacement_intensity"] == "extreme_replace"
     assert result.metadata["route_gate_passed"] is True
     assert result.metadata["route_gate_fail_reason"] == "weak_track_proxy_override"
+    assert result.metadata["weak_track_proxy_override_used"] is True
+    assert result.metadata["weak_track_proxy_override_reason"] == "weak_track_proxy_override"
+    assert result.metadata["weak_track_proxy_confidence"] >= 0.78
+    assert result.metadata["usable_box_ratio"] == 0.0
+    assert result.metadata["track_usable_ratio"] == 0.0
     assert result.metadata["proxy_clip_used"] is True
     assert result.metadata["proxy_executed"] is True
     assert result.metadata["modifyVideoSource_final"] == "proxy_target"
+    assert result.metadata["proxy_requested_profile"] == result.metadata["requested_proxy_profile"]
+    assert result.metadata["proxy_effective_profile"] == result.metadata["effective_proxy_profile"]
 
 
 def test_swap_engine_retries_provider_temp_file_error_with_raw_target_reason():
