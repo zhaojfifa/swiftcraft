@@ -194,6 +194,7 @@ class AkoolSwapFaceEngine:
         self,
         *,
         replacement_intensity: str,
+        target_detect_mode: str | None,
         source_face_score: float | None,
         target_track_face_score: float | None,
         target_track_stability_score: float | None,
@@ -206,21 +207,23 @@ class AkoolSwapFaceEngine:
     ) -> tuple[bool, str | None]:
         if replacement_intensity != "extreme_replace":
             return True, None
-        if (source_face_score or 0) < 72:
+        if str(target_detect_mode or "") != "detected_track":
+            return False, "target_detect_mode_not_detected_track"
+        if (source_face_score or 0) < 80:
             return False, "source_score_below_extreme_threshold"
-        if (selected_source_score or 0) < 90:
+        if (selected_source_score or 0) < 96:
             return False, "selected_source_score_below_extreme_threshold"
-        if (target_track_face_score or 0) < 68:
+        if (target_track_face_score or 0) < 70:
             return False, "target_track_score_below_extreme_threshold"
         if (target_track_stability_score or 0.0) < 0.45:
             return False, "target_track_unstable"
-        if (true_detect_frame_ratio or 0.0) < 0.45:
+        if (true_detect_frame_ratio or 0.0) < 0.4:
             return False, "true_detect_frame_ratio_below_threshold"
         if not proxy_clip_used:
             return False, "proxy_target_missing"
         if proxy_quality == "synthetic_fallback":
             return False, "proxy_quality_synthetic_fallback"
-        if (proxy_face_ratio_after or 0.0) < 0.40:
+        if (proxy_face_ratio_after or 0.0) < 0.55:
             return False, "proxy_face_ratio_after_below_threshold"
         if not proxy_is_true_close_crop:
             return False, "proxy_not_true_close_crop"
@@ -345,19 +348,51 @@ class AkoolSwapFaceEngine:
         proxy_face_ratio_after: float | None,
         proxy_clip_used: bool,
         extreme_replace_effective: bool,
+        degraded_fallback_used: bool,
+        target_detect_mode: str | None,
+        proxy_quality: str,
     ) -> Dict[str, Any]:
         face_presence_ratio = round(min(1.0, max(0.0, (target_track_stability_score or 0.0) * 1.05)), 4)
         face_stability_score = round(min(1.0, max(0.0, target_track_stability_score or 0.0)), 4)
-        overwrite_strength = (
-            min(1.0, max(0.0, (proxy_face_ratio_after or 0.0) * 1.2))
-            + min(1.0, max(0.0, (source_face_score or 0.0) / 100.0)) * 0.35
-            + (0.15 if proxy_clip_used else 0.0)
-            + (0.15 if extreme_replace_effective else 0.0)
+        proxy_execution_confidence = round(
+            min(
+                1.0,
+                max(
+                    0.0,
+                    (0.62 if proxy_clip_used else 0.18)
+                    + (0.18 if proxy_quality == "track_based" else 0.06 if proxy_quality == "sampled" else 0.0)
+                    + min(0.22, max(0.0, (proxy_face_ratio_after or 0.0) - 0.25)),
+                ),
+            ),
+            4,
         )
+        track_quality_confidence = round(
+            min(
+                1.0,
+                max(
+                    0.0,
+                    (target_track_stability_score or 0.0) * 0.78
+                    + (0.16 if str(target_detect_mode or "") == "detected_track" else 0.04),
+                ),
+            ),
+            4,
+        )
+        overwrite_strength = (
+            proxy_execution_confidence * 0.42
+            + track_quality_confidence * 0.28
+            + min(1.0, max(0.0, (source_face_score or 0.0) / 100.0)) * 0.20
+            + (0.10 if extreme_replace_effective else 0.0)
+        )
+        if str(target_detect_mode or "") != "detected_track":
+            overwrite_strength = min(overwrite_strength, 0.72)
+        if degraded_fallback_used:
+            overwrite_strength = min(overwrite_strength, 0.72)
         return {
             "face_presence_ratio": round(face_presence_ratio, 4),
             "face_stability_score": round(face_stability_score, 4),
-            "identity_overwrite_confidence": round(min(1.0, overwrite_strength), 4),
+            "proxy_execution_confidence": proxy_execution_confidence,
+            "track_quality_confidence": track_quality_confidence,
+            "identity_overwrite_confidence": round(min(1.0, max(0.0, overwrite_strength)), 4),
             "analysis_mode": "heuristic",
         }
 
@@ -555,6 +590,7 @@ class AkoolSwapFaceEngine:
         focus_face_ratio = None
         focus_crop_area_ratio = None
         target_detection_mode = "not_attempted"
+        target_detect_mode = "not_attempted"
         target_track_stability_score = None
         target_track_coverage_ratio = None
         true_detect_frame_ratio = None
@@ -562,6 +598,11 @@ class AkoolSwapFaceEngine:
         selected_anchor_frame = None
         selected_anchor_reason = None
         anchor_quality_score = None
+        proxy_margin_top = None
+        proxy_margin_bottom = None
+        proxy_margin_left = None
+        proxy_margin_right = None
+        proxy_center_offset = None
         route_gate_passed = True
         route_gate_fail_reason = None
         ab_compare_runtime: Dict[str, Any] | None = None
@@ -752,12 +793,18 @@ class AkoolSwapFaceEngine:
                     "target_track_face_score": extraction.get("target_track_face_score"),
                     "target_mapping_face_score": extraction.get("target_mapping_face_score"),
                     "target_detection_mode": extraction.get("target_detection_mode"),
+                    "target_detect_mode": extraction.get("target_detect_mode"),
                     "target_track_stability_score": extraction.get("target_track_stability_score"),
                     "target_track_coverage_ratio": extraction.get("target_track_coverage_ratio"),
                     "proxy_crop_box": extraction.get("proxy_crop_box"),
                     "proxy_face_ratio_before": extraction.get("proxy_face_ratio_before"),
                     "proxy_face_ratio_after": extraction.get("proxy_face_ratio_after"),
                     "proxy_is_true_close_crop": extraction.get("proxy_is_true_close_crop"),
+                    "proxy_margin_top": extraction.get("proxy_margin_top"),
+                    "proxy_margin_bottom": extraction.get("proxy_margin_bottom"),
+                    "proxy_margin_left": extraction.get("proxy_margin_left"),
+                    "proxy_margin_right": extraction.get("proxy_margin_right"),
+                    "proxy_center_offset": extraction.get("proxy_center_offset"),
                 }
                 vendor_runtime["target_face_extraction"] = {
                     "attempted": True,
@@ -770,6 +817,7 @@ class AkoolSwapFaceEngine:
                     "focus_face_ratio": target_face_runtime["focus_face_ratio"],
                     "focus_crop_area_ratio": target_face_runtime["focus_crop_area_ratio"],
                     "target_detection_mode": target_face_runtime["target_detection_mode"],
+                    "target_detect_mode": target_face_runtime["target_detect_mode"],
                     "target_track_stability_score": target_face_runtime["target_track_stability_score"],
                     "target_track_coverage_ratio": target_face_runtime["target_track_coverage_ratio"],
                     "proxy_crop_box": target_face_runtime["proxy_crop_box"],
@@ -798,6 +846,7 @@ class AkoolSwapFaceEngine:
                 face_track_summary = extraction.get("face_track_summary")
                 target_anchor_summary = extraction.get("target_anchor_summary")
                 target_detection_mode = str(extraction.get("target_detection_mode") or "unknown")
+                target_detect_mode = str(extraction.get("target_detect_mode") or target_detection_mode or "unknown")
                 target_track_stability_score = extraction.get("target_track_stability_score")
                 target_track_coverage_ratio = extraction.get("target_track_coverage_ratio")
                 proxy_crop_box = extraction.get("proxy_crop_box")
@@ -805,14 +854,17 @@ class AkoolSwapFaceEngine:
                 proxy_face_ratio_after = extraction.get("proxy_face_ratio_after")
                 proxy_is_true_close_crop = bool(extraction.get("proxy_is_true_close_crop"))
                 proxy_quality = str(extraction.get("proxy_quality") or "synthetic_fallback")
+                proxy_margin_top = extraction.get("proxy_margin_top")
+                proxy_margin_bottom = extraction.get("proxy_margin_bottom")
+                proxy_margin_left = extraction.get("proxy_margin_left")
+                proxy_margin_right = extraction.get("proxy_margin_right")
+                proxy_center_offset = extraction.get("proxy_center_offset")
                 selected_anchor_frame = (target_anchor_summary or {}).get("frame_index") if isinstance(target_anchor_summary, dict) else None
                 selected_anchor_reason = (target_anchor_summary or {}).get("rank_reason") if isinstance(target_anchor_summary, dict) else None
-                anchor_quality_score = (target_anchor_summary or {}).get("quality_score") if isinstance(target_anchor_summary, dict) else None
+                anchor_quality_score = (target_anchor_summary or {}).get("anchor_quality_score") if isinstance(target_anchor_summary, dict) else None
                 if isinstance(face_track_summary, dict):
-                    tracked_frames = max(int(face_track_summary.get("tracked_frames") or 0), 1)
-                    fallback_frames = int(face_track_summary.get("fallback_frames") or 0)
-                    true_detect_frame_ratio = round(max(0.0, 1.0 - (fallback_frames / tracked_frames)), 4)
-                    fallback_frame_ratio = round(min(1.0, fallback_frames / tracked_frames), 4)
+                    true_detect_frame_ratio = face_track_summary.get("true_detect_frame_ratio")
+                    fallback_frame_ratio = face_track_summary.get("fallback_frame_ratio")
                 target_mapping_face_rank_reason = (
                     (target_anchor_summary or {}).get("rank_reason")
                     if isinstance(target_anchor_summary, dict)
@@ -832,7 +884,7 @@ class AkoolSwapFaceEngine:
                     or not focus_crop_valid
                 )
                 on_log(
-                    f"[swap][target-detect] mode={target_detection_mode} stability_score={target_track_stability_score} "
+                    f"[swap][target-analyze] detect_mode={target_detect_mode} stability_score={target_track_stability_score} "
                     f"coverage_ratio={target_track_coverage_ratio}"
                 )
                 on_log(
@@ -841,8 +893,11 @@ class AkoolSwapFaceEngine:
                     f"focus_crop_area_ratio={focus_crop_area_ratio}"
                 )
                 on_log(
-                    f"[swap][target-proxy] proxy_crop_box={proxy_crop_box} "
+                    f"[swap][proxy-build] proxy_crop_box={proxy_crop_box} "
                     f"proxy_face_ratio_before={proxy_face_ratio_before} proxy_face_ratio_after={proxy_face_ratio_after} "
+                    f"proxy_margin_top={proxy_margin_top} proxy_margin_bottom={proxy_margin_bottom} "
+                    f"proxy_margin_left={proxy_margin_left} proxy_margin_right={proxy_margin_right} "
+                    f"proxy_center_offset={proxy_center_offset} "
                     f"proxy_is_true_close_crop={str(proxy_is_true_close_crop).lower()}"
                 )
                 on_log(
@@ -1060,6 +1115,7 @@ class AkoolSwapFaceEngine:
                 )
                 route_gate_passed, route_gate_fail_reason = self._evaluate_extreme_route_gate(
                     replacement_intensity=effective_replacement_intensity,
+                    target_detect_mode=target_detect_mode,
                     source_face_score=source_face_score,
                     target_track_face_score=target_track_face_score,
                     target_track_stability_score=target_track_stability_score,
@@ -1070,6 +1126,9 @@ class AkoolSwapFaceEngine:
                     proxy_face_ratio_after=proxy_face_ratio_after,
                     selected_source_score=(selected_source_ref or {}).get("selection_score") or source_face_score,
                 )
+                if _downgraded_from_extreme and route_gate_passed:
+                    route_gate_passed = False
+                    route_gate_fail_reason = fallback_reason or "proxy_target_required_for_extreme_replace"
                 if not route_gate_passed and effective_replacement_intensity == "extreme_replace":
                     downgrade_reason = route_gate_fail_reason or "extreme_route_gate_failed"
                     fallback_reason = downgrade_reason
@@ -1612,6 +1671,9 @@ class AkoolSwapFaceEngine:
             )
             if downgrade_reason or (extreme_replace_selected and not focus_crop_valid and not proxy_clip_used and degraded_fallback_used):
                 extreme_replace_effective = False
+            if extreme_replace_selected and replacement_intensity != "extreme_replace" and route_gate_passed and downgrade_reason:
+                route_gate_passed = False
+                route_gate_fail_reason = downgrade_reason
             if extreme_replace_selected and not extreme_replace_effective and not fallback_reason:
                 fallback_reason = downgrade_reason or "full_frame_target"
             target_analysis = {
@@ -1650,6 +1712,9 @@ class AkoolSwapFaceEngine:
                 proxy_face_ratio_after=proxy_face_ratio_after,
                 proxy_clip_used=proxy_clip_used,
                 extreme_replace_effective=extreme_replace_effective,
+                degraded_fallback_used=degraded_fallback_used,
+                target_detect_mode=target_detect_mode,
+                proxy_quality=proxy_quality,
             )
             on_log(f"[swap][result-analyze] analysis={result_analysis}")
             quality_summary = {
@@ -1670,28 +1735,41 @@ class AkoolSwapFaceEngine:
                 "selected_source_face_reason": source_selection_reason,
                 "selected_source_refs": selected_source_refs,
                 "source_candidate_scores": source_candidate_scores,
+                "source_rank_table": source_candidate_scores,
                 "selected_target_frame_index": selected_target_frame_index,
                 "face_enhance_used": bool(face_enhance),
                 "target_mapping_face_rank_reason": target_mapping_face_rank_reason,
                 "target_rank_reason": target_mapping_face_rank_reason,
                 "extreme_replace_effective": extreme_replace_effective,
+                "extreme_gate_accepted": route_gate_passed,
+                "extreme_gate_reason": route_gate_fail_reason or "none",
                 "downgrade_reason": downgrade_reason,
                 "fallback_reason": fallback_reason,
                 "target_anchor_quality": target_anchor_quality,
                 "target_detection_mode": target_detection_mode,
+                "target_detect_mode": target_detect_mode,
+                "true_detect_frame_ratio": true_detect_frame_ratio,
                 "target_track_stability_score": target_track_stability_score,
                 "target_track_coverage_ratio": target_track_coverage_ratio,
                 "proxy_crop_box": proxy_crop_box,
                 "proxy_face_ratio_before": proxy_face_ratio_before,
                 "proxy_face_ratio_after": proxy_face_ratio_after,
                 "proxy_is_true_close_crop": proxy_is_true_close_crop,
+                "proxy_margin_top": proxy_margin_top,
+                "proxy_margin_bottom": proxy_margin_bottom,
+                "proxy_margin_left": proxy_margin_left,
+                "proxy_margin_right": proxy_margin_right,
+                "proxy_center_offset": proxy_center_offset,
+                "proxy_track_based": proxy_quality == "track_based",
                 "route_gate_passed": route_gate_passed,
                 "route_gate_fail_reason": route_gate_fail_reason,
                 "proxy_clip_valid": proxy_clip_valid,
                 "proxy_clip_used": proxy_clip_used,
                 "proxy_clip_reason": proxy_clip_reason,
                 "requested_proxy_profile": requested_proxy_profile,
+                "proxy_profile_requested": requested_proxy_profile,
                 "effective_proxy_profile": effective_proxy_profile or None,
+                "proxy_profile_effective": effective_proxy_profile or None,
                 "proxy_profile": effective_proxy_profile or requested_proxy_profile,
                 "proxy_crop_ratio": focus_crop_area_ratio if proxy_clip_used else None,
                 "postprocess_profile": postprocess_profile,
@@ -1709,6 +1787,7 @@ class AkoolSwapFaceEngine:
                 "proxy_runtime": proxy_runtime,
                 "extreme_replace_runtime": extreme_replace_runtime,
                 "result_analysis": result_analysis,
+                "quality_analysis": result_analysis,
                 "ab_compare": ab_compare_runtime,
             }
             outputs = {
@@ -1772,11 +1851,13 @@ class AkoolSwapFaceEngine:
                     "source_face_risk_tags": source_face_risk_tags,
                     "source_pack_size": source_pack_size,
                     "selected_source_face_index": selected_source_face_index,
+                    "selected_source_index": selected_source_face_index,
                     "selected_source_bucket": selected_source_bucket,
                     "selected_source_ref": selected_source_ref,
                     "source_bucket_reason": source_bucket_reason,
                     "source_selection_reason": source_selection_reason,
                     "selected_source_refs": selected_source_refs,
+                    "source_rank_table": source_candidate_scores,
                     "canonical_source_face_url": canonical_source_face_url,
                     "original_target_url": original_target_url,
                     "focused_target_url": focused_target_url,
@@ -1785,15 +1866,25 @@ class AkoolSwapFaceEngine:
                     "target_mapping_face_rank_reason": target_mapping_face_rank_reason,
                     "target_rank_reason": target_mapping_face_rank_reason,
                     "extreme_replace_effective": extreme_replace_effective,
+                    "extreme_gate_accepted": route_gate_passed,
+                    "extreme_gate_reason": route_gate_fail_reason or "none",
                     "downgrade_reason": downgrade_reason,
                     "fallback_reason": fallback_reason,
                     "target_detection_mode": target_detection_mode,
+                    "target_detect_mode": target_detect_mode,
+                    "true_detect_frame_ratio": true_detect_frame_ratio,
                     "target_track_stability_score": target_track_stability_score,
                     "target_track_coverage_ratio": target_track_coverage_ratio,
                     "proxy_crop_box": proxy_crop_box,
                     "proxy_face_ratio_before": proxy_face_ratio_before,
                     "proxy_face_ratio_after": proxy_face_ratio_after,
                     "proxy_is_true_close_crop": proxy_is_true_close_crop,
+                    "proxy_margin_top": proxy_margin_top,
+                    "proxy_margin_bottom": proxy_margin_bottom,
+                    "proxy_margin_left": proxy_margin_left,
+                    "proxy_margin_right": proxy_margin_right,
+                    "proxy_center_offset": proxy_center_offset,
+                    "proxy_track_based": proxy_quality == "track_based",
                     "route_gate_passed": route_gate_passed,
                     "route_gate_fail_reason": route_gate_fail_reason,
                     "replacement_mode": replacement_mode,
@@ -1806,7 +1897,9 @@ class AkoolSwapFaceEngine:
                     "proxy_clip_used": proxy_clip_used,
                     "proxy_clip_reason": proxy_clip_reason,
                     "requested_proxy_profile": requested_proxy_profile,
+                    "proxy_profile_requested": requested_proxy_profile,
                     "effective_proxy_profile": effective_proxy_profile or None,
+                    "proxy_profile_effective": effective_proxy_profile or None,
                     "proxy_profile": effective_proxy_profile or requested_proxy_profile,
                     "proxy_crop_ratio": quality_summary["proxy_crop_ratio"],
                     "postprocess_profile": postprocess_profile,
@@ -1831,6 +1924,7 @@ class AkoolSwapFaceEngine:
                     "source_pack_summary": source_pack_summary,
                     "extreme_replace_runtime": extreme_replace_runtime,
                     "result_analysis": result_analysis,
+                    "quality_analysis": result_analysis,
                     "ab_compare": ab_compare_runtime,
                     "source_crop_policy": source_crop_policy,
                     "target_anchor_policy": target_anchor_policy,
@@ -1896,11 +1990,13 @@ class AkoolSwapFaceEngine:
                     "source_face_risk_tags": source_face_risk_tags,
                     "source_pack_size": source_pack_size,
                     "selected_source_face_index": selected_source_face_index,
+                    "selected_source_index": selected_source_face_index,
                     "selected_source_bucket": selected_source_bucket,
                     "selected_source_ref": selected_source_ref,
                     "source_bucket_reason": source_bucket_reason,
                     "source_selection_reason": source_selection_reason,
                     "selected_source_refs": selected_source_refs,
+                    "source_rank_table": source_candidate_scores,
                     "canonical_source_face_url": canonical_source_face_url,
                     "original_target_url": original_target_url,
                     "focused_target_url": focused_target_url,
@@ -1910,14 +2006,24 @@ class AkoolSwapFaceEngine:
                     "target_rank_reason": target_mapping_face_rank_reason,
                     "target_anchor_quality": target_anchor_quality,
                     "target_detection_mode": target_detection_mode,
+                    "target_detect_mode": target_detect_mode,
+                    "true_detect_frame_ratio": true_detect_frame_ratio,
                     "target_track_stability_score": target_track_stability_score,
                     "target_track_coverage_ratio": target_track_coverage_ratio,
                     "proxy_crop_box": proxy_crop_box,
                     "proxy_face_ratio_before": proxy_face_ratio_before,
                     "proxy_face_ratio_after": proxy_face_ratio_after,
                     "proxy_is_true_close_crop": proxy_is_true_close_crop,
+                    "proxy_margin_top": proxy_margin_top,
+                    "proxy_margin_bottom": proxy_margin_bottom,
+                    "proxy_margin_left": proxy_margin_left,
+                    "proxy_margin_right": proxy_margin_right,
+                    "proxy_center_offset": proxy_center_offset,
+                    "proxy_track_based": proxy_quality == "track_based",
                     "route_gate_passed": route_gate_passed,
                     "route_gate_fail_reason": route_gate_fail_reason,
+                    "extreme_gate_accepted": route_gate_passed,
+                    "extreme_gate_reason": route_gate_fail_reason or "none",
                     "extreme_replace_effective": extreme_replace_effective,
                     "downgrade_reason": downgrade_reason,
                     "fallback_reason": fallback_reason,
@@ -1931,7 +2037,9 @@ class AkoolSwapFaceEngine:
                     "proxy_clip_used": proxy_clip_used,
                     "proxy_clip_reason": proxy_clip_reason,
                     "requested_proxy_profile": requested_proxy_profile,
+                    "proxy_profile_requested": requested_proxy_profile,
                     "effective_proxy_profile": effective_proxy_profile or None,
+                    "proxy_profile_effective": effective_proxy_profile or None,
                     "proxy_profile": effective_proxy_profile or requested_proxy_profile,
                     "proxy_crop_ratio": quality_summary["proxy_crop_ratio"],
                     "postprocess_profile": postprocess_profile,
@@ -1956,6 +2064,7 @@ class AkoolSwapFaceEngine:
                     "source_pack_summary": source_pack_summary,
                     "extreme_replace_runtime": extreme_replace_runtime,
                     "result_analysis": result_analysis,
+                    "quality_analysis": result_analysis,
                     "ab_compare": ab_compare_runtime,
                     "mode": str(record.mode or "basic").lower(),
                     "request_id": job.request_id or None,

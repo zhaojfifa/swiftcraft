@@ -37,31 +37,35 @@ def test_video_face_extractor_candidate_box_uses_opts_when_region_missing():
 
 def test_video_face_extractor_proxy_profiles_produce_distinct_crop_ratios():
     extractor = VideoFaceExtractor.__new__(VideoFaceExtractor)
-    anchor_box = {"x": 440.0, "y": 120.0, "width": 320.0, "height": 420.0}
+    anchor_box = {"x": 200.0, "y": 220.0, "width": 240.0, "height": 320.0}
 
-    _, _, _, _, standard_ratio, _ = extractor._resolve_proxy_crop_geometry(
-        video_width=1280,
-        video_height=720,
+    _, _, _, _, standard_crop_ratio, standard_face_ratio, _, standard_offset = extractor._resolve_proxy_crop_geometry(
+        video_width=720,
+        video_height=1280,
         anchor_box=anchor_box,
         crop_profile="standard",
     )
-    _, _, _, _, tight_ratio, _ = extractor._resolve_proxy_crop_geometry(
-        video_width=1280,
-        video_height=720,
+    _, _, _, _, tight_crop_ratio, tight_face_ratio, _, tight_offset = extractor._resolve_proxy_crop_geometry(
+        video_width=720,
+        video_height=1280,
         anchor_box=anchor_box,
         crop_profile="tight",
     )
-    _, _, _, _, extreme_ratio, _ = extractor._resolve_proxy_crop_geometry(
-        video_width=1280,
-        video_height=720,
+    _, _, _, _, extreme_crop_ratio, extreme_face_ratio, _, extreme_offset = extractor._resolve_proxy_crop_geometry(
+        video_width=720,
+        video_height=1280,
         anchor_box=anchor_box,
         crop_profile="extreme_close",
     )
 
-    assert 0.8 <= standard_ratio <= 0.85
-    assert 0.6 <= tight_ratio <= 0.7
-    assert 0.4 <= extreme_ratio <= 0.5
-    assert standard_ratio > tight_ratio > extreme_ratio
+    assert 0.32 <= standard_face_ratio <= 0.42
+    assert 0.45 <= tight_face_ratio <= 0.58
+    assert 0.55 <= extreme_face_ratio <= 0.72
+    assert standard_face_ratio < tight_face_ratio < extreme_face_ratio
+    assert standard_crop_ratio > tight_crop_ratio > extreme_crop_ratio
+    assert standard_offset <= 0.05
+    assert tight_offset <= 0.05
+    assert extreme_offset <= 0.05
 
 
 def test_create_proxy_target_clip_downgrades_close_profile_to_standard(monkeypatch, tmp_path):
@@ -123,5 +127,7 @@ def test_rank_source_references_returns_candidate_scores():
     )
 
     assert ranked["selected"]["source_index"] == 1
+    assert ranked["selected"]["selection_reason"] == "replacement_fitness_best"
     assert len(ranked["candidate_scores"]) == 2
     assert ranked["candidate_scores"][0]["final_source_selection_score"] > 0
+    assert "lighting_gap_penalty" in ranked["candidate_scores"][0]

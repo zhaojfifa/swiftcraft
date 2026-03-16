@@ -471,21 +471,38 @@ class _FakeExtractor:
             "target_mapping_face_risk_tags": ["lighting_gap"],
             "target_face_risk_tags": ["face_small"],
             "face_track_summary": {
-                "target_detection_mode": "video_multi_frame_detect",
+                "target_detection_mode": "detected_track",
+                "track_id": "primary",
                 "tracked_frames": 3,
                 "frame_indexes": [1, 3, 5],
                 "frame_boxes": [
-                    {"frame_index": 1, "box": {"x": 40, "y": 20, "width": 180, "height": 180}, "used_bbox_fallback": False},
-                    {"frame_index": 3, "box": {"x": 42, "y": 22, "width": 176, "height": 176}, "used_bbox_fallback": False},
-                    {"frame_index": 5, "box": {"x": 44, "y": 24, "width": 172, "height": 172}, "used_bbox_fallback": False},
+                    {"frame_index": 1, "box": {"x": 40, "y": 20, "width": 180, "height": 180}, "used_bbox_fallback": False, "detect_source": "provider_video_detect"},
+                    {"frame_index": 3, "box": {"x": 42, "y": 22, "width": 176, "height": 176}, "used_bbox_fallback": False, "detect_source": "provider_video_detect"},
+                    {"frame_index": 5, "box": {"x": 44, "y": 24, "width": 172, "height": 172}, "used_bbox_fallback": False, "detect_source": "provider_video_detect"},
                 ],
                 "avg_box": {"x": 40, "y": 20, "width": 180, "height": 180},
                 "median_box": {"x": 42, "y": 22, "width": 176, "height": 176},
+                "track_union_box": {"x": 38, "y": 18, "width": 186, "height": 186},
                 "anchor_box": {"x": 42, "y": 22, "width": 176, "height": 176},
                 "smoothed_anchor_box": {"x": 44, "y": 24, "width": 172, "height": 172},
                 "focused_crop": {"x": 10, "y": 0, "width": 260, "height": 260},
                 "stability_score": 0.82,
                 "coverage_ratio": 0.75,
+                "avg_face_ratio": 0.19,
+                "motion_range": 0.08,
+                "missing_frame_ratio": 0.0,
+                "true_detect_frame_ratio": 0.67,
+                "interpolated_frame_ratio": 0.0,
+                "fallback_frame_ratio": 0.0,
+                "proxy_crop_box": {"x": 10, "y": 0, "width": 260, "height": 260},
+                "proxy_face_ratio_before": 0.18,
+                "proxy_face_ratio_after": 0.61,
+                "proxy_is_true_close_crop": True,
+                "proxy_margin_top": 0.14,
+                "proxy_margin_bottom": 0.18,
+                "proxy_margin_left": 0.12,
+                "proxy_margin_right": 0.12,
+                "proxy_center_offset": 0.01,
             },
             "target_anchor_summary": {
                 "frame_index": 5,
@@ -495,6 +512,7 @@ class _FakeExtractor:
                 "raw_box": (40.0, 20.0, 180.0, 180.0),
                 "quality_breakdown": {"frontalness": 17},
                 "rank_reason": "best_for_identity_overwrite",
+                "anchor_quality_score": 52.4,
             },
             "target_anchor_quality": {
                 "score": 86,
@@ -502,15 +520,20 @@ class _FakeExtractor:
                 "valid_for_extreme": True,
             },
             "focused_target_url": "https://vendor.example/focused-target.mp4",
-            "proxy_target_url": "https://vendor.example/focused-target.mp4",
-            "target_detection_mode": "video_multi_frame_detect",
+            "proxy_target_url": "https://vendor.example/proxy-target.mp4",
+            "target_detection_mode": "detected_track",
             "target_track_stability_score": 0.82,
             "target_track_coverage_ratio": 0.75,
             "proxy_crop_box": {"x": 10, "y": 0, "width": 260, "height": 260},
-            "proxy_face_ratio_before": 0.08,
-            "proxy_face_ratio_after": 0.42,
+            "proxy_face_ratio_before": 0.18,
+            "proxy_face_ratio_after": 0.61,
             "proxy_is_true_close_crop": True,
             "proxy_quality": "track_based",
+            "proxy_margin_top": 0.14,
+            "proxy_margin_bottom": 0.18,
+            "proxy_margin_left": 0.12,
+            "proxy_margin_right": 0.12,
+            "proxy_center_offset": 0.01,
             "replacement_mode": "explicit_mapping_enhanced",
             "focus_crop_valid": True,
             "focus_mode": "focused_crop",
@@ -545,6 +568,8 @@ class _InvalidFocusExtractor(_FakeExtractor):
             "avg_box_area_ratio": 1.0,
             "stability_score": 0.18,
             "coverage_ratio": 0.22,
+            "true_detect_frame_ratio": 0.12,
+            "fallback_frame_ratio": 0.88,
         }
         payload["target_detection_mode"] = "frame_sampling_fallback"
         payload["target_track_stability_score"] = 0.18
@@ -589,7 +614,7 @@ class _FakeQualityPipeline:
         return {
             "selected": selected,
             "selected_index": selected["source_index"],
-            "selection_reason": "target_anchor_pose_match",
+            "selection_reason": "replacement_fitness_best",
             "candidate_scores": [
                 {
                     "source_index": int(candidate["source_index"]),
@@ -620,7 +645,7 @@ class _FakeQualityPipeline:
             {
                 "bucket": "frontal",
                 "selected_index": selected["selected_index"],
-                "selection_reason": "target_anchor_pose_match",
+                "selection_reason": "replacement_fitness_best",
                 "selection_score": selected["selected"].get("selection_score"),
             }
         ]
@@ -629,7 +654,7 @@ class _FakeQualityPipeline:
                 {
                     "bucket": "side_angle",
                     "selected_index": alternate["source_index"],
-                    "selection_reason": "side_angle_bucket_best",
+                    "selection_reason": "replacement_fitness_best",
                     "selection_score": alternate.get("selection_score"),
                 }
             )
@@ -856,12 +881,13 @@ def test_swap_engine_intelligence_selects_best_source_reference():
 
     assert engine.client.last_submit_kwargs["source_face"]["path"] == "https://vendor.example/detected-face.jpg"
     assert result.metadata["selected_source_face_index"] == 1
-    assert result.metadata["source_selection_reason"] == "target_anchor_pose_match"
+    assert result.metadata["source_selection_reason"] == "replacement_fitness_best"
     assert result.metadata["source_pack_size"] == 3
     assert len(result.metadata["selected_source_refs"]) >= 1
     assert result.metadata["selected_source_bucket"] == "frontal"
     assert result.metadata["selected_source_ref"]["bucket"] == "frontal"
-    assert result.metadata["source_bucket_reason"] == "target_anchor_pose_match"
+    assert result.metadata["source_bucket_reason"] == "replacement_fitness_best"
+    assert len(result.metadata["source_rank_table"]) >= 1
     assert result.metadata["proxy_profile"] == "tight"
     assert result.metadata["postprocess_profile"] == "postprocess_standard"
     assert result.metadata["overwrite_strength_expected"] == "medium"
@@ -1052,22 +1078,25 @@ def test_swap_engine_intelligence_extreme_replace_sets_route_and_face_enhance_fl
     assert result.metadata["proxy_profile"] == "extreme_close"
     assert result.metadata["postprocess_profile"] == "postprocess_minimal"
     assert result.metadata["overwrite_strength_expected"] == "high"
-    assert result.metadata["target_detection_mode"] == "video_multi_frame_detect"
+    assert result.metadata["target_detection_mode"] == "detected_track"
     assert result.metadata["target_track_stability_score"] == 0.82
     assert result.metadata["target_track_coverage_ratio"] == 0.75
     assert result.metadata["proxy_crop_box"] == {"x": 10, "y": 0, "width": 260, "height": 260}
-    assert result.metadata["proxy_face_ratio_before"] == 0.08
-    assert result.metadata["proxy_face_ratio_after"] == 0.42
+    assert result.metadata["proxy_face_ratio_before"] == 0.18
+    assert result.metadata["proxy_face_ratio_after"] == 0.61
     assert result.metadata["proxy_is_true_close_crop"] is True
-    assert result.metadata["route_gate_passed"] is True
-    assert result.metadata["route_gate_fail_reason"] is None
-    assert result.metadata["target_analysis"]["detect_mode"] == "video_multi_frame_detect"
+    assert result.metadata["extreme_gate_accepted"] is True
+    assert result.metadata["extreme_gate_reason"] == "none"
+    assert result.metadata["target_analysis"]["detect_mode"] == "detected_track"
+    assert result.metadata["target_analysis"]["true_detect_frame_ratio"] == 0.67
     assert result.metadata["proxy_runtime"]["proxy_quality"] == "track_based"
     assert result.metadata["source_pack_summary"]["candidate_count"] == 1
     assert len(result.metadata["source_pack_summary"]["candidate_scores"]) >= 1
+    assert len(result.metadata["source_rank_table"]) >= 1
+    assert result.metadata["quality_analysis"]["analysis_mode"] == "heuristic"
     assert result.metadata["extreme_replace_runtime"]["effective"] is True
     assert result.metadata["result_analysis"]["analysis_mode"] == "heuristic"
-    assert engine.client.last_submit_kwargs["modify_video"] == "https://vendor.example/focused-target.mp4"
+    assert engine.client.last_submit_kwargs["modify_video"] == "https://vendor.example/proxy-target.mp4"
 
 
 def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_degraded():
@@ -1132,15 +1161,18 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert result.metadata["extreme_replace_selected"] is True
     assert result.metadata["downgraded_from_extreme"] is True
     assert result.metadata["replacement_intensity"] == "strong_identity"
+    assert result.metadata["route_gate_passed"] is False
+    assert result.metadata["route_gate_fail_reason"] == "target_mapping_face_below_extreme_threshold"
+    assert result.metadata["extreme_gate_accepted"] is False
+    assert result.metadata["extreme_gate_reason"] == "target_mapping_face_below_extreme_threshold"
     assert result.metadata["fallback_reason"] == "target_mapping_face_below_extreme_threshold"
     assert result.metadata["requested_proxy_profile"] == "extreme_close"
     assert result.metadata["effective_proxy_profile"] is None
     assert result.metadata["target_detection_mode"] == "frame_sampling_fallback"
+    assert result.metadata["target_detect_mode"] == "frame_sampling_fallback"
     assert result.metadata["target_track_stability_score"] == 0.18
     assert result.metadata["target_track_coverage_ratio"] == 0.22
     assert result.metadata["proxy_is_true_close_crop"] is False
-    assert result.metadata["route_gate_passed"] is True
-    assert result.metadata["route_gate_fail_reason"] is None
     assert result.metadata["proxy_runtime"]["proxy_quality"] == "synthetic_fallback"
     assert result.metadata["extreme_replace_runtime"]["effective"] is False
 

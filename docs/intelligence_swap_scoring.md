@@ -71,3 +71,44 @@ If these conditions are not met, the route may still submit, but manifest/runtim
 ### Result Analysis
 
 `result_analysis.*` is heuristic only. It is not a provider-native metric.
+
+### Target Analysis Decision Chain
+
+V3 intelligence now follows a geometry-first chain before submit:
+
+1. `target-detect-v2`
+   - sparse sampled frames are analyzed first
+   - provider video detect is preferred
+   - local sampled-frame detect is fallback only
+2. `target-track-v2`
+   - detections are aggregated into a primary track
+   - manifest records `coverage_ratio`, `stability_score`, `true_detect_frame_ratio`, and `fallback_frame_ratio`
+3. `proxy-build`
+   - proxy clips are generated from the aggregated track / median anchor box
+   - `proxy_profile` controls target close-crop severity
+   - `proxy_is_true_close_crop=true` is required for real extreme execution
+4. `extreme-gate`
+   - `extreme_replace` is accepted only when detect quality, proxy geometry, and source ranking all pass thresholds
+   - otherwise runtime marks an explicit downgrade instead of pretending extreme succeeded
+5. `result-analyze`
+   - post-run heuristics estimate process quality, not provider-native truth
+
+### Score Interpretation Rules
+
+- `source_face_score`
+  Readiness score for a source asset. Safe for UI display.
+- `target_track_face_score`
+  Target anchor usability score. Safe for UI display.
+- `target_mapping_face_score`
+  Replacement suitability of the chosen target mapping face.
+- `final_source_selection_score`
+  Ranking score only. It may exceed `100` and must not be interpreted as a percent-quality score.
+
+### Confidence Caps
+
+`identity_overwrite_confidence` is capped when the route degrades:
+
+- fallback / sampled target track paths cannot report optimistic overwrite confidence
+- `degraded_fallback_used=true` caps overwrite confidence even if the final render succeeds
+- `proxy_quality=synthetic_fallback` prevents the route from being treated as a true extreme success
+

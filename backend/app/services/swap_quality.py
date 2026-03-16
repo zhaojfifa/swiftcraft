@@ -237,23 +237,23 @@ class SwapQualityPipeline:
         target_lighting = 11.0
         target_expression = 10.0
         weight = {
-            "pose": 1.1,
-            "lighting": 1.0,
-            "sharpness": 0.9,
+            "pose": 1.35,
+            "lighting": 1.3,
+            "sharpness": 0.95,
             "frontal": 1.0,
             "expression": 0.7,
-            "face_size": 0.8,
-            "readiness": 0.6,
+            "face_size": 1.1,
+            "readiness": 0.45,
         }
         if replacement_intensity == "extreme_replace":
             weight = {
-                "pose": 0.9,
-                "lighting": 1.25,
-                "sharpness": 1.15,
-                "frontal": 1.2,
-                "expression": 0.8,
-                "face_size": 1.0,
-                "readiness": 0.45,
+                "pose": 1.4,
+                "lighting": 1.55,
+                "sharpness": 1.2,
+                "frontal": 1.15,
+                "expression": 0.85,
+                "face_size": 1.2,
+                "readiness": 0.35,
             }
         best_candidate = None
         best_score = -1.0
@@ -272,6 +272,10 @@ class SwapQualityPipeline:
             sharpness_score = source_sharpness
             expression_score = max(0.0, 14.0 - abs(source_expression - target_expression))
             face_size_score = source_face_size
+            lighting_gap_penalty = max(0.0, abs(source_lighting - target_lighting) - 2.5) * 0.85
+            overexposure_penalty = max(0.0, source_lighting - 13.8) * 0.7
+            heavy_shadow_penalty = max(0.0, 8.2 - source_lighting) * 0.7
+            angle_mismatch_penalty = max(0.0, abs(source_frontalness - target_frontalness) - 2.5) * 1.05
             final_score = (
                 pose_match_score * weight["pose"]
                 + lighting_match_score * weight["lighting"]
@@ -280,6 +284,10 @@ class SwapQualityPipeline:
                 + expression_score * weight["expression"]
                 + face_size_score * weight["face_size"]
                 + source_score * weight["readiness"]
+                - lighting_gap_penalty
+                - overexposure_penalty
+                - heavy_shadow_penalty
+                - angle_mismatch_penalty
             )
             score_row = {
                 "source_index": int(candidate.get("source_index") or 0),
@@ -289,13 +297,17 @@ class SwapQualityPipeline:
                 "frontal_score": round(frontal_score, 2),
                 "expression_score": round(expression_score, 2),
                 "face_size_score": round(face_size_score, 2),
+                "lighting_gap_penalty": round(lighting_gap_penalty, 2),
+                "overexposure_penalty": round(overexposure_penalty, 2),
+                "heavy_shadow_penalty": round(heavy_shadow_penalty, 2),
+                "angle_mismatch_penalty": round(angle_mismatch_penalty, 2),
                 "final_source_selection_score": round(final_score, 2),
             }
             candidate_scores.append(score_row)
             enriched = dict(candidate)
             enriched["selection_score"] = score_row["final_source_selection_score"]
             enriched["candidate_score"] = score_row
-            enriched["selection_reason"] = "target_anchor_replacement_fit"
+            enriched["selection_reason"] = "replacement_fitness_best"
             if final_score > best_score:
                 best_candidate = enriched
                 best_score = final_score
