@@ -11,6 +11,7 @@ type DurationSec = 5 | 8 | 10;
 type AspectRatio = "9:16" | "16:9" | "1:1";
 type FollowStrength = "low" | "medium" | "high";
 type ReferenceMix = "a_dominant" | "balanced" | "b_dominant";
+type LipsyncScope = "face" | "full";
 
 const TERMINAL_STATUSES = new Set(["succeeded", "failed", "done"]);
 
@@ -41,6 +42,8 @@ export default function FollowVideoClient() {
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>("9:16");
   const [followStrength, setFollowStrength] = useState<FollowStrength>("medium");
   const [referenceMix, setReferenceMix] = useState<ReferenceMix>("balanced");
+  const [lipsyncEnabled, setLipsyncEnabled] = useState(false);
+  const [lipsyncScope, setLipsyncScope] = useState<LipsyncScope>("face");
 
   const [subjectPreview, setSubjectPreview] = useState<string | null>(null);
   const [referencePreviewA, setReferencePreviewA] = useState<string | null>(null);
@@ -170,6 +173,8 @@ export default function FollowVideoClient() {
           aspect_ratio: aspectRatio,
           follow_strength: followStrength,
           reference_mix: referenceMix,
+          lipsync_enabled: mode === "intelligence" ? lipsyncEnabled : false,
+          lipsync_scope: mode === "intelligence" ? lipsyncScope : undefined,
         },
       });
       startPolling(result.task_id);
@@ -183,6 +188,8 @@ export default function FollowVideoClient() {
   const taskOutputs = asRecord(taskMetadata.outputs);
   const manifestPreview = asRecord(taskMetadata.manifest_preview);
   const manifestOutputs = asRecord(manifestPreview.outputs);
+  const lipsyncRuntime = asRecord(taskMetadata.lipsync);
+  const lipsyncManifest = asRecord(manifestPreview.lipsync);
   const outputVideoUrl = resolveAssetUrl(
     pickString(task?.output_url, taskOutputs.video_url, manifestOutputs.video_url),
   );
@@ -202,6 +209,8 @@ export default function FollowVideoClient() {
       aspect_ratio: aspectRatio,
       follow_strength: followStrength,
       reference_mix: referenceMix,
+      lipsync_enabled: mode === "intelligence" ? lipsyncEnabled : false,
+      lipsync_scope: mode === "intelligence" ? lipsyncScope : null,
     },
   };
 
@@ -323,6 +332,38 @@ export default function FollowVideoClient() {
             </label>
           </div>
 
+          {mode === "intelligence" ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+              <div>
+                <div className="text-sm font-medium text-slate-700">Lipsync Enhancement</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  Optional by default. This is guarded wiring for future Hot Follow enhancement and does not change the baseline path.
+                </div>
+              </div>
+              <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+                <span className="text-slate-700">Enable optional lipsync enhancement</span>
+                <input
+                  type="checkbox"
+                  checked={lipsyncEnabled}
+                  onChange={(e) => setLipsyncEnabled(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
+                />
+              </label>
+              {lipsyncEnabled ? (
+                <label className="block space-y-2">
+                  <span className="text-sm font-medium text-slate-700">Lipsync Scope</span>
+                  <select value={lipsyncScope} onChange={(e) => setLipsyncScope(e.target.value as LipsyncScope)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm">
+                    <option value="face">Face</option>
+                    <option value="full">Full</option>
+                  </select>
+                </label>
+              ) : null}
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                If enabled today, runtime returns a stable <code>unavailable</code> lipsync state and preserves the current delivery baseline.
+              </div>
+            </div>
+          ) : null}
+
           <button
             onClick={handleRun}
             disabled={isRunning}
@@ -366,6 +407,8 @@ export default function FollowVideoClient() {
                 <div>Mode: {task?.mode || mode}</div>
                 <div>Route Summary: {String(taskMetadata.route_summary || asRecord(manifestPreview).route_summary || "follow_video_placeholder")}</div>
                 <div>Provider: {String(taskMetadata.provider || "follow_video_placeholder")}</div>
+                <div>Lipsync State: {String(lipsyncRuntime.state || lipsyncManifest.state || "off")}</div>
+                <div>Lipsync Requested: {String(lipsyncRuntime.requested ?? lipsyncManifest.requested ?? false)}</div>
                 <div>Manifest: {manifestUrl ? <a href={manifestUrl} className="text-cyan-600 underline underline-offset-4" target="_blank" rel="noreferrer">Open</a> : "Pending"}</div>
               </div>
             </section>

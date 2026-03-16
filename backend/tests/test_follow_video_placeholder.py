@@ -61,6 +61,7 @@ def test_follow_video_placeholder_engine_generates_manifest_preview(monkeypatch)
     assert result.output_url == "https://cdn.example/uploads/ref-a.mp4"
     assert result.metadata["route_summary"] == "follow_video_placeholder"
     assert result.metadata["manifest_preview"]["generation_summary"]["provider"] == "pending"
+    assert result.metadata["manifest_preview"]["lipsync"]["state"] == "off"
     assert "outputs/fv-task/manifest.json" in uploads
     assert stages[-1] == ("done", 100)
 
@@ -89,3 +90,72 @@ def test_follow_video_task_creation_accepts_placeholder_payload():
     assert response.mode == "basic"
     assert response.metadata["provider"] == "follow_video_placeholder"
     assert response.metadata["run_config_snapshot"]["route_summary"] == "follow_video_placeholder"
+
+
+def test_follow_video_placeholder_engine_marks_lipsync_unavailable_when_requested(monkeypatch):
+    class DummyR2:
+        def public_url(self, key: str) -> str:
+            return f"https://cdn.example/{key}"
+
+        def put_json(self, key: str, payload: object) -> None:
+            return None
+
+    monkeypatch.setattr("app.engines.follow_video_placeholder_engine.R2Client", DummyR2)
+    engine = FollowVideoPlaceholderEngine()
+    record = TaskRecord(task_id="fv-task-intel", service="follow_video", mode="intelligence", metadata={})
+
+    import asyncio
+
+    result = asyncio.run(
+        engine.run(
+            "fv-task-intel",
+            record,
+            {
+                "inputs": {
+                    "subject_image": "uploads/subject.png",
+                    "reference_video_a": "uploads/ref-a.mp4",
+                    "reference_video_b": "uploads/ref-b.mp4",
+                    "prompt": "placeholder",
+                    "duration_sec": 5,
+                    "aspect_ratio": "9:16",
+                    "follow_strength": "medium",
+                    "reference_mix": "balanced",
+                    "lipsync_enabled": True,
+                    "lipsync_scope": "full",
+                }
+            },
+            on_log=lambda _line: None,
+            on_stage=lambda _stage, _progress: None,
+        )
+    )
+
+    assert result.metadata["lipsync"]["requested"] is True
+    assert result.metadata["lipsync"]["enabled"] is False
+    assert result.metadata["lipsync"]["state"] == "unavailable"
+    assert result.metadata["manifest_preview"]["lipsync"]["state"] == "unavailable"
+
+
+def test_follow_video_task_creation_keeps_lipsync_optional_and_off_by_default():
+    svc = _svc()
+    from app.services.task_store import TaskStore
+    svc.store = TaskStore()
+    response = svc.create_task(
+        {
+            "service_type": "follow_video",
+            "mode": "intelligence",
+            "inputs": {
+                "subject_image": "uploads/subject.png",
+                "reference_video_a": "uploads/ref-a.mp4",
+                "reference_video_b": "uploads/ref-b.mp4",
+                "prompt": "placeholder",
+                "duration_sec": 5,
+                "aspect_ratio": "9:16",
+                "follow_strength": "medium",
+                "reference_mix": "balanced",
+            },
+        }
+    )
+    run_cfg = response.metadata["run_config_snapshot"]
+    assert run_cfg["lipsync_enabled"] is False
+    assert run_cfg["lipsync_state"] == "off"
+    assert run_cfg["lipsync_enhancement_only"] is True
