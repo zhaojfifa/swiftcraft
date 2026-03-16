@@ -503,6 +503,9 @@ class _FakeExtractor:
                 "proxy_margin_left": 0.12,
                 "proxy_margin_right": 0.12,
                 "proxy_center_offset": 0.01,
+                "detect_hit_ratio": 0.75,
+                "usable_box_ratio": 0.67,
+                "track_usable_ratio": 0.67,
             },
             "target_anchor_summary": {
                 "frame_index": 5,
@@ -524,6 +527,9 @@ class _FakeExtractor:
             "target_detection_mode": "detected_track",
             "target_track_stability_score": 0.82,
             "target_track_coverage_ratio": 0.75,
+            "detect_hit_ratio": 0.75,
+            "usable_box_ratio": 0.67,
+            "track_usable_ratio": 0.67,
             "proxy_crop_box": {"x": 10, "y": 0, "width": 260, "height": 260},
             "proxy_face_ratio_before": 0.18,
             "proxy_face_ratio_after": 0.61,
@@ -568,17 +574,46 @@ class _InvalidFocusExtractor(_FakeExtractor):
             "avg_box_area_ratio": 1.0,
             "stability_score": 0.18,
             "coverage_ratio": 0.22,
+            "detect_hit_ratio": 0.75,
+            "usable_box_ratio": 0.12,
+            "track_usable_ratio": 0.12,
             "true_detect_frame_ratio": 0.12,
             "fallback_frame_ratio": 0.88,
         }
         payload["target_detection_mode"] = "frame_sampling_fallback"
         payload["target_track_stability_score"] = 0.18
         payload["target_track_coverage_ratio"] = 0.22
+        payload["detect_hit_ratio"] = 0.75
+        payload["usable_box_ratio"] = 0.12
+        payload["track_usable_ratio"] = 0.12
         payload["proxy_crop_box"] = None
         payload["proxy_face_ratio_before"] = 1.0
         payload["proxy_face_ratio_after"] = 1.0
         payload["proxy_is_true_close_crop"] = False
         payload["proxy_quality"] = "synthetic_fallback"
+        return payload
+
+
+class _WeakTrackProxyExtractor(_FakeExtractor):
+    async def build_target_faces(self, **_kwargs):
+        payload = await super().build_target_faces(**_kwargs)
+        payload["face_track_summary"] = {
+            **dict(payload["face_track_summary"]),
+            "target_detection_mode": "frame_sampling_fallback",
+            "detect_hit_ratio": 0.75,
+            "usable_box_ratio": 0.42,
+            "track_usable_ratio": 0.25,
+            "true_detect_frame_ratio": 0.25,
+            "fallback_frame_ratio": 0.75,
+            "stability_score": 0.58,
+            "coverage_ratio": 0.42,
+        }
+        payload["target_detection_mode"] = "frame_sampling_fallback"
+        payload["target_track_stability_score"] = 0.58
+        payload["target_track_coverage_ratio"] = 0.42
+        payload["detect_hit_ratio"] = 0.75
+        payload["usable_box_ratio"] = 0.42
+        payload["track_usable_ratio"] = 0.25
         return payload
 
 
@@ -1175,6 +1210,67 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert result.metadata["proxy_is_true_close_crop"] is False
     assert result.metadata["proxy_runtime"]["proxy_quality"] == "synthetic_fallback"
     assert result.metadata["extreme_replace_runtime"]["effective"] is False
+
+
+def test_swap_engine_intelligence_allows_guarded_proxy_on_weak_track(monkeypatch):
+    import app.engines.akool_swap_face_engine as swap_engine_module
+
+    original_settings = swap_engine_module.settings
+    monkeypatch.setattr(
+        swap_engine_module,
+        "settings",
+        type("_Settings", (), {**vars(original_settings), "SWAP_EXTREME_ALLOW_PROXY_ON_WEAK_TRACK": True})(),
+    )
+
+    engine = AkoolSwapFaceEngine.__new__(AkoolSwapFaceEngine)
+    engine.provider = "swap_intelligence_akool"
+    engine.service_type = "swap"
+    engine.poll_interval_sec = 1
+    engine.timeout_sec = 30
+    engine.watchdog_timeout_sec = 30
+    engine.client = _FakeClient()
+    engine.r2 = _FakeR2Upload()
+    engine.vendor_bridge = _FakeBridge()
+    engine.video_face_extractor = _WeakTrackProxyExtractor()
+    engine.swap_quality_pipeline = _FakeQualityPipeline()
+    engine.swap_segmenter = _FakeSegmenter(segment_count=1)
+    engine._apply_audio_strategy = lambda content, _keep: content
+    engine._apply_intelligence_postprocess = lambda content, _on_log: (
+        content,
+        {"attempted": True, "applied": True, "reason": None, "filters": "test"},
+    )
+
+    record = TaskRecord(
+        task_id="task-v4-weak-track",
+        service="swap",
+        mode="intelligence",
+        input_key="uploads/source.mp4",
+        input_image_key="uploads/source-face.png",
+        metadata={
+            "provider": "swap_intelligence_akool",
+            "run_config_snapshot": {
+                "provider": "swap_intelligence_akool",
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+                "face_fidelity": "extreme_replace",
+                "replacement_intensity": "extreme_replace",
+                "swap_strength": "extreme_replace",
+                "source_crop_policy": "extreme_identity_core",
+                "target_anchor_policy": "extreme_mapping_primary",
+                "keep_original_audio": True,
+                "face_enhance": False,
+            },
+        },
+    )
+
+    result = asyncio.run(engine.run("task-v4-weak-track", record, {}, on_log=lambda _message: None, on_stage=lambda _stage, _progress: None))
+
+    assert result.metadata["replacement_intensity"] == "extreme_replace"
+    assert result.metadata["route_gate_passed"] is True
+    assert result.metadata["route_gate_fail_reason"] == "weak_track_proxy_override"
+    assert result.metadata["proxy_clip_used"] is True
+    assert result.metadata["proxy_executed"] is True
+    assert result.metadata["modifyVideoSource_final"] == "proxy_target"
 
 
 def test_swap_engine_retries_provider_temp_file_error_with_raw_target_reason():

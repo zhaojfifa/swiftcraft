@@ -94,6 +94,54 @@ def test_create_proxy_target_clip_downgrades_close_profile_to_standard(monkeypat
     assert proxy_meta["proxy_reason"] == "downgraded_to_standard_from_extreme_close"
 
 
+def test_summarize_face_track_uses_track_usable_for_ratios():
+    extractor = VideoFaceExtractor.__new__(VideoFaceExtractor)
+    summary = extractor.summarize_face_track(
+        [
+            {
+                "frame_index": 0,
+                "region": None,
+                "opts": None,
+                "raw_box": None,
+                "frame_path": "missing-0.jpg",
+                "detect_hit": True,
+                "box_usable": False,
+                "track_usable": False,
+                "used_bbox_fallback": False,
+            },
+            {
+                "frame_index": 1,
+                "region": None,
+                "opts": "10,20,110,170",
+                "raw_box": None,
+                "frame_path": "missing-0.jpg",
+                "detect_hit": True,
+                "box_usable": True,
+                "track_usable": True,
+                "used_bbox_fallback": False,
+            },
+            {
+                "frame_index": 2,
+                "region": [0, 0, 1280, 720],
+                "opts": None,
+                "raw_box": (0.0, 0.0, 1280.0, 720.0),
+                "detect_hit": False,
+                "box_usable": False,
+                "track_usable": False,
+                "used_bbox_fallback": True,
+            },
+        ],
+        video_size=(1280, 720),
+        selected_face={"frame_index": 1, "opts": "10,20,110,170"},
+        detection_mode="frame_sampling_fallback",
+    )
+
+    assert summary["detect_hit_ratio"] == 0.6667
+    assert summary["usable_box_ratio"] == 0.3333
+    assert summary["track_usable_ratio"] == 0.3333
+    assert summary["true_detect_frame_ratio"] == 0.3333
+    assert summary["fallback_frame_ratio"] == 0.3333
+
 
 def test_rank_source_references_returns_candidate_scores():
     pipeline = SwapQualityPipeline(bridge=_FakeBridge())

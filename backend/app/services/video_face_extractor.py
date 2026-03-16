@@ -17,6 +17,33 @@ from app.services.vendor_asset_bridge import VendorAssetBridge
 
 class VideoFaceExtractor:
     @staticmethod
+    def _detect_semantics(
+        *,
+        face: Dict[str, Any] | None,
+        raw_box: tuple[float, float, float, float] | None,
+        landmarks: Any,
+        used_bbox_fallback: bool,
+    ) -> Dict[str, Any]:
+        detect_hit = bool(face)
+        box_usable = raw_box is not None and all(float(value) > 0 for value in raw_box[2:4])
+        track_usable = detect_hit and box_usable and not used_bbox_fallback
+        unusable_reason = None
+        if not detect_hit:
+            unusable_reason = "no_face_item"
+        elif not box_usable:
+            unusable_reason = "missing_face_box"
+        elif used_bbox_fallback:
+            unusable_reason = "bbox_fallback_only"
+        elif not landmarks:
+            unusable_reason = "missing_landmarks"
+        return {
+            "detect_hit": detect_hit,
+            "box_usable": box_usable,
+            "track_usable": track_usable,
+            "unusable_reason": unusable_reason,
+        }
+
+    @staticmethod
     def _max_crop_area_ratio(crop_profile: str) -> float:
         profile = str(crop_profile or "").strip().lower()
         if profile in {"standard", "proxy_standard"}:
@@ -206,7 +233,14 @@ class VideoFaceExtractor:
                 )
                 for face in list(detected.get("faces") or []):
                     raw_box = self._region_to_box(face.get("region"))
+                    landmarks = face.get("landmarks") or face.get("crop_landmarks")
                     normalized_box = self._normalized_box(raw_box, frame_width, frame_height) if raw_box is not None else None
+                    semantics = self._detect_semantics(
+                        face=face,
+                        raw_box=raw_box,
+                        landmarks=landmarks,
+                        used_bbox_fallback=False,
+                    )
                     face_metrics = self._estimate_face_metrics(
                         frame_path=frame_path,
                         raw_box=raw_box,
@@ -215,8 +249,9 @@ class VideoFaceExtractor:
                     )
                     if on_log is not None:
                         on_log(
-                            f"[swap][target-detect-v2] frame={index} detect_success=true detect_source=sampled_frame_detect "
-                            f"raw_box={raw_box} normalized_box={normalized_box}"
+                            f"[swap][target-detect-v2] frame={index} detect_hit={str(semantics['detect_hit']).lower()} "
+                            f"box_usable={str(semantics['box_usable']).lower()} track_usable={str(semantics['track_usable']).lower()} "
+                            f"raw_box={raw_box} normalized_box={normalized_box} unusable_reason={semantics['unusable_reason'] or 'none'}"
                         )
                     detections.append(
                         {
@@ -225,12 +260,13 @@ class VideoFaceExtractor:
                             "frame_path": str(frame_path),
                             "frame_vendor_url": bridged.public_url,
                             "bbox": raw_box,
-                            "landmarks": face.get("landmarks") or face.get("crop_landmarks"),
-                            "detect_success": raw_box is not None,
+                            "landmarks": landmarks,
+                            "detect_success": semantics["track_usable"],
                             "used_bbox_fallback": False,
                             "raw_box": raw_box,
                             "normalized_box": normalized_box,
                             "detect_source": "sampled_frame_detect",
+                            **semantics,
                             **face_metrics,
                             **face,
                         }
@@ -242,6 +278,12 @@ class VideoFaceExtractor:
                 width, height = frame_width, frame_height
                 raw_box = (0.0, 0.0, float(width), float(height))
                 normalized_box = self._normalized_box(raw_box, width, height)
+                semantics = self._detect_semantics(
+                    face=None,
+                    raw_box=None,
+                    landmarks=None,
+                    used_bbox_fallback=True,
+                )
                 face_metrics = self._estimate_face_metrics(
                     frame_path=frame_path,
                     raw_box=raw_box,
@@ -250,8 +292,9 @@ class VideoFaceExtractor:
                 )
                 if on_log is not None:
                     on_log(
-                        f"[swap][target-detect-v2] frame={index} detect_success=false detect_source=fallback "
-                        f"raw_box={raw_box} normalized_box={normalized_box}"
+                        f"[swap][target-detect-v2] frame={index} detect_hit={str(semantics['detect_hit']).lower()} "
+                        f"box_usable={str(semantics['box_usable']).lower()} track_usable={str(semantics['track_usable']).lower()} "
+                        f"raw_box={raw_box} normalized_box={normalized_box} unusable_reason={semantics['unusable_reason'] or 'none'}"
                     )
                 detections.append(
                     {
@@ -272,6 +315,7 @@ class VideoFaceExtractor:
                         "raw_box": raw_box,
                         "normalized_box": normalized_box,
                         "detect_source": "fallback",
+                        **semantics,
                         **face_metrics,
                     }
                 )
@@ -299,6 +343,7 @@ class VideoFaceExtractor:
                 frame_index = int(face.get("frame_index") or face.get("frame") or index)
                 frame_path = frame_paths[min(max(frame_index, 0), max(len(frame_paths) - 1, 0))] if frame_paths else None
                 raw_box = self._region_to_box(face.get("region")) or self._opts_to_box(face.get("opts"))
+                landmarks = face.get("landmarks") or face.get("crop_landmarks")
                 normalized_box = None
                 frame_width = 0
                 frame_height = 0
@@ -307,6 +352,12 @@ class VideoFaceExtractor:
                     normalized_box = self._normalized_box(raw_box, frame_width, frame_height)
                 elif frame_path is not None and Path(frame_path).exists():
                     frame_width, frame_height = self._image_size(Path(frame_path))
+                semantics = self._detect_semantics(
+                    face=face,
+                    raw_box=raw_box,
+                    landmarks=landmarks,
+                    used_bbox_fallback=False,
+                )
                 face_metrics = self._estimate_face_metrics(
                     frame_path=Path(frame_path) if frame_path is not None else None,
                     raw_box=raw_box,
@@ -315,8 +366,9 @@ class VideoFaceExtractor:
                 )
                 if on_log is not None:
                     on_log(
-                        f"[swap][target-detect-v2] frame={frame_index} detect_success={str(raw_box is not None).lower()} "
-                        f"detect_source=provider_video_detect raw_box={raw_box} normalized_box={normalized_box}"
+                        f"[swap][target-detect-v2] frame={frame_index} detect_hit={str(semantics['detect_hit']).lower()} "
+                        f"box_usable={str(semantics['box_usable']).lower()} track_usable={str(semantics['track_usable']).lower()} "
+                        f"raw_box={raw_box} normalized_box={normalized_box} unusable_reason={semantics['unusable_reason'] or 'none'}"
                     )
                 detections.append(
                     {
@@ -325,12 +377,13 @@ class VideoFaceExtractor:
                         "frame_path": str(frame_path) if frame_path is not None else None,
                         "frame_vendor_url": source_video_url,
                         "bbox": raw_box,
-                        "landmarks": face.get("landmarks") or face.get("crop_landmarks"),
-                        "detect_success": raw_box is not None,
+                        "landmarks": landmarks,
+                        "detect_success": semantics["track_usable"],
                         "used_bbox_fallback": False,
                         "raw_box": raw_box,
                         "normalized_box": normalized_box,
                         "detect_source": "provider_video_detect",
+                        **semantics,
                         **face_metrics,
                         **face,
                     }
@@ -338,11 +391,7 @@ class VideoFaceExtractor:
         except Exception as exc:
             if on_log is not None:
                 on_log(f"[swap][target-detect] video_detect_failed reason={type(exc).__name__}:{exc}")
-        stable_boxes = [
-            item for item in detections
-            if (self._region_to_box(item.get("region")) or self._opts_to_box(item.get("opts")) or item.get("raw_box")) is not None
-            and not bool(item.get("used_bbox_fallback"))
-        ]
+        stable_boxes = [item for item in detections if bool(item.get("track_usable"))]
         success_ratio = round((len(stable_boxes) / max(len(frame_paths), 1)) if frame_paths else 0.0, 4)
         if on_log is not None:
             on_log(f"[swap][target-detect-v2] sampled_frames={len(frame_paths)}")
@@ -495,10 +544,18 @@ class VideoFaceExtractor:
         boxes: List[tuple[float, float, float, float]] = []
         frames: List[int] = []
         fallback_frames = 0
-        true_detect_frames = 0
+        detect_hit_frames = 0
+        box_usable_frames = 0
+        track_usable_frames = 0
         frame_boxes: List[Dict[str, Any]] = []
         face_ratios: List[float] = []
         for candidate in candidates:
+            if bool(candidate.get("detect_hit")):
+                detect_hit_frames += 1
+            if bool(candidate.get("box_usable")):
+                box_usable_frames += 1
+            if bool(candidate.get("track_usable")):
+                track_usable_frames += 1
             box = self._region_to_box(candidate.get("region")) or self._opts_to_box(candidate.get("opts"))
             if box is None:
                 frame_path = Path(str(candidate.get("frame_path") or ""))
@@ -509,8 +566,6 @@ class VideoFaceExtractor:
                 continue
             if bool(candidate.get("used_bbox_fallback")):
                 fallback_frames += 1
-            else:
-                true_detect_frames += 1
             boxes.append(box)
             frame_index = int(candidate.get("frame_index") or 0)
             frames.append(frame_index)
@@ -528,6 +583,10 @@ class VideoFaceExtractor:
                     "used_bbox_fallback": bool(candidate.get("used_bbox_fallback")),
                     "detect_source": str(candidate.get("detect_source") or "unknown"),
                     "detect_success": bool(candidate.get("detect_success")),
+                    "detect_hit": bool(candidate.get("detect_hit")),
+                    "box_usable": bool(candidate.get("box_usable")),
+                    "track_usable": bool(candidate.get("track_usable")),
+                    "unusable_reason": candidate.get("unusable_reason"),
                     "face_ratio": round(float(candidate.get("face_area_ratio") or 0.0), 4),
                     "sharpness_score": round(float(candidate.get("sharpness") or 0.0), 4),
                     "frontalness": round(float(candidate.get("frontalness") or 0.0), 4),
@@ -574,7 +633,10 @@ class VideoFaceExtractor:
         median_box = None
         stability_score = 0.0
         coverage_ratio = len(boxes) / max(len(candidates), 1)
-        true_detect_frame_ratio = true_detect_frames / max(len(candidates), 1)
+        detect_hit_ratio = detect_hit_frames / max(len(candidates), 1)
+        usable_box_ratio = box_usable_frames / max(len(candidates), 1)
+        track_usable_ratio = track_usable_frames / max(len(candidates), 1)
+        true_detect_frame_ratio = track_usable_frames / max(len(candidates), 1)
         fallback_frame_ratio = fallback_frames / max(len(candidates), 1)
         interpolated_frame_ratio = 0.0
         if boxes:
@@ -650,11 +712,16 @@ class VideoFaceExtractor:
             "video_width": video_size[0] if video_size else None,
             "video_height": video_size[1] if video_size else None,
             "fallback_frames": fallback_frames,
-            "true_detect_frames": true_detect_frames,
+            "detect_hit_frames": detect_hit_frames,
+            "box_usable_frames": box_usable_frames,
+            "track_usable_frames": track_usable_frames,
             "avg_box_area_ratio": round(avg_box_area_ratio, 4),
             "full_frame_fallback": full_frame_fallback,
             "stability_score": round(stability_score, 4),
             "coverage_ratio": round(coverage_ratio, 4),
+            "detect_hit_ratio": round(detect_hit_ratio, 4),
+            "usable_box_ratio": round(usable_box_ratio, 4),
+            "track_usable_ratio": round(track_usable_ratio, 4),
             "avg_face_ratio": round(sum(face_ratios) / max(len(face_ratios), 1), 4) if face_ratios else 0.0,
             "motion_range": motion_range,
             "missing_frame_ratio": round(max(0.0, 1.0 - coverage_ratio), 4),
@@ -990,7 +1057,9 @@ class VideoFaceExtractor:
         if on_log is not None:
             on_log(
                 f"[swap][target-track-v2] mode={'detected_track' if detection_mode == 'detected_track' else 'fallback_track'} "
-                f"true_detect_frame_ratio={face_track_summary.get('true_detect_frame_ratio')}"
+                f"true_detect_frame_ratio={face_track_summary.get('true_detect_frame_ratio')} "
+                f"usable_box_ratio={face_track_summary.get('usable_box_ratio')} "
+                f"track_usable_ratio={face_track_summary.get('track_usable_ratio')}"
             )
             on_log(
                 f"[swap][track-build] track_id=primary coverage_ratio={face_track_summary.get('coverage_ratio')} "
@@ -1151,6 +1220,9 @@ class VideoFaceExtractor:
             "target_detect_mode": detection_mode,
             "target_track_stability_score": face_track_summary.get("stability_score"),
             "target_track_coverage_ratio": face_track_summary.get("coverage_ratio"),
+            "detect_hit_ratio": face_track_summary.get("detect_hit_ratio"),
+            "usable_box_ratio": face_track_summary.get("usable_box_ratio"),
+            "track_usable_ratio": face_track_summary.get("track_usable_ratio"),
             "face_track_summary": face_track_summary,
             "target_anchor_summary": {
                 "frame_index": selected_faces[0].get("frame_index") if selected_faces else None,

@@ -195,6 +195,9 @@ class AkoolSwapFaceEngine:
         *,
         replacement_intensity: str,
         target_detect_mode: str | None,
+        detect_hit_ratio: float | None,
+        usable_box_ratio: float | None,
+        track_usable_ratio: float | None,
         source_face_score: float | None,
         target_track_face_score: float | None,
         target_track_stability_score: float | None,
@@ -207,8 +210,6 @@ class AkoolSwapFaceEngine:
     ) -> tuple[bool, str | None]:
         if replacement_intensity != "extreme_replace":
             return True, None
-        if str(target_detect_mode or "") != "detected_track":
-            return False, "target_detect_mode_not_detected_track"
         if (source_face_score or 0) < 80:
             return False, "source_score_below_extreme_threshold"
         if (selected_source_score or 0) < 96:
@@ -217,7 +218,17 @@ class AkoolSwapFaceEngine:
             return False, "target_track_score_below_extreme_threshold"
         if (target_track_stability_score or 0.0) < 0.45:
             return False, "target_track_unstable"
-        if (true_detect_frame_ratio or 0.0) < 0.4:
+        if (usable_box_ratio or 0.0) < 0.35:
+            return False, "usable_box_ratio_below_threshold"
+        if (track_usable_ratio or 0.0) < 0.4:
+            allow_weak_track = bool(getattr(settings, "SWAP_EXTREME_ALLOW_PROXY_ON_WEAK_TRACK", False))
+            if allow_weak_track and (detect_hit_ratio or 0.0) >= 0.6:
+                weak_track_override = True
+            else:
+                return False, "track_usable_ratio_below_threshold"
+        else:
+            weak_track_override = False
+        if (true_detect_frame_ratio or 0.0) < 0.4 and not weak_track_override:
             return False, "true_detect_frame_ratio_below_threshold"
         if not proxy_clip_used:
             return False, "proxy_target_missing"
@@ -227,7 +238,7 @@ class AkoolSwapFaceEngine:
             return False, "proxy_face_ratio_after_below_threshold"
         if not proxy_is_true_close_crop:
             return False, "proxy_not_true_close_crop"
-        return True, None
+        return True, "weak_track_proxy_override" if weak_track_override else None
 
     async def _run_intelligence_vendor_job(
         self,
@@ -593,6 +604,9 @@ class AkoolSwapFaceEngine:
         target_detect_mode = "not_attempted"
         target_track_stability_score = None
         target_track_coverage_ratio = None
+        detect_hit_ratio = None
+        usable_box_ratio = None
+        track_usable_ratio = None
         true_detect_frame_ratio = None
         fallback_frame_ratio = None
         selected_anchor_frame = None
@@ -863,6 +877,9 @@ class AkoolSwapFaceEngine:
                 selected_anchor_reason = (target_anchor_summary or {}).get("rank_reason") if isinstance(target_anchor_summary, dict) else None
                 anchor_quality_score = (target_anchor_summary or {}).get("anchor_quality_score") if isinstance(target_anchor_summary, dict) else None
                 if isinstance(face_track_summary, dict):
+                    detect_hit_ratio = face_track_summary.get("detect_hit_ratio")
+                    usable_box_ratio = face_track_summary.get("usable_box_ratio")
+                    track_usable_ratio = face_track_summary.get("track_usable_ratio")
                     true_detect_frame_ratio = face_track_summary.get("true_detect_frame_ratio")
                     fallback_frame_ratio = face_track_summary.get("fallback_frame_ratio")
                 target_mapping_face_rank_reason = (
@@ -885,7 +902,8 @@ class AkoolSwapFaceEngine:
                 )
                 on_log(
                     f"[swap][target-analyze] detect_mode={target_detect_mode} stability_score={target_track_stability_score} "
-                    f"coverage_ratio={target_track_coverage_ratio}"
+                    f"coverage_ratio={target_track_coverage_ratio} detect_hit_ratio={detect_hit_ratio} "
+                    f"usable_box_ratio={usable_box_ratio} track_usable_ratio={track_usable_ratio}"
                 )
                 on_log(
                     f"[swap][target-focus] focus_crop_valid={str(focus_crop_valid).lower()} "
@@ -1116,6 +1134,9 @@ class AkoolSwapFaceEngine:
                 route_gate_passed, route_gate_fail_reason = self._evaluate_extreme_route_gate(
                     replacement_intensity=effective_replacement_intensity,
                     target_detect_mode=target_detect_mode,
+                    detect_hit_ratio=detect_hit_ratio,
+                    usable_box_ratio=usable_box_ratio,
+                    track_usable_ratio=track_usable_ratio,
                     source_face_score=source_face_score,
                     target_track_face_score=target_track_face_score,
                     target_track_stability_score=target_track_stability_score,
@@ -1139,7 +1160,7 @@ class AkoolSwapFaceEngine:
                     submit_modify_video = focused_target_url or source_video_vendor_url
                     modify_video_source = "focused_target" if focused_target_url else "raw_target"
                 else:
-                    on_log("[swap][extreme-gate] accepted=true reason=none")
+                    on_log(f"[swap][extreme-gate] accepted=true reason={route_gate_fail_reason or 'none'}")
                 if effective_replacement_intensity == "extreme_replace":
                     modify_video_source = "proxy_target"
                 elif submit_modify_video == focused_target_url and focused_target_url:
@@ -1678,6 +1699,9 @@ class AkoolSwapFaceEngine:
                 fallback_reason = downgrade_reason or "full_frame_target"
             target_analysis = {
                 "detect_mode": target_detection_mode,
+                "detect_hit_ratio": detect_hit_ratio,
+                "usable_box_ratio": usable_box_ratio,
+                "track_usable_ratio": track_usable_ratio,
                 "true_detect_frame_ratio": true_detect_frame_ratio,
                 "fallback_frame_ratio": fallback_frame_ratio,
                 "coverage_ratio": target_track_coverage_ratio,
@@ -1720,6 +1744,8 @@ class AkoolSwapFaceEngine:
             quality_summary = {
                 "swap_strength": swap_strength,
                 "replacement_intensity": replacement_intensity,
+                "extreme_requested": extreme_replace_selected,
+                "extreme_executed": replacement_intensity == "extreme_replace",
                 "extreme_replace_selected": extreme_replace_selected,
                 "downgraded_from_extreme": downgraded_from_extreme,
                 "route_intent": route_intent,
@@ -1748,6 +1774,9 @@ class AkoolSwapFaceEngine:
                 "target_anchor_quality": target_anchor_quality,
                 "target_detection_mode": target_detection_mode,
                 "target_detect_mode": target_detect_mode,
+                "detect_hit_ratio": detect_hit_ratio,
+                "usable_box_ratio": usable_box_ratio,
+                "track_usable_ratio": track_usable_ratio,
                 "true_detect_frame_ratio": true_detect_frame_ratio,
                 "target_track_stability_score": target_track_stability_score,
                 "target_track_coverage_ratio": target_track_coverage_ratio,
@@ -1765,6 +1794,8 @@ class AkoolSwapFaceEngine:
                 "route_gate_fail_reason": route_gate_fail_reason,
                 "proxy_clip_valid": proxy_clip_valid,
                 "proxy_clip_used": proxy_clip_used,
+                "proxy_requested": bool(requested_proxy_profile),
+                "proxy_executed": proxy_clip_used,
                 "proxy_clip_reason": proxy_clip_reason,
                 "requested_proxy_profile": requested_proxy_profile,
                 "proxy_profile_requested": requested_proxy_profile,
@@ -1775,6 +1806,7 @@ class AkoolSwapFaceEngine:
                 "postprocess_profile": postprocess_profile,
                 "overwrite_strength_expected": "high" if replacement_intensity == "extreme_replace" else "medium",
                 "modify_video_source": modify_video_source,
+                "modifyVideoSource_final": modify_video_source,
                 "provider_failure_reason": provider_failure_reason,
                 "failure_stage": failure_stage,
                 "retry_attempt": retry_attempt,
@@ -1843,6 +1875,8 @@ class AkoolSwapFaceEngine:
                     "model_style": model_style,
                     "swap_strength": swap_strength,
                     "replacement_intensity": replacement_intensity,
+                    "extreme_requested": extreme_replace_selected,
+                    "extreme_executed": replacement_intensity == "extreme_replace",
                     "route_intent": route_intent,
                     "route_execution_style": route_execution_style,
                     "route_summary": quality_summary["route_summary"],
@@ -1872,6 +1906,9 @@ class AkoolSwapFaceEngine:
                     "fallback_reason": fallback_reason,
                     "target_detection_mode": target_detection_mode,
                     "target_detect_mode": target_detect_mode,
+                    "detect_hit_ratio": detect_hit_ratio,
+                    "usable_box_ratio": usable_box_ratio,
+                    "track_usable_ratio": track_usable_ratio,
                     "true_detect_frame_ratio": true_detect_frame_ratio,
                     "target_track_stability_score": target_track_stability_score,
                     "target_track_coverage_ratio": target_track_coverage_ratio,
@@ -1895,6 +1932,8 @@ class AkoolSwapFaceEngine:
                     "retry_reason": retry_reason,
                     "proxy_clip_valid": proxy_clip_valid,
                     "proxy_clip_used": proxy_clip_used,
+                    "proxy_requested": bool(requested_proxy_profile),
+                    "proxy_executed": proxy_clip_used,
                     "proxy_clip_reason": proxy_clip_reason,
                     "requested_proxy_profile": requested_proxy_profile,
                     "proxy_profile_requested": requested_proxy_profile,
@@ -1904,6 +1943,7 @@ class AkoolSwapFaceEngine:
                     "proxy_crop_ratio": quality_summary["proxy_crop_ratio"],
                     "postprocess_profile": postprocess_profile,
                     "overwrite_strength_expected": quality_summary["overwrite_strength_expected"],
+                    "modifyVideoSource_final": modify_video_source,
                     "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,
@@ -1980,6 +2020,8 @@ class AkoolSwapFaceEngine:
                     "model_style": model_style,
                     "swap_strength": swap_strength,
                     "replacement_intensity": replacement_intensity,
+                    "extreme_requested": extreme_replace_selected,
+                    "extreme_executed": replacement_intensity == "extreme_replace",
                     "extreme_replace_selected": extreme_replace_selected,
                     "downgraded_from_extreme": downgraded_from_extreme,
                     "route_intent": route_intent,
@@ -2007,6 +2049,9 @@ class AkoolSwapFaceEngine:
                     "target_anchor_quality": target_anchor_quality,
                     "target_detection_mode": target_detection_mode,
                     "target_detect_mode": target_detect_mode,
+                    "detect_hit_ratio": detect_hit_ratio,
+                    "usable_box_ratio": usable_box_ratio,
+                    "track_usable_ratio": track_usable_ratio,
                     "true_detect_frame_ratio": true_detect_frame_ratio,
                     "target_track_stability_score": target_track_stability_score,
                     "target_track_coverage_ratio": target_track_coverage_ratio,
@@ -2035,6 +2080,8 @@ class AkoolSwapFaceEngine:
                     "retry_reason": retry_reason,
                     "proxy_clip_valid": proxy_clip_valid,
                     "proxy_clip_used": proxy_clip_used,
+                    "proxy_requested": bool(requested_proxy_profile),
+                    "proxy_executed": proxy_clip_used,
                     "proxy_clip_reason": proxy_clip_reason,
                     "requested_proxy_profile": requested_proxy_profile,
                     "proxy_profile_requested": requested_proxy_profile,
@@ -2044,6 +2091,7 @@ class AkoolSwapFaceEngine:
                     "proxy_crop_ratio": quality_summary["proxy_crop_ratio"],
                     "postprocess_profile": postprocess_profile,
                     "overwrite_strength_expected": quality_summary["overwrite_strength_expected"],
+                    "modifyVideoSource_final": modify_video_source,
                     "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,
