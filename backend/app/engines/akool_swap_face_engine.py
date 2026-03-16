@@ -1102,6 +1102,10 @@ class AkoolSwapFaceEngine:
         target_detect_mode = "not_attempted"
         target_track_stability_score = None
         target_track_coverage_ratio = None
+        bbox_consistency_score = None
+        track_reconstructed = False
+        target_grounding_mode = "failed"
+        target_grounding_confidence = 0.0
         detect_hit_ratio = None
         usable_detection_ratio = None
         usable_box_ratio = None
@@ -1129,6 +1133,7 @@ class AkoolSwapFaceEngine:
         proxy_face_ratio_after_recrop = None
         proxy_crop_constructed = False
         proxy_crop_confidence = 0.0
+        proxy_source = "heuristic_fallback"
         track_required_but_missing = False
         proxy_face_ratio_threshold_required = 0.55
         gate_failed_metric = None
@@ -1431,6 +1436,10 @@ class AkoolSwapFaceEngine:
                 target_detect_mode = str(extraction.get("target_detect_mode") or target_detection_mode or "unknown")
                 target_track_stability_score = extraction.get("target_track_stability_score")
                 target_track_coverage_ratio = extraction.get("target_track_coverage_ratio")
+                bbox_consistency_score = extraction.get("bbox_consistency_score")
+                track_reconstructed = bool(extraction.get("track_reconstructed"))
+                target_grounding_mode = str(extraction.get("target_grounding_mode") or "failed")
+                target_grounding_confidence = extraction.get("target_grounding_confidence")
                 proxy_crop_box = extraction.get("proxy_crop_box")
                 proxy_face_ratio_before = extraction.get("proxy_face_ratio_before")
                 proxy_face_ratio_after = extraction.get("proxy_face_ratio_after")
@@ -1449,6 +1458,7 @@ class AkoolSwapFaceEngine:
                 no_track_constructed = bool(extraction.get("no_track_constructed"))
                 proxy_crop_constructed = bool(extraction.get("proxy_crop_constructed"))
                 proxy_crop_confidence = extraction.get("proxy_crop_confidence")
+                proxy_source = str(extraction.get("proxy_source") or "heuristic_fallback")
                 track_required_but_missing = bool(extraction.get("track_required_but_missing"))
                 selected_anchor_frame = (target_anchor_summary or {}).get("frame_index") if isinstance(target_anchor_summary, dict) else None
                 selected_anchor_reason = (target_anchor_summary or {}).get("rank_reason") if isinstance(target_anchor_summary, dict) else None
@@ -1481,7 +1491,8 @@ class AkoolSwapFaceEngine:
                     f"[swap][target-analyze] detect_mode={target_detect_mode} stability_score={target_track_stability_score} "
                     f"coverage_ratio={target_track_coverage_ratio} detect_hit_ratio={detect_hit_ratio} "
                     f"usable_detection_ratio={usable_detection_ratio} usable_box_ratio={usable_box_ratio} "
-                    f"track_usable_ratio={track_usable_ratio} target_track_state={target_track_state}"
+                    f"track_usable_ratio={track_usable_ratio} target_track_state={target_track_state} "
+                    f"target_grounding_mode={target_grounding_mode} target_grounding_confidence={target_grounding_confidence}"
                 )
                 on_log(
                     f"[swap][target-focus] focus_crop_valid={str(focus_crop_valid).lower()} "
@@ -1497,7 +1508,8 @@ class AkoolSwapFaceEngine:
                     f"proxy_is_true_close_crop={str(proxy_is_true_close_crop).lower()} "
                     f"proxy_crop_constructed={str(proxy_crop_constructed).lower()} "
                     f"proxy_crop_confidence={proxy_crop_confidence} "
-                    f"track_required_but_missing={str(track_required_but_missing).lower()}"
+                    f"track_required_but_missing={str(track_required_but_missing).lower()} "
+                    f"proxy_source={proxy_source}"
                 )
                 on_log(
                     f"[swap][target-map] track_score={target_track_face_score} mapping_score={target_mapping_face_score} "
@@ -2319,6 +2331,8 @@ class AkoolSwapFaceEngine:
                 fallback_reason = downgrade_reason or "full_frame_target"
             target_analysis = {
                 "detect_mode": target_detection_mode,
+                "grounding_mode": target_grounding_mode,
+                "grounding_confidence": target_grounding_confidence,
                 "detect_hit_ratio": detect_hit_ratio,
                 "usable_detection_ratio": usable_detection_ratio,
                 "usable_box_ratio": usable_box_ratio,
@@ -2327,6 +2341,8 @@ class AkoolSwapFaceEngine:
                 "fallback_frame_ratio": fallback_frame_ratio,
                 "coverage_ratio": target_track_coverage_ratio,
                 "stability_score": target_track_stability_score,
+                "bbox_consistency_score": bbox_consistency_score,
+                "track_reconstructed": track_reconstructed,
                 "target_track_state": target_track_state,
                 "no_track_constructed": no_track_constructed,
                 "selected_anchor_frame": selected_anchor_frame,
@@ -2337,6 +2353,7 @@ class AkoolSwapFaceEngine:
                 "proxy_clip_used": proxy_clip_used,
                 "proxy_crop_constructed": proxy_crop_constructed,
                 "proxy_crop_confidence": proxy_crop_confidence,
+                "proxy_source": proxy_source,
                 "track_required_but_missing": track_required_but_missing,
                 "proxy_profile_requested": requested_proxy_profile,
                 "proxy_profile_effective": effective_proxy_profile or None,
@@ -2722,6 +2739,8 @@ class AkoolSwapFaceEngine:
                     "final_degrade_reason": degrade_reason_final,
                     "target_detection_mode": target_detection_mode,
                     "target_detect_mode": target_detect_mode,
+                    "target_grounding_mode": target_grounding_mode,
+                    "target_grounding_confidence": target_grounding_confidence,
                     "detect_hit_ratio": detect_hit_ratio,
                     "usable_detection_ratio": usable_detection_ratio,
                     "usable_box_ratio": usable_box_ratio,
@@ -2731,6 +2750,8 @@ class AkoolSwapFaceEngine:
                     "no_track_constructed": no_track_constructed,
                     "target_track_stability_score": target_track_stability_score,
                     "target_track_coverage_ratio": target_track_coverage_ratio,
+                    "bbox_consistency_score": bbox_consistency_score,
+                    "track_reconstructed": track_reconstructed,
                     "proxy_crop_box": proxy_crop_box,
                     "proxy_face_ratio_before": proxy_face_ratio_before,
                     "proxy_face_ratio_after": proxy_face_ratio_after,
@@ -2759,6 +2780,7 @@ class AkoolSwapFaceEngine:
                     "proxy_clip_used": proxy_clip_used,
                     "proxy_crop_constructed": proxy_crop_constructed,
                     "proxy_crop_confidence": proxy_crop_confidence,
+                    "proxy_source": proxy_source,
                     "track_required_but_missing": track_required_but_missing,
                     "proxy_requested": bool(requested_proxy_profile),
                     "proxy_executed": proxy_clip_used,

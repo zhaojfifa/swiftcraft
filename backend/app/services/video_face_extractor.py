@@ -239,6 +239,152 @@ class VideoFaceExtractor:
             "occlusion_score": occlusion_score,
         }
 
+    @staticmethod
+    def _derive_box_from_landmarks(landmarks: Any) -> tuple[float, float, float, float] | None:
+        if isinstance(landmarks, dict):
+            points = list(landmarks.values())
+        elif isinstance(landmarks, list):
+            points = list(landmarks)
+        else:
+            return None
+        parsed: List[tuple[float, float]] = []
+        for point in points:
+            if isinstance(point, dict):
+                try:
+                    parsed.append((float(point.get("x")), float(point.get("y"))))
+                except Exception:
+                    continue
+            elif isinstance(point, (list, tuple)) and len(point) >= 2:
+                try:
+                    parsed.append((float(point[0]), float(point[1])))
+                except Exception:
+                    continue
+        if len(parsed) < 2:
+            return None
+        xs = [point[0] for point in parsed]
+        ys = [point[1] for point in parsed]
+        x1 = min(xs)
+        y1 = min(ys)
+        x2 = max(xs)
+        y2 = max(ys)
+        width = x2 - x1
+        height = y2 - y1
+        if width <= 0 or height <= 0:
+            return None
+        margin_x = width * 0.22
+        margin_y = height * 0.32
+        return x1 - margin_x, y1 - margin_y, width + margin_x * 2.0, height + margin_y * 2.0
+
+    @staticmethod
+    def _load_local_face_detector():
+        try:
+            import cv2  # type: ignore
+        except Exception:
+            return None
+        cascade_path = getattr(getattr(cv2, "data", None), "haarcascades", "")
+        if not cascade_path:
+            return None
+        detector = cv2.CascadeClassifier(str(Path(cascade_path) / "haarcascade_frontalface_default.xml"))
+        if detector.empty():
+            return None
+        return detector
+
+    @classmethod
+    def _detect_face_locally(
+        cls,
+        frame_path: Path,
+        *,
+        frame_index: int,
+        timestamp_sec: float,
+    ) -> Dict[str, Any] | None:
+        detector = cls._load_local_face_detector()
+        if detector is None:
+            return None
+        try:
+            import cv2  # type: ignore
+        except Exception:
+            return None
+        image = cv2.imread(str(frame_path))
+        if image is None:
+            return None
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        boxes = detector.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=4, minSize=(48, 48))
+        if len(boxes) <= 0:
+            return None
+        x, y, width, height = max(boxes, key=lambda box: float(box[2]) * float(box[3]))
+        frame_width = int(image.shape[1] or 0)
+        frame_height = int(image.shape[0] or 0)
+        raw_box = (float(x), float(y), float(width), float(height))
+        confidence = round(
+            min(
+                1.0,
+                max(
+                    0.2,
+                    ((float(width) * float(height)) / max(frame_width * frame_height, 1)) * 4.0 + 0.35,
+                ),
+            ),
+            4,
+        )
+        return {
+            "frame_index": frame_index,
+            "timestamp_sec": timestamp_sec,
+            "frame_path": str(frame_path),
+            "bbox": raw_box,
+            "raw_box": raw_box,
+            "normalized_box": cls._normalized_box(raw_box, frame_width, frame_height),
+            "detect_hit": True,
+            "bbox_present": True,
+            "landmarks_present": False,
+            "usable_detection": True,
+            "usable_for_tracking": True,
+            "box_usable": True,
+            "track_usable": True,
+            "unusable_reason": None,
+            "detect_source": "local_visual_fallback",
+            "local_bbox_confidence": confidence,
+            "used_bbox_fallback": False,
+        }
+
+    @classmethod
+    def _merge_local_detection(
+        cls,
+        *,
+        candidate: Dict[str, Any],
+        fallback: Dict[str, Any] | None,
+        frame_width: int,
+        frame_height: int,
+        frame_path: Path | None,
+    ) -> Dict[str, Any]:
+        merged = dict(candidate)
+        if not fallback:
+            return merged
+        raw_box = fallback.get("raw_box")
+        merged.update(
+            {
+                "bbox": raw_box,
+                "raw_box": raw_box,
+                "normalized_box": fallback.get("normalized_box"),
+                "detect_source": "local_visual_fallback",
+                "local_bbox_confidence": fallback.get("local_bbox_confidence"),
+                "used_bbox_fallback": False,
+            }
+        )
+        semantics = cls._detect_semantics(
+            face={"face_id": merged.get("face_id") or "local-fallback"},
+            raw_box=raw_box,
+            landmarks=merged.get("landmarks"),
+            used_bbox_fallback=False,
+        )
+        face_metrics = cls._estimate_face_metrics(
+            frame_path=frame_path,
+            raw_box=raw_box,
+            frame_width=frame_width or 1,
+            frame_height=frame_height or 1,
+        )
+        merged.update(semantics)
+        merged.update(face_metrics)
+        return merged
+
     async def detect_faces_from_frames(
         self,
         frame_paths: List[Path],
@@ -363,6 +509,7 @@ class VideoFaceExtractor:
         on_log: Any | None = None,
     ) -> tuple[List[Dict[str, Any]], str]:
         detections: List[Dict[str, Any]] = []
+        provider_hit_without_box = False
         try:
             detected = await self.client.detect_faces(
                 source_video_url,
@@ -374,7 +521,12 @@ class VideoFaceExtractor:
             for index, face in enumerate(faces):
                 frame_index = int(face.get("frame_index") or face.get("frame") or index)
                 frame_path = frame_paths[min(max(frame_index, 0), max(len(frame_paths) - 1, 0))] if frame_paths else None
-                raw_box = self._region_to_box(face.get("region")) or self._opts_to_box(face.get("opts"))
+                landmarks = face.get("landmarks") or face.get("crop_landmarks")
+                raw_box = (
+                    self._region_to_box(face.get("region"))
+                    or self._opts_to_box(face.get("opts"))
+                    or self._derive_box_from_landmarks(landmarks)
+                )
                 landmarks = face.get("landmarks") or face.get("crop_landmarks")
                 normalized_box = None
                 frame_width = 0
@@ -390,6 +542,46 @@ class VideoFaceExtractor:
                     landmarks=landmarks,
                     used_bbox_fallback=False,
                 )
+                if semantics["detect_hit"] and not semantics["usable_for_tracking"]:
+                    provider_hit_without_box = True
+                    local_fallback = self._detect_face_locally(
+                        Path(frame_path),
+                        frame_index=frame_index,
+                        timestamp_sec=round(float(face.get("frame_time") or frame_index), 3),
+                    ) if frame_path is not None and Path(frame_path).exists() else None
+                    if local_fallback is not None:
+                        merged = self._merge_local_detection(
+                            candidate={
+                                "frame_index": frame_index,
+                                "timestamp_sec": round(float(face.get("frame_time") or frame_index), 3),
+                                "frame_path": str(frame_path) if frame_path is not None else None,
+                                "frame_vendor_url": source_video_url,
+                                "bbox": raw_box,
+                                "landmarks": landmarks,
+                                "used_bbox_fallback": False,
+                                "raw_box": raw_box,
+                                "normalized_box": normalized_box,
+                                "detect_source": "provider_video_detect",
+                                **face,
+                            },
+                            fallback=local_fallback,
+                            frame_width=frame_width or 1,
+                            frame_height=frame_height or 1,
+                            frame_path=Path(frame_path) if frame_path is not None else None,
+                        )
+                        raw_box = merged.get("raw_box")
+                        normalized_box = merged.get("normalized_box")
+                        semantics = {
+                            "detect_hit": merged.get("detect_hit"),
+                            "bbox_present": merged.get("bbox_present"),
+                            "landmarks_present": merged.get("landmarks_present"),
+                            "usable_detection": merged.get("usable_detection"),
+                            "usable_for_tracking": merged.get("usable_for_tracking"),
+                            "box_usable": merged.get("box_usable"),
+                            "track_usable": merged.get("track_usable"),
+                            "unusable_reason": merged.get("unusable_reason"),
+                        }
+                        face = merged
                 face_metrics = self._estimate_face_metrics(
                     frame_path=Path(frame_path) if frame_path is not None else None,
                     raw_box=raw_box,
@@ -405,25 +597,26 @@ class VideoFaceExtractor:
                         f"raw_box={raw_box} normalized_box={normalized_box} unusable_reason={semantics['unusable_reason'] or 'none'}"
                     )
                 detections.append(
-                    {
-                        "frame_index": frame_index,
-                        "timestamp_sec": round(float(face.get("frame_time") or frame_index), 3),
-                        "frame_path": str(frame_path) if frame_path is not None else None,
-                        "frame_vendor_url": source_video_url,
+                        {
+                            "frame_index": frame_index,
+                            "timestamp_sec": round(float(face.get("frame_time") or frame_index), 3),
+                            "frame_path": str(frame_path) if frame_path is not None else None,
+                            "frame_vendor_url": source_video_url,
                         "bbox": raw_box,
                         "landmarks": landmarks,
                         "detect_success": semantics["track_usable"],
                         "usable_detection": semantics["usable_detection"],
                         "usable_for_tracking": semantics["usable_for_tracking"],
-                        "used_bbox_fallback": False,
-                        "raw_box": raw_box,
-                        "normalized_box": normalized_box,
-                        "detect_source": "provider_video_detect",
-                        **semantics,
-                        **face_metrics,
-                        **face,
-                    }
-                )
+                            "used_bbox_fallback": False,
+                            "raw_box": raw_box,
+                            "normalized_box": normalized_box,
+                            "detect_source": face.get("detect_source") or "provider_video_detect",
+                            "local_bbox_confidence": face.get("local_bbox_confidence"),
+                            **semantics,
+                            **face_metrics,
+                            **face,
+                        }
+                    )
         except Exception as exc:
             if on_log is not None:
                 on_log(f"[swap][target-detect] video_detect_failed reason={type(exc).__name__}:{exc}")
@@ -434,6 +627,42 @@ class VideoFaceExtractor:
             on_log(f"[swap][target-detect-v2] success_ratio={success_ratio}")
         if stable_boxes and success_ratio >= 0.35:
             return detections, "detected_track"
+        if provider_hit_without_box:
+            local_detections: List[Dict[str, Any]] = []
+            for index, frame_path in enumerate(frame_paths):
+                detected = self._detect_face_locally(
+                    frame_path,
+                    frame_index=index,
+                    timestamp_sec=round(float(index), 3),
+                )
+                if detected is None:
+                    if on_log is not None:
+                        on_log(
+                            f"[swap][target-detect-v2] frame={index} detect_hit=false bbox_present=false landmarks_present=false "
+                            f"usable_detection=false box_usable=false track_usable=false raw_box=None normalized_box=None "
+                            f"unusable_reason=no_local_face detect_source=local_visual_fallback"
+                        )
+                    continue
+                frame_width, frame_height = self._image_size(frame_path)
+                face_metrics = self._estimate_face_metrics(
+                    frame_path=frame_path,
+                    raw_box=detected.get("raw_box"),
+                    frame_width=frame_width,
+                    frame_height=frame_height,
+                )
+                detected.update(face_metrics)
+                if on_log is not None:
+                    on_log(
+                        f"[swap][target-detect-v2] frame={index} detect_hit=true bbox_present=true landmarks_present=false "
+                        f"usable_detection=true box_usable=true track_usable=true raw_box={detected.get('raw_box')} "
+                        f"normalized_box={detected.get('normalized_box')} unusable_reason=none detect_source=local_visual_fallback"
+                    )
+                local_detections.append(detected)
+            if local_detections:
+                local_success_ratio = round(len(local_detections) / max(len(frame_paths), 1), 4)
+                if on_log is not None:
+                    on_log(f"[swap][target-detect-v2] local_fallback_success_ratio={local_success_ratio}")
+                return local_detections, "local_fallback"
         fallback = await self.detect_faces_from_frames(frame_paths, service=service, on_log=on_log)
         if on_log is not None:
             on_log(f"[swap][target-track-v2] mode=fallback_track")
@@ -580,12 +809,14 @@ class VideoFaceExtractor:
         boxes: List[tuple[float, float, float, float]] = []
         frames: List[int] = []
         fallback_frames = 0
+        local_fallback_frames = 0
         detect_hit_frames = 0
         usable_detection_frames = 0
         box_usable_frames = 0
         track_usable_frames = 0
         frame_boxes: List[Dict[str, Any]] = []
         face_ratios: List[float] = []
+        local_confidences: List[float] = []
         bad_frame_reasons = {"no_face_item", "missing_face_box", "full_frame_fallback", "bbox_suspicious"}
         for candidate in candidates:
             detect_hit = bool(candidate.get("detect_hit"))
@@ -616,7 +847,13 @@ class VideoFaceExtractor:
                 track_usable_frames += 1
             if used_bbox_fallback or unusable_reason in bad_frame_reasons:
                 fallback_frames += 1
+            if str(candidate.get("detect_source") or "") == "local_visual_fallback":
+                local_fallback_frames += 1
+                local_confidences.append(float(candidate.get("local_bbox_confidence") or 0.0))
             box = self._region_to_box(candidate.get("region")) or self._opts_to_box(candidate.get("opts"))
+            if box is None and isinstance(candidate.get("raw_box"), (list, tuple)) and len(candidate.get("raw_box") or []) >= 4:
+                raw = tuple(candidate.get("raw_box"))
+                box = float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3])
             frame_index = int(candidate.get("frame_index") or 0)
             if track_usable and box is not None and not used_bbox_fallback and unusable_reason not in bad_frame_reasons:
                 boxes.append(box)
@@ -643,6 +880,7 @@ class VideoFaceExtractor:
                     "box_usable": box_usable,
                     "track_usable": track_usable,
                     "unusable_reason": unusable_reason,
+                    "local_bbox_confidence": round(float(candidate.get("local_bbox_confidence") or 0.0), 4),
                     "face_ratio": round(float(candidate.get("face_area_ratio") or 0.0), 4),
                     "sharpness_score": round(float(candidate.get("sharpness") or 0.0), 4),
                     "frontalness": round(float(candidate.get("frontalness") or 0.0), 4),
@@ -705,6 +943,8 @@ class VideoFaceExtractor:
         true_detect_frame_ratio = track_usable_frames / max(len(candidates), 1)
         fallback_frame_ratio = fallback_frames / max(len(candidates), 1)
         interpolated_frame_ratio = 0.0
+        track_reconstructed = False
+        bbox_consistency_score = 0.0
         if boxes:
             sorted_x = sorted(box[0] for box in boxes)
             sorted_y = sorted(box[1] for box in boxes)
@@ -748,6 +988,13 @@ class VideoFaceExtractor:
                     + (h_span / max(avg_h, 1.0))
                 ) / 4.0
                 stability_score = max(0.0, min(1.0, 1.0 - span_penalty - (fallback_frame_ratio * 0.45)))
+                bbox_consistency_score = round(max(0.0, min(1.0, 1.0 - span_penalty)), 4)
+            if len(frames) >= 2:
+                total_span = max(1, (max(frames) - min(frames)) + 1)
+                interpolated_frame_ratio = round(max(0.0, (total_span - len(frames)) / total_span), 4)
+                coverage_ratio = max(coverage_ratio, len(frames) / max(total_span, 1))
+                if total_span >= 3 and len(frames) >= 2:
+                    track_reconstructed = True
         else:
             motion_range = {"x": 0.0, "y": 0.0}
             track_union_box = {
@@ -759,16 +1006,45 @@ class VideoFaceExtractor:
         target_track_state = "usable"
         if track_usable_ratio >= 0.4 and stability_score >= 0.45:
             target_track_state = "usable"
-        elif usable_detection_ratio > 0.0 or bool(boxes):
+        elif (usable_detection_ratio > 0.0 or bool(boxes)) and coverage_ratio >= 0.2:
             target_track_state = "weak"
         elif detect_hit_ratio > 0.0:
             target_track_state = "unusable"
         else:
             target_track_state = "absent"
+        if track_reconstructed and coverage_ratio >= 0.35 and stability_score >= 0.3:
+            target_track_state = "usable"
+        target_grounding_mode = "failed"
+        if detection_mode == "detected_track":
+            target_grounding_mode = "provider"
+        elif track_reconstructed:
+            target_grounding_mode = "reconstructed"
+        elif local_fallback_frames > 0:
+            target_grounding_mode = "local_fallback"
+        elif usable_detection_ratio > 0.0:
+            target_grounding_mode = "provider"
+        target_grounding_confidence = round(
+            min(
+                1.0,
+                max(
+                    0.0,
+                    coverage_ratio * 0.35
+                    + stability_score * 0.30
+                    + track_usable_ratio * 0.20
+                    + (sum(local_confidences) / max(len(local_confidences), 1) if local_confidences else 0.0) * 0.15,
+                ),
+            ),
+            4,
+        )
         return {
             "target_detection_mode": detection_mode,
             "no_track_constructed": no_track_constructed,
             "target_track_state": target_track_state,
+            "track_reconstructed": track_reconstructed,
+            "track_reconstruction_source": "local_visual_fallback" if local_fallback_frames > 0 else detection_mode,
+            "bbox_consistency_score": bbox_consistency_score,
+            "target_grounding_mode": target_grounding_mode,
+            "target_grounding_confidence": target_grounding_confidence,
             "usable_detection_frames": usable_detection_frames,
             "track_id": "primary",
             "tracked_frames": len(boxes),
@@ -810,6 +1086,7 @@ class VideoFaceExtractor:
             "true_detect_frame_ratio": round(true_detect_frame_ratio, 4),
             "interpolated_frame_ratio": round(interpolated_frame_ratio, 4),
             "fallback_frame_ratio": round(fallback_frame_ratio, 4),
+            "local_fallback_frame_ratio": round(local_fallback_frames / max(len(candidates), 1), 4),
         }
 
     def create_focused_target_clip(
@@ -884,7 +1161,7 @@ class VideoFaceExtractor:
             "proxy_margin_right": round(margin_policy["right"], 4),
             "proxy_center_offset": center_offset,
             "proxy_padding_policy": "forehead_chin_cheek_safe",
-            "proxy_track_based": str(face_track_summary.get("target_detection_mode") or "") == "detected_track",
+            "proxy_track_based": bool(face_track_summary.get("track_reconstructed")) or str(face_track_summary.get("target_detection_mode") or "") == "detected_track",
             "crop_filter": crop_filter,
             "crop_profile": crop_profile,
         }
@@ -975,6 +1252,7 @@ class VideoFaceExtractor:
         output_path: Path,
         selected_face: Dict[str, Any] | None,
         video_size: tuple[int, int] | None,
+        face_track_summary: Dict[str, Any] | None = None,
         proxy_profile: str = "proxy_standard",
     ) -> tuple[Path | None, Dict[str, Any]]:
         requested_proxy_profile = str(proxy_profile or "standard").strip().lower()
@@ -985,14 +1263,26 @@ class VideoFaceExtractor:
                 "requested_proxy_profile": requested_proxy_profile,
                 "effective_proxy_profile": None,
             }
-        proxy_box = (
-            tuple(selected_face.get("crop_box") or ())
-            or tuple(selected_face.get("mapping_crop_box") or ())
-            or
-            self._region_to_box(selected_face.get("region"))
-            or self._opts_to_box(selected_face.get("opts"))
-            or tuple(selected_face.get("raw_box") or ())
-        )
+        reconstructed_track = dict((face_track_summary or {}).get("track_union_box") or {})
+        reconstructed_anchor = dict((face_track_summary or {}).get("smoothed_anchor_box") or (face_track_summary or {}).get("median_box") or {})
+        proxy_box = None
+        proxy_source = "heuristic_fallback"
+        if reconstructed_track and bool((face_track_summary or {}).get("track_reconstructed")):
+            proxy_box = (
+                float(reconstructed_track.get("x") or 0.0),
+                float(reconstructed_track.get("y") or 0.0),
+                float(reconstructed_track.get("width") or 0.0),
+                float(reconstructed_track.get("height") or 0.0),
+            )
+            proxy_source = "reconstructed_track"
+        if not proxy_box:
+            proxy_box = (
+                tuple(selected_face.get("crop_box") or ())
+                or tuple(selected_face.get("mapping_crop_box") or ())
+                or self._region_to_box(selected_face.get("region"))
+                or self._opts_to_box(selected_face.get("opts"))
+                or tuple(selected_face.get("raw_box") or ())
+            )
         video_width, video_height = int(video_size[0]), int(video_size[1])
         proxy_reason = "selected_face_crop"
         if not proxy_box or len(proxy_box) < 4:
@@ -1005,6 +1295,7 @@ class VideoFaceExtractor:
                 fallback_height,
             )
             proxy_reason = "anchor_center_fallback"
+            proxy_source = "heuristic_fallback"
         x, y, width, height = [float(value) for value in proxy_box[:4]]
         face_area_ratio = (width * height) / max(video_width * video_height, 1)
         if face_area_ratio >= 0.8:
@@ -1018,12 +1309,10 @@ class VideoFaceExtractor:
             "video_width": video_width,
             "video_height": video_height,
             "selected_frame_index": selected_face.get("frame_index"),
-            "anchor_box": {
-                "x": x,
-                "y": y,
-                "width": width,
-                "height": height,
-            },
+            "anchor_box": reconstructed_anchor or {"x": x, "y": y, "width": width, "height": height},
+            "track_union_box": reconstructed_track or {"x": x, "y": y, "width": width, "height": height},
+            "track_reconstructed": bool((face_track_summary or {}).get("track_reconstructed")),
+            "target_detection_mode": (face_track_summary or {}).get("target_detection_mode"),
         }
         attempt_profiles = [requested_proxy_profile]
         if requested_proxy_profile in {"extreme_close", "proxy_extreme_close", "proxy_extreme"}:
@@ -1045,6 +1334,7 @@ class VideoFaceExtractor:
             proxy_meta["proxy_profile_downgrade_reason"] = None
             proxy_meta["proxy_recrop_attempted"] = index > 0
             proxy_meta["proxy_face_ratio_after_recrop"] = proxy_meta.get("proxy_face_ratio_after") if index > 0 else None
+            proxy_meta["proxy_source"] = proxy_source
             if proxy_path is not None:
                 proxy_meta["proxy_reason"] = proxy_reason if index == 0 else f"recrop_{attempt_profile}"
                 if index > 0:
@@ -1141,20 +1431,24 @@ class VideoFaceExtractor:
             detection_mode=detection_mode,
         )
         if on_log is not None:
+            track_mode = "detected_track" if detection_mode == "detected_track" or bool(face_track_summary.get("track_reconstructed")) else "fallback_track"
             on_log(
-                f"[swap][target-track-v2] mode={'detected_track' if detection_mode == 'detected_track' else 'fallback_track'} "
+                f"[swap][target-track-v2] mode={track_mode} "
                 f"usable_detection_ratio={face_track_summary.get('usable_detection_ratio')} "
                 f"true_detect_frame_ratio={face_track_summary.get('true_detect_frame_ratio')} "
                 f"usable_box_ratio={face_track_summary.get('usable_box_ratio')} "
                 f"track_usable_ratio={face_track_summary.get('track_usable_ratio')} "
                 f"target_track_state={face_track_summary.get('target_track_state')} "
-                f"no_track_constructed={str(bool(face_track_summary.get('no_track_constructed'))).lower()}"
+                f"no_track_constructed={str(bool(face_track_summary.get('no_track_constructed'))).lower()} "
+                f"track_reconstructed={str(bool(face_track_summary.get('track_reconstructed'))).lower()} "
+                f"target_grounding_mode={face_track_summary.get('target_grounding_mode')}"
             )
             on_log(
                 f"[swap][track-build] track_id=primary coverage_ratio={face_track_summary.get('coverage_ratio')} "
                 f"stability_score={face_track_summary.get('stability_score')} "
                 f"true_detect_frame_ratio={face_track_summary.get('true_detect_frame_ratio')} "
-                f"fallback_frame_ratio={face_track_summary.get('fallback_frame_ratio')}"
+                f"fallback_frame_ratio={face_track_summary.get('fallback_frame_ratio')} "
+                f"bbox_consistency_score={face_track_summary.get('bbox_consistency_score')}"
             )
         exported_faces = self.export_target_face_images(selected_faces, work_dir / "target_faces")
         bridged_target_images = [
@@ -1195,6 +1489,7 @@ class VideoFaceExtractor:
                     output_path=work_dir / "proxy_target.mp4",
                     selected_face=selected_faces[0] if selected_faces else None,
                     video_size=video_size,
+                    face_track_summary=face_track_summary,
                     proxy_profile=proxy_profile,
                 )
                 if proxy_path is not None:
@@ -1212,7 +1507,8 @@ class VideoFaceExtractor:
                         f"proxy_margin_right={proxy_clip_meta.get('proxy_margin_right')} "
                         f"proxy_center_offset={proxy_clip_meta.get('proxy_center_offset')} "
                         f"proxy_is_true_close_crop={str(bool(proxy_clip_meta.get('proxy_is_true_close_crop'))).lower()} "
-                        f"proxy_quality={'track_based' if detection_mode == 'detected_track' else 'sampled'}"
+                        f"proxy_quality={'track_based' if proxy_clip_meta.get('proxy_source') == 'reconstructed_track' or detection_mode == 'detected_track' else 'sampled'} "
+                        f"proxy_source={proxy_clip_meta.get('proxy_source') or 'heuristic_fallback'}"
                     )
                 if on_log is not None and proxy_clip_asset is None:
                     on_log(f"[swap][target-proxy] proxy_clip_valid=false reason={proxy_clip_meta.get('proxy_reason')}")
@@ -1270,6 +1566,7 @@ class VideoFaceExtractor:
                 output_path=work_dir / "proxy_target_mapping_face.mp4",
                 selected_face=selected_face_for_proxy,
                 video_size=video_size,
+                face_track_summary=face_track_summary,
                 proxy_profile=proxy_profile,
             )
             if proxy_path is not None:
@@ -1289,12 +1586,13 @@ class VideoFaceExtractor:
                     0.0,
                     (min(1.0, max(0.0, float(proxy_face_ratio_after or 0.0) / 0.72)) * 0.55)
                     + (0.25 if bool((proxy_clip_meta or {}).get("proxy_is_true_close_crop") or face_track_summary.get("proxy_is_true_close_crop")) else 0.0)
-                    + (0.15 if detection_mode == "detected_track" else 0.05),
+                    + (0.15 if detection_mode == "detected_track" or bool(face_track_summary.get("track_reconstructed")) else 0.05),
                 ),
             ),
             4,
         )
         track_required_but_missing = str(face_track_summary.get("target_track_state") or "") in {"weak", "unusable", "absent"}
+        target_grounding_mode = str(face_track_summary.get("target_grounding_mode") or detection_mode or "failed")
         return {
             "frames": frames,
             "detected_faces": detected_faces,
@@ -1325,6 +1623,10 @@ class VideoFaceExtractor:
             "target_detect_mode": detection_mode,
             "target_track_stability_score": face_track_summary.get("stability_score"),
             "target_track_coverage_ratio": face_track_summary.get("coverage_ratio"),
+            "bbox_consistency_score": face_track_summary.get("bbox_consistency_score"),
+            "track_reconstructed": bool(face_track_summary.get("track_reconstructed")),
+            "target_grounding_mode": target_grounding_mode,
+            "target_grounding_confidence": face_track_summary.get("target_grounding_confidence"),
             "detect_hit_ratio": face_track_summary.get("detect_hit_ratio"),
             "usable_detection_ratio": face_track_summary.get("usable_detection_ratio"),
             "usable_box_ratio": face_track_summary.get("usable_box_ratio"),
@@ -1375,10 +1677,11 @@ class VideoFaceExtractor:
             "proxy_track_based": bool((proxy_clip_meta or {}).get("proxy_track_based") or str(detection_mode) == "detected_track"),
             "proxy_crop_constructed": proxy_crop_constructed,
             "proxy_crop_confidence": proxy_crop_confidence,
+            "proxy_source": (proxy_clip_meta or {}).get("proxy_source") or ("reconstructed_track" if bool(face_track_summary.get("track_reconstructed")) else "heuristic_fallback"),
             "track_required_but_missing": track_required_but_missing,
             "proxy_quality": (
                 "track_based"
-                if proxy_clip_asset is not None and detection_mode == "detected_track"
+                if proxy_clip_asset is not None and ((proxy_clip_meta or {}).get("proxy_source") == "reconstructed_track" or detection_mode == "detected_track")
                 else "sampled"
                 if proxy_clip_asset is not None
                 else "synthetic_fallback"
