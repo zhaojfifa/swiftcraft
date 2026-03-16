@@ -334,6 +334,8 @@ class AkoolSwapFaceEngine:
             replacement_intensity=replacement_intensity,
             is_intelligence_route=is_intelligence_route,
         )
+        requested_proxy_profile = proxy_profile
+        effective_proxy_profile = proxy_profile
         postprocess_profile = str(
             run_cfg.get("postprocess_profile")
             or ("postprocess_minimal" if replacement_intensity == "extreme_replace" else "postprocess_standard")
@@ -655,6 +657,8 @@ class AkoolSwapFaceEngine:
                 focused_target_url = extraction.get("focused_target_url")
                 proxy_target_url = extraction.get("proxy_target_url")
                 proxy_clip_meta = dict(extraction.get("proxy_clip_meta") or {})
+                requested_proxy_profile = str(extraction.get("requested_proxy_profile") or requested_proxy_profile or proxy_profile)
+                effective_proxy_profile = str(extraction.get("effective_proxy_profile") or effective_proxy_profile or proxy_profile)
                 face_track_summary = extraction.get("face_track_summary")
                 target_anchor_summary = extraction.get("target_anchor_summary")
                 target_mapping_face_rank_reason = (
@@ -794,6 +798,12 @@ class AkoolSwapFaceEngine:
                     source_score_breakdown = dict(selected_candidate.get("source_score_breakdown") or {})
                 proxy_clip_valid = bool(proxy_target_url) or bool((proxy_clip_meta or {}).get("proxy_clip_valid"))
                 proxy_clip_reason = str((proxy_clip_meta or {}).get("proxy_reason") or "") or None
+                if not proxy_clip_valid:
+                    effective_proxy_profile = (
+                        "standard"
+                        if requested_proxy_profile in {"tight", "extreme_close"} and bool(proxy_clip_reason) and proxy_clip_reason.startswith("downgraded_to_standard")
+                        else ""
+                    )
                 if replacement_intensity == "extreme_replace":
                     target_anchor_valid = bool((target_anchor_quality or {}).get("valid_for_extreme"))
                     if not target_anchor_valid:
@@ -803,9 +813,15 @@ class AkoolSwapFaceEngine:
                     proxy_clip_used = bool(proxy_target_url and target_anchor_valid)
                     modify_video_source = "proxy_target" if proxy_clip_used else "raw_target"
                     if proxy_clip_used:
-                        on_log(f"[swap][target-proxy] proxy_clip_used=true url={proxy_target_url}")
+                        on_log(
+                            f"[swap][target-proxy] proxy_clip_used=true url={proxy_target_url} "
+                            f"requested_proxy_profile={requested_proxy_profile} effective_proxy_profile={effective_proxy_profile}"
+                        )
                     else:
-                        on_log(f"[swap][target-proxy] proxy_clip_used=false")
+                        on_log(
+                            f"[swap][target-proxy] proxy_clip_used=false requested_proxy_profile={requested_proxy_profile} "
+                            f"effective_proxy_profile={effective_proxy_profile or 'none'}"
+                        )
                         if not fallback_reason and focus_mode == "full_frame_fallback":
                             fallback_reason = "full_frame_target"
                         elif not fallback_reason and proxy_clip_reason:
@@ -898,7 +914,8 @@ class AkoolSwapFaceEngine:
                 )
                 on_log(
                     f"[swap][target-proxy] proxy_clip_valid={str(proxy_clip_valid).lower()} "
-                    f"proxy_clip_used={str(proxy_clip_used).lower()} modifyVideo_source={modify_video_source}"
+                    f"proxy_clip_used={str(proxy_clip_used).lower()} modifyVideo_source={modify_video_source} "
+                    f"requested_proxy_profile={requested_proxy_profile} effective_proxy_profile={effective_proxy_profile or 'none'}"
                 )
                 on_log(f"[swap][submit] payload={submit_payload}")
                 replacement_intensity = effective_replacement_intensity
@@ -1411,7 +1428,9 @@ class AkoolSwapFaceEngine:
                 "proxy_clip_valid": proxy_clip_valid,
                 "proxy_clip_used": proxy_clip_used,
                 "proxy_clip_reason": proxy_clip_reason,
-                "proxy_profile": proxy_profile,
+                "requested_proxy_profile": requested_proxy_profile,
+                "effective_proxy_profile": effective_proxy_profile or None,
+                "proxy_profile": effective_proxy_profile or requested_proxy_profile,
                 "proxy_crop_ratio": focus_crop_area_ratio if proxy_clip_used else None,
                 "postprocess_profile": postprocess_profile,
                 "overwrite_strength_expected": "high" if replacement_intensity == "extreme_replace" else "medium",
@@ -1509,7 +1528,9 @@ class AkoolSwapFaceEngine:
                     "proxy_clip_valid": proxy_clip_valid,
                     "proxy_clip_used": proxy_clip_used,
                     "proxy_clip_reason": proxy_clip_reason,
-                    "proxy_profile": proxy_profile,
+                    "requested_proxy_profile": requested_proxy_profile,
+                    "effective_proxy_profile": effective_proxy_profile or None,
+                    "proxy_profile": effective_proxy_profile or requested_proxy_profile,
                     "proxy_crop_ratio": quality_summary["proxy_crop_ratio"],
                     "postprocess_profile": postprocess_profile,
                     "overwrite_strength_expected": quality_summary["overwrite_strength_expected"],
@@ -1617,7 +1638,9 @@ class AkoolSwapFaceEngine:
                     "proxy_clip_valid": proxy_clip_valid,
                     "proxy_clip_used": proxy_clip_used,
                     "proxy_clip_reason": proxy_clip_reason,
-                    "proxy_profile": proxy_profile,
+                    "requested_proxy_profile": requested_proxy_profile,
+                    "effective_proxy_profile": effective_proxy_profile or None,
+                    "proxy_profile": effective_proxy_profile or requested_proxy_profile,
                     "proxy_crop_ratio": quality_summary["proxy_crop_ratio"],
                     "postprocess_profile": postprocess_profile,
                     "overwrite_strength_expected": quality_summary["overwrite_strength_expected"],

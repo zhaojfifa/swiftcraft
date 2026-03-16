@@ -62,3 +62,29 @@ def test_video_face_extractor_proxy_profiles_produce_distinct_crop_ratios():
     assert 0.6 <= tight_ratio <= 0.7
     assert 0.4 <= extreme_ratio <= 0.5
     assert standard_ratio > tight_ratio > extreme_ratio
+
+
+def test_create_proxy_target_clip_downgrades_close_profile_to_standard(monkeypatch, tmp_path):
+    extractor = VideoFaceExtractor.__new__(VideoFaceExtractor)
+    calls = []
+
+    def fake_create_focused_target_clip(*, source_video_path, output_path, face_track_summary, crop_profile="standard"):
+        calls.append(crop_profile)
+        if crop_profile == "extreme_close":
+            return None, {"focus_crop_valid": False, "focus_mode": "full_frame_fallback"}
+        return output_path, {"focus_crop_valid": True, "focus_mode": "focused_crop", "focus_crop_area_ratio": 0.84}
+
+    extractor.create_focused_target_clip = fake_create_focused_target_clip
+    proxy_path, proxy_meta = extractor.create_proxy_target_clip(
+        source_video_path=tmp_path / "source.mp4",
+        output_path=tmp_path / "proxy.mp4",
+        selected_face={"frame_index": 0, "opts": "10,20,110,220"},
+        video_size=(1280, 720),
+        proxy_profile="extreme_close",
+    )
+
+    assert calls == ["extreme_close", "standard"]
+    assert proxy_path == tmp_path / "proxy.mp4"
+    assert proxy_meta["requested_proxy_profile"] == "extreme_close"
+    assert proxy_meta["effective_proxy_profile"] == "standard"
+    assert proxy_meta["proxy_reason"] == "downgraded_to_standard_from_extreme_close"

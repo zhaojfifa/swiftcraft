@@ -510,8 +510,14 @@ class VideoFaceExtractor:
         video_size: tuple[int, int] | None,
         proxy_profile: str = "proxy_standard",
     ) -> tuple[Path | None, Dict[str, Any]]:
+        requested_proxy_profile = str(proxy_profile or "standard").strip().lower()
         if selected_face is None or video_size is None:
-            return None, {"proxy_clip_valid": False, "proxy_reason": "missing_selected_face"}
+            return None, {
+                "proxy_clip_valid": False,
+                "proxy_reason": "missing_selected_face",
+                "requested_proxy_profile": requested_proxy_profile,
+                "effective_proxy_profile": None,
+            }
         proxy_box = (
             tuple(selected_face.get("crop_box") or ())
             or tuple(selected_face.get("mapping_crop_box") or ())
@@ -535,7 +541,12 @@ class VideoFaceExtractor:
         x, y, width, height = [float(value) for value in proxy_box[:4]]
         face_area_ratio = (width * height) / max(video_width * video_height, 1)
         if face_area_ratio >= 0.8:
-            return None, {"proxy_clip_valid": False, "proxy_reason": "full_frame_fallback"}
+            return None, {
+                "proxy_clip_valid": False,
+                "proxy_reason": "full_frame_fallback",
+                "requested_proxy_profile": requested_proxy_profile,
+                "effective_proxy_profile": None,
+            }
         face_track_summary = {
             "video_width": video_width,
             "video_height": video_height,
@@ -547,16 +558,35 @@ class VideoFaceExtractor:
                 "height": height,
             },
         }
-        proxy_path, proxy_meta = self.create_focused_target_clip(
-            source_video_path=source_video_path,
-            output_path=output_path,
-            face_track_summary=face_track_summary,
-            crop_profile=proxy_profile,
-        )
-        proxy_meta["proxy_clip_valid"] = proxy_path is not None
-        proxy_meta["proxy_reason"] = proxy_reason if proxy_path is not None else str(proxy_meta.get("focus_mode") or "invalid_crop")
-        proxy_meta["proxy_profile"] = proxy_profile
-        return proxy_path, proxy_meta
+        attempt_profiles = [requested_proxy_profile]
+        if requested_proxy_profile in {"tight", "extreme_close", "proxy_tight", "proxy_extreme_close", "proxy_extreme"}:
+            attempt_profiles.append("standard")
+        last_meta: Dict[str, Any] = {}
+        for index, attempt_profile in enumerate(attempt_profiles):
+            proxy_path, proxy_meta = self.create_focused_target_clip(
+                source_video_path=source_video_path,
+                output_path=output_path,
+                face_track_summary=dict(face_track_summary),
+                crop_profile=attempt_profile,
+            )
+            proxy_meta["proxy_clip_valid"] = proxy_path is not None
+            proxy_meta["requested_proxy_profile"] = requested_proxy_profile
+            proxy_meta["effective_proxy_profile"] = attempt_profile if proxy_path is not None else None
+            proxy_meta["proxy_profile"] = attempt_profile if proxy_path is not None else requested_proxy_profile
+            if proxy_path is not None:
+                proxy_meta["proxy_reason"] = (
+                    proxy_reason
+                    if index == 0
+                    else f"downgraded_to_standard_from_{requested_proxy_profile}"
+                )
+                return proxy_path, proxy_meta
+            last_meta = dict(proxy_meta)
+        last_meta["proxy_clip_valid"] = False
+        last_meta["proxy_reason"] = str(last_meta.get("focus_mode") or "invalid_crop")
+        last_meta["requested_proxy_profile"] = requested_proxy_profile
+        last_meta["effective_proxy_profile"] = None
+        last_meta["proxy_profile"] = requested_proxy_profile
+        return None, last_meta
 
     async def _bridge_proxy_clip(
         self,
@@ -773,7 +803,12 @@ class VideoFaceExtractor:
             "proxy_target_asset": proxy_clip_asset,
             "proxy_target_url": proxy_clip_asset.public_url if proxy_clip_asset is not None else None,
             "proxy_clip_meta": proxy_clip_meta,
-            "proxy_profile": proxy_profile,
+            "requested_proxy_profile": proxy_profile,
+            "effective_proxy_profile": (
+                proxy_clip_meta.get("effective_proxy_profile")
+                or (proxy_profile if proxy_clip_asset is not None else None)
+            ),
+            "proxy_profile": proxy_clip_meta.get("effective_proxy_profile") or proxy_profile,
             "replacement_mode": "focused_clip" if focused_clip_asset is not None else "raw_target_video",
             "focus_crop_valid": focus_crop_valid,
             "focus_mode": focus_mode,

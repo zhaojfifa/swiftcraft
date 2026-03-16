@@ -1002,6 +1002,8 @@ def test_swap_engine_intelligence_extreme_replace_sets_route_and_face_enhance_fl
     assert result.metadata["target_anchor_quality"]["valid_for_extreme"] is True
     assert result.metadata["extreme_replace_selected"] is True
     assert result.metadata["downgraded_from_extreme"] is False
+    assert result.metadata["requested_proxy_profile"] == "extreme_close"
+    assert result.metadata["effective_proxy_profile"] == "extreme_close"
     assert result.metadata["proxy_profile"] == "extreme_close"
     assert result.metadata["postprocess_profile"] == "postprocess_minimal"
     assert result.metadata["overwrite_strength_expected"] == "high"
@@ -1071,6 +1073,8 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert result.metadata["downgraded_from_extreme"] is True
     assert result.metadata["replacement_intensity"] == "strong_identity"
     assert result.metadata["fallback_reason"] == "target_mapping_face_below_extreme_threshold"
+    assert result.metadata["requested_proxy_profile"] == "extreme_close"
+    assert result.metadata["effective_proxy_profile"] is None
 
 
 def test_swap_engine_retries_provider_temp_file_error_with_raw_target_reason():
