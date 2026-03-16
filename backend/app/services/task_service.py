@@ -249,6 +249,13 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         face_enhance = False if replacement_intensity == "extreme_replace" else True
     else:
         face_enhance = str(face_enhance).strip().lower() in {"1", "true", "yes", "on"}
+    force_proxy_override = data.get("force_proxy_override")
+    if force_proxy_override is None:
+        force_proxy_override = payload.get("force_proxy_override")
+    if force_proxy_override is None:
+        force_proxy_override = False
+    else:
+        force_proxy_override = str(force_proxy_override).strip().lower() in {"1", "true", "yes", "on"}
     return {
         "service_type": "swap",
         "swap_type": swap_type,
@@ -274,6 +281,7 @@ def _extract_swap_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, An
         "replacement_intensity": replacement_intensity,
         "proxy_profile": proxy_profile,
         "face_enhance": bool(face_enhance),
+        "force_proxy_override": bool(force_proxy_override),
         "source_crop_policy": (
             "extreme_identity_core"
             if replacement_intensity == "extreme_replace"

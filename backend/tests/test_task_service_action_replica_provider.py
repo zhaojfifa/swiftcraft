@@ -338,3 +338,17 @@ def test_status_from_record_maps_success_degraded():
 def test_status_from_record_maps_legacy_done_to_success():
     record = TaskRecord(task_id="swap-done-1", service="swap", mode="intelligence", status="done", stage="DONE")
     assert _status_from_record(record) == TaskStatus.success
+
+
+def test_extract_swap_run_config_keeps_force_proxy_override():
+    cfg = _extract_swap_run_config(
+        {
+            "inputs": {
+                "source_video_key": "uploads/source.mp4",
+                "source_face_image_key": "uploads/source-face.png",
+                "force_proxy_override": True,
+            }
+        },
+        "intelligence",
+    )
+    assert cfg["force_proxy_override"] is True

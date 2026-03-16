@@ -146,6 +146,7 @@ class SwapInputs(BaseModel):
     replacement_intensity: Optional[str] = None
     proxy_profile: Optional[str] = None
     face_enhance: Optional[bool] = True
+    force_proxy_override: Optional[bool] = False
 
     @model_validator(mode="before")
     @classmethod
@@ -208,6 +209,7 @@ class SwapRequest(BaseModel):
     replacement_intensity: Optional[str] = None
     proxy_profile: Optional[str] = None
     face_enhance: Optional[bool] = None
+    force_proxy_override: Optional[bool] = None
     inputs: Optional[SwapInputs] = None
 
     @model_validator(mode="before")
@@ -247,6 +249,8 @@ class SwapRequest(BaseModel):
             input_data["proxy_profile"] = merged.get("proxy_profile")
         if merged.get("face_enhance") is not None and input_data.get("face_enhance") is None:
             input_data["face_enhance"] = merged.get("face_enhance")
+        if merged.get("force_proxy_override") is not None and input_data.get("force_proxy_override") is None:
+            input_data["force_proxy_override"] = merged.get("force_proxy_override")
         merged["inputs"] = input_data
         return merged
 

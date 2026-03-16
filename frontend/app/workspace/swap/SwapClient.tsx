@@ -275,7 +275,12 @@ export default function SwapClient({ service = "swap" }: Props) {
     return upload.file_key;
   };
 
-  const buildSwapTaskPayload = (sourceVideoKey: string, sourceFaceImageKeys: string[], emitDebug = false) => {
+  const buildSwapTaskPayload = (
+    sourceVideoKey: string,
+    sourceFaceImageKeys: string[],
+    emitDebug = false,
+    options?: { forceProxyOverride?: boolean },
+  ) => {
     const sourceFaceImageKey = sourceFaceImageKeys[0];
     const payload = {
       service_type: "swap" as const,
@@ -289,6 +294,7 @@ export default function SwapClient({ service = "swap" }: Props) {
       replacement_intensity: swapContract.replacementIntensity,
       proxy_profile: swapSourcePackEnabled ? effectiveProxyProfile : undefined,
       face_enhance: faceEnhance,
+      force_proxy_override: Boolean(options?.forceProxyOverride),
       inputs: {
         source_video_key: sourceVideoKey,
         source_video_url: sourceVideoKey,
@@ -296,6 +302,7 @@ export default function SwapClient({ service = "swap" }: Props) {
         source_face_image: sourceFaceImageKey,
         source_face_images: swapSourcePackEnabled ? sourceFaceImageKeys : undefined,
         proxy_profile: swapSourcePackEnabled ? effectiveProxyProfile : undefined,
+        force_proxy_override: Boolean(options?.forceProxyOverride),
       },
     };
     if (emitDebug) {
@@ -306,6 +313,7 @@ export default function SwapClient({ service = "swap" }: Props) {
         has_source_video: Boolean(payload.inputs.source_video_key),
         has_source_video_url: Boolean(payload.inputs.source_video_url),
         proxy_profile: payload.inputs.proxy_profile,
+        force_proxy_override: payload.inputs.force_proxy_override,
       });
     }
     return payload;
@@ -503,6 +511,46 @@ export default function SwapClient({ service = "swap" }: Props) {
     setIsPollingPaused(false);
     setUiLogs([]);
     startTaskPolling(taskId);
+  };
+
+  const handleRetryWithProxyProbe = async () => {
+    if (!isSwap || isRunning) return;
+    try {
+      setError(null);
+      setUiPollingWarning(null);
+      setIsPollingPaused(false);
+      setUiLogs([]);
+      setIsRunning(true);
+      setTask(null);
+      cancelPolling();
+      let sourceVideoKey = "";
+      let sourceFaceImageKeys: string[] = [];
+      const snapshot = taskMetadata.run_config_snapshot && typeof taskMetadata.run_config_snapshot === "object"
+        ? (taskMetadata.run_config_snapshot as Record<string, unknown>)
+        : {};
+      if (videoFile) {
+        sourceVideoKey = await uploadFileToR2(videoFile);
+      } else {
+        sourceVideoKey = String(snapshot.source_video_key || snapshot.source_video_url || "");
+      }
+      if (activeSwapSourceFaceFiles.length) {
+        for (const file of activeSwapSourceFaceFiles) {
+          sourceFaceImageKeys.push(await uploadFileToR2(file));
+        }
+      } else if (Array.isArray(snapshot.source_face_images) && snapshot.source_face_images.length) {
+        sourceFaceImageKeys = (snapshot.source_face_images as unknown[]).map((value) => String(value)).filter(Boolean);
+      } else if (snapshot.source_face_image_key) {
+        sourceFaceImageKeys = [String(snapshot.source_face_image_key)];
+      }
+      if (!sourceVideoKey || !sourceFaceImageKeys.length) {
+        throw new Error("Retry with proxy probe requires source video and source face inputs.");
+      }
+      const result = await createTask(buildSwapTaskPayload(sourceVideoKey, sourceFaceImageKeys, true, { forceProxyOverride: true }));
+      startTaskPolling(result.task_id);
+    } catch (err) {
+      setIsRunning(false);
+      setError(err instanceof Error ? err.message : "Retry with proxy probe failed.");
+    }
   };
 
   const runAvatarTask = async (overrides?: { motionKey?: string; characterKey?: string; modeOverride?: SwapMode }) => {
@@ -1636,6 +1684,20 @@ export default function SwapClient({ service = "swap" }: Props) {
                         Retry polling
                       </button>
                     ) : null}
+                  </div>
+                ) : null}
+                {isSwap && finalQualityGrade === "success_degraded" ? (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 space-y-2">
+                    <div className="font-semibold">Degraded output</div>
+                    <div>This run is marked degraded and is not delivery-ready by default.</div>
+                    <button
+                      type="button"
+                      onClick={handleRetryWithProxyProbe}
+                      disabled={isRunning}
+                      className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-[11px] font-semibold text-blue-700 disabled:opacity-60"
+                    >
+                      Retry with Proxy Probe
+                    </button>
                   </div>
                 ) : null}
                 {showPolicyPanel ? (

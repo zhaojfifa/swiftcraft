@@ -208,6 +208,7 @@ class AkoolSwapFaceEngine:
         proxy_face_ratio_after: float | None,
         selected_source_score: float | None,
         face_presence_ratio: float | None,
+        force_proxy_override: bool,
     ) -> tuple[bool, str | None, bool, str | None, float, float, float, str | None, str | None, bool]:
         if replacement_intensity != "extreme_replace":
             return True, None, False, None, 0.0, 0.0, 0.0, None, "raw_detect", False
@@ -304,7 +305,7 @@ class AkoolSwapFaceEngine:
             gate_primary_reason = "true_detect_frame_ratio_below_threshold"
 
         allow_weak_track = bool(getattr(settings, "SWAP_EXTREME_ALLOW_PROXY_ON_WEAK_TRACK", False))
-        force_proxy_override = bool(getattr(settings, "SWAP_EXTREME_FORCE_PROXY_OVERRIDE", False))
+        force_proxy_override = bool(force_proxy_override or getattr(settings, "SWAP_EXTREME_FORCE_PROXY_OVERRIDE", False))
         proxy_override_ready = (
             proxy_clip_used
             and proxy_is_true_close_crop
@@ -523,6 +524,7 @@ class AkoolSwapFaceEngine:
         extreme_replace_effective: bool,
         weak_track_proxy_override_used: bool,
         quality_grade: str,
+        submission_mode_final: str,
     ) -> Dict[str, Any]:
         final_extreme_submission_accepted = bool(
             extreme_replace_selected and replacement_intensity == "extreme_replace" and modify_video_source == "proxy_target"
@@ -542,7 +544,7 @@ class AkoolSwapFaceEngine:
             "modify_video_source_final": modify_video_source,
             "degrade_reason_final": degrade_reason_final,
             "proxy_used_final": bool(proxy_clip_used and modify_video_source == "proxy_target"),
-            "submission_mode_final": "v3_explicit_mapping",
+            "submission_mode_final": submission_mode_final,
             "raw_channel_accepted": bool(gate_primary_channel == "raw_detect" and route_gate_passed),
             "proxy_channel_accepted": bool(gate_primary_channel == "proxy_override" and route_gate_passed),
             "final_extreme_submission_accepted": final_extreme_submission_accepted,
@@ -647,6 +649,7 @@ class AkoolSwapFaceEngine:
         ).strip().lower() or "simplified_single_face"
         source_crop_policy = str(run_cfg.get("source_crop_policy") or ("tight_identity_focus" if is_intelligence_route else "standard_single_face")).strip().lower()
         target_anchor_policy = str(run_cfg.get("target_anchor_policy") or ("strong_identity_primary" if is_intelligence_route else "primary_face")).strip().lower()
+        force_proxy_override_requested = bool(run_cfg.get("force_proxy_override", False))
         provider_contract = (
             "akool_v3_video_faceswap_strong_identity"
             if is_intelligence_route
@@ -779,6 +782,7 @@ class AkoolSwapFaceEngine:
         gate_primary_channel = None
         gate_secondary_blocker = None
         force_proxy_override_used = False
+        submission_mode_final = "v3_explicit_mapping"
         ab_compare_runtime: Dict[str, Any] | None = None
         quality_summary: Dict[str, Any] | None = None
         degraded_fallback_used = False
@@ -1331,6 +1335,7 @@ class AkoolSwapFaceEngine:
                             + (0.05 if (source_face_score or 0.0) >= 90 else 0.0),
                         ),
                     ),
+                    force_proxy_override=force_proxy_override_requested,
                 )
                 if _downgraded_from_extreme and route_gate_passed:
                     route_gate_passed = False
@@ -1348,6 +1353,7 @@ class AkoolSwapFaceEngine:
                     )
                     on_log(f"[swap][route] extreme_replace blocked -> downgrade reason={downgrade_reason}")
                     effective_replacement_intensity = "strong_identity"
+                    submission_mode_final = "v3_raw_target_degraded"
                     proxy_clip_used = False
                     submit_modify_video = focused_target_url or source_video_vendor_url
                     modify_video_source = "focused_target" if focused_target_url else "raw_target"
@@ -1360,10 +1366,18 @@ class AkoolSwapFaceEngine:
                     )
                 if effective_replacement_intensity == "extreme_replace":
                     modify_video_source = "proxy_target"
+                    if gate_primary_channel == "proxy_override":
+                        submission_mode_final = "extreme_probe_proxy"
+                        submit_face_enhance = True
+                    else:
+                        submission_mode_final = "v3_explicit_mapping"
                 elif submit_modify_video == focused_target_url and focused_target_url:
+                    submission_mode_final = "v3_focused_target"
                     modify_video_source = "focused_target"
                 else:
                     modify_video_source = "raw_target"
+                    if submission_mode_final == "v3_explicit_mapping":
+                        submission_mode_final = "v3_raw_target"
                 submit_payload = {
                     "sourceImage": [{"path": source_face["path"], "opts": source_face["opts"]}],
                     "targetImage": [{"path": face["path"], "opts": face["opts"]} for face in target_face_runtime["target_image_payload"]],
@@ -1955,6 +1969,7 @@ class AkoolSwapFaceEngine:
                 extreme_replace_effective=extreme_replace_effective,
                 weak_track_proxy_override_used=weak_track_proxy_override_used,
                 quality_grade=quality_grade,
+                submission_mode_final=submission_mode_final,
             )
             on_log(f"[swap][result-analyze] analysis={result_analysis} quality_grade={quality_grade}")
             on_log(f"[swap][final-decision] summary={final_decision}")
@@ -2045,6 +2060,7 @@ class AkoolSwapFaceEngine:
                 "overwrite_strength_expected": "high" if replacement_intensity == "extreme_replace" else "medium",
                 "modify_video_source": modify_video_source,
                 "modifyVideoSource_final": modify_video_source,
+                "submission_mode_final": submission_mode_final,
                 "provider_failure_reason": provider_failure_reason,
                 "failure_stage": failure_stage,
                 "retry_attempt": retry_attempt,
@@ -2205,6 +2221,7 @@ class AkoolSwapFaceEngine:
                     "postprocess_profile": postprocess_profile,
                     "overwrite_strength_expected": quality_summary["overwrite_strength_expected"],
                     "modifyVideoSource_final": modify_video_source,
+                    "submission_mode_final": submission_mode_final,
                     "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,
@@ -2376,6 +2393,7 @@ class AkoolSwapFaceEngine:
                     "postprocess_profile": postprocess_profile,
                     "overwrite_strength_expected": quality_summary["overwrite_strength_expected"],
                     "modifyVideoSource_final": modify_video_source,
+                    "submission_mode_final": submission_mode_final,
                     "degraded_fallback_used": degraded_fallback_used,
                     "focus_crop_valid": focus_crop_valid,
                     "focus_mode": focus_mode,
