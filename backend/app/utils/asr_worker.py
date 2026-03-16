@@ -48,7 +48,13 @@ def main() -> int:
         print(json.dumps({"status": "error", "reason": "missing_input"}))
         return 2
 
-    from faster_whisper import WhisperModel  # type: ignore
+    try:
+        from faster_whisper import WhisperModel  # type: ignore
+    except Exception as exc:
+        _wlog(f"import_probe faster_whisper=fail reason={type(exc).__name__}: {exc}")
+        print(json.dumps({"status": "error", "reason": f"import_failed:{type(exc).__name__}:{exc}"}))
+        return 3
+    _wlog(f"runtime python={sys.executable} ver={sys.version.split()[0]} faster_whisper=ok")
 
     model = WhisperModel(
         model_input,

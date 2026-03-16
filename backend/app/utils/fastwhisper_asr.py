@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import importlib.util
 import subprocess
 import sys
 import threading
@@ -97,6 +98,25 @@ def get_last_transcribe_status() -> dict[str, str]:
 def reset_last_transcribe_status() -> None:
     global _LAST_TRANSCRIBE_STATUS
     _LAST_TRANSCRIBE_STATUS = {"status": "init", "reason": ""}
+
+
+def _probe_faster_whisper_import() -> dict[str, str]:
+    try:
+        from faster_whisper import WhisperModel  # noqa: F401  # type: ignore
+
+        return {"status": "ok", "reason": ""}
+    except Exception as exc:
+        return {"status": "fail", "reason": f"{type(exc).__name__}: {exc}"}
+
+
+def _resolve_asr_worker_module() -> str:
+    for module_name in ("backend.app.utils.asr_worker", "app.utils.asr_worker"):
+        try:
+            if importlib.util.find_spec(module_name) is not None:
+                return module_name
+        except Exception:
+            continue
+    return "app.utils.asr_worker"
 
 
 def _env_runtime_install_enabled() -> bool:
@@ -457,7 +477,15 @@ def _run_subprocess_transcribe(
         num_workers=num_workers,
         audio_duration_sec=audio_duration_sec,
     )
-    cmd = [sys.executable, "-m", "app.utils.asr_worker"]
+    worker_module = _resolve_asr_worker_module()
+    probe = _probe_faster_whisper_import()
+    _log(
+        f"asr_subprocess_probe python={sys.executable} ver={sys.version.split()[0]} "
+        f"worker_module={worker_module} faster_whisper={probe['status']} reason={probe['reason'] or 'ok'}",
+        logger,
+    )
+    cmd = [sys.executable, "-m", worker_module]
+    _log(f"asr_subprocess_cmd={cmd}", logger)
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,
@@ -739,6 +767,11 @@ def transcribe(
                 f"no_speech_threshold={no_speech_threshold}",
                 logger,
             )
+            probe = _probe_faster_whisper_import()
+            _log(
+                f"faster_whisper_import_probe status={probe['status']} reason={probe['reason'] or 'ok'}",
+                logger,
+            )
         except Exception:
             pass
         _RUNTIME_LOGGED = True
@@ -774,8 +807,9 @@ def transcribe(
                 _log(f"model_ready model={model_name} rss_mb={_rss_mb()}", logger)
         except ModuleNotFoundError as exc:
             missing_module = getattr(exc, "name", "unknown")
-            _log(f"faster_whisper_not_installed -> fallback missing_module={missing_module}", logger)
-            _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": f"module_not_found:{missing_module}"}
+            reason = f"module_not_found:{missing_module}"
+            _log(f"faster_whisper_not_installed -> fallback reason={reason}", logger)
+            _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": reason}
             duration = _probe_duration_sec(audio_wav_path)
             return _empty_fallback_segments(duration)
         except RuntimeError as exc:
@@ -939,8 +973,9 @@ def transcribe(
             logger,
         )
     except Exception as exc:
-        _log(f"exception={type(exc).__name__}: {exc} -> fallback", logger)
-        _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": f"runtime_exception:{type(exc).__name__}"}
+        fallback_reason = f"runtime_exception:{type(exc).__name__}:{exc}"
+        _log(f"exception={type(exc).__name__}: {exc} -> fallback reason={fallback_reason}", logger)
+        _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": fallback_reason}
         duration = _probe_duration_sec(audio_wav_path)
         return _empty_fallback_segments(duration)
     finally:
@@ -964,7 +999,7 @@ def transcribe(
             "detected_language_probability": str(detected_language_probability or ""),
         }
         return segments
-    _log("empty_segments -> fallback", logger)
+    _log("empty_segments -> fallback reason=empty_segments", logger)
     _LAST_TRANSCRIBE_STATUS = {"status": "fallback", "reason": "empty_segments"}
     return _empty_fallback_segments(total_duration)
 

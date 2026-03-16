@@ -3,7 +3,7 @@ services:
     name: swiftcraft-backend
     runtime: python
     rootDir: backend
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && python -c "import sys, faster_whisper, ctranslate2, av; print('asr-build-ok', sys.version.split()[0], getattr(faster_whisper, '__version__', 'unknown'), getattr(ctranslate2, '__version__', 'unknown'), getattr(av, '__version__', 'unknown'))"
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:

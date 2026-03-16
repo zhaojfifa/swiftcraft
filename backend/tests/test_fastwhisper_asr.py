@@ -119,3 +119,29 @@ def test_worker_payload_lang_zh_keeps_beam_at_least_five():
     )
     assert payload["language"] == "zh"
     assert int(payload["beam_size"]) >= 5
+
+
+def test_resolve_asr_worker_module_prefers_backend_package(monkeypatch):
+    def fake_find_spec(name: str):
+        if name == "backend.app.utils.asr_worker":
+            return object()
+        return None
+
+    monkeypatch.setattr(asr.importlib.util, "find_spec", fake_find_spec)
+    assert asr._resolve_asr_worker_module() == "backend.app.utils.asr_worker"
+
+
+def test_probe_faster_whisper_import_reports_failure(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "faster_whisper":
+            raise ModuleNotFoundError("No module named 'faster_whisper'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    probe = asr._probe_faster_whisper_import()
+    assert probe["status"] == "fail"
+    assert "ModuleNotFoundError" in probe["reason"]
