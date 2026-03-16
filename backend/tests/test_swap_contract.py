@@ -72,30 +72,6 @@ def test_follow_video_request_accepts_placeholder_contract():
     assert parsed.inputs.subject_image == "uploads/subject.png"
 
 
-
-
-def test_follow_video_request_accepts_optional_lipsync_contract():
-    payload = {
-        "service_type": "follow_video",
-        "mode": "intelligence",
-        "inputs": {
-            "subject_image": "uploads/subject.png",
-            "reference_video_a": "uploads/ref-a.mp4",
-            "reference_video_b": "uploads/ref-b.mp4",
-            "prompt": "Track the subject with both references.",
-            "duration_sec": 5,
-            "aspect_ratio": "9:16",
-            "follow_strength": "medium",
-            "reference_mix": "balanced",
-            "lipsync_enabled": True,
-            "lipsync_scope": "full",
-        },
-    }
-    parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
-    assert isinstance(parsed, FollowVideoRequest)
-    assert parsed.inputs.lipsync_enabled is True
-    assert parsed.inputs.lipsync_scope == "full"
-
 def test_swap_request_accepts_basic_mode_alias():
     payload = {
         "service_type": "swap",

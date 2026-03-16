@@ -500,10 +500,6 @@ def _extract_follow_video_run_config(payload: Dict[str, Any], mode: str) -> Dict
     resolved_mode = str(mode or "basic").strip().lower()
     if resolved_mode not in {"basic", "intelligence"}:
         resolved_mode = "basic"
-    lipsync_enabled = bool(data.get("lipsync_enabled")) if resolved_mode == "intelligence" else False
-    lipsync_scope = str(data.get("lipsync_scope") or "face").strip().lower() or "face"
-    if lipsync_scope not in {"face", "full"}:
-        lipsync_scope = "face"
     return {
         "service_type": "follow_video",
         "mode": resolved_mode,
@@ -516,12 +512,6 @@ def _extract_follow_video_run_config(payload: Dict[str, Any], mode: str) -> Dict
         "aspect_ratio": str(data.get("aspect_ratio") or "9:16").strip() or "9:16",
         "follow_strength": str(data.get("follow_strength") or "medium").strip() or "medium",
         "reference_mix": str(data.get("reference_mix") or "balanced").strip() or "balanced",
-        "lipsync_enabled": lipsync_enabled,
-        "lipsync_scope": lipsync_scope,
-        "lipsync_state": "off" if not lipsync_enabled else "unavailable",
-        "lipsync_enhancement_only": True,
-        "lipsync_provider": "pending",
-        "lipsync_provider_contract": "pending",
         "route_summary": "follow_video_placeholder",
         "provider_contract": "pending",
     }

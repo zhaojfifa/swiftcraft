@@ -37,25 +37,13 @@ class FollowVideoPlaceholderEngine:
         reference_video_b = str(payload.get("reference_video_b") or "").strip()
         prompt = str(payload.get("prompt") or "").strip()
         mode = str(payload.get("mode") or record.mode or "basic").strip().lower() or "basic"
-        lipsync_enabled = bool(payload.get("lipsync_enabled")) if mode == "intelligence" else False
-        lipsync_scope = str(payload.get("lipsync_scope") or "face").strip().lower() or "face"
-        if lipsync_scope not in {"face", "full"}:
-            lipsync_scope = "face"
-        lipsync_state = "off" if not lipsync_enabled else "unavailable"
         output_key: Optional[str] = reference_video_a or None
         output_url = self._public_url(reference_video_a)
         payload["mode"] = mode
-        payload["lipsync_enabled"] = lipsync_enabled
-        payload["lipsync_scope"] = lipsync_scope
-        payload["lipsync_state"] = lipsync_state
 
         on_stage("running", 15)
         on_log("[follow_video][placeholder] accepted")
         on_log(f"[follow_video][inputs] subject_image={bool(subject_image)} reference_video_a={bool(reference_video_a)} reference_video_b={bool(reference_video_b)}")
-        on_log(
-            f"[follow_video][lipsync] requested={str(lipsync_enabled).lower()} "
-            f"scope={lipsync_scope} state={lipsync_state} enhancement_only=true"
-        )
         on_stage("finalizing", 70)
 
         manifest_key = f"outputs/{task_id}/manifest.json"
@@ -72,23 +60,11 @@ class FollowVideoPlaceholderEngine:
                 "aspect_ratio": payload.get("aspect_ratio", "9:16"),
                 "follow_strength": payload.get("follow_strength", "medium"),
                 "reference_mix": payload.get("reference_mix", "balanced"),
-                "lipsync_enabled": lipsync_enabled,
-                "lipsync_scope": lipsync_scope,
             },
             "generation_summary": {
                 "route_summary": "follow_video_placeholder",
                 "provider": "pending",
                 "provider_contract": "pending",
-            },
-            "lipsync": {
-                "requested": lipsync_enabled,
-                "enabled": False,
-                "scope": lipsync_scope,
-                "state": lipsync_state,
-                "enhancement_only": True,
-                "provider": "pending",
-                "provider_contract": "pending",
-                "review_url": None,
             },
         }
         manifest_url: Optional[str] = None
@@ -133,16 +109,6 @@ class FollowVideoPlaceholderEngine:
                 "provider_contract": "pending",
                 "route_summary": "follow_video_placeholder",
                 "status": "placeholder",
-                "lipsync": {
-                    "requested": lipsync_enabled,
-                    "enabled": False,
-                    "scope": lipsync_scope,
-                    "state": lipsync_state,
-                    "enhancement_only": True,
-                    "provider": "pending",
-                    "provider_contract": "pending",
-                    "review_url": None,
-                },
                 "outputs": {
                     "video_key": output_key,
                     "video_url": output_url,

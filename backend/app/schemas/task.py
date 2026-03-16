@@ -382,8 +382,6 @@ class FollowVideoInputs(BaseModel):
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
     follow_strength: Literal["low", "medium", "high"] = "medium"
     reference_mix: Literal["a_dominant", "balanced", "b_dominant"] = "balanced"
-    lipsync_enabled: bool = False
-    lipsync_scope: Literal["face", "full"] = "face"
 
 
 class FollowVideoRequest(BaseModel):
