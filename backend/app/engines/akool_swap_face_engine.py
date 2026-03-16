@@ -591,6 +591,93 @@ class AkoolSwapFaceEngine:
             "manual_material_fix_required": manual_material_fix_required,
         }
 
+    def _derive_material_tags(
+        self,
+        *,
+        source_face_risk_tags: list[str],
+        target_risk_tags: list[str],
+        source_score_breakdown: Dict[str, Any],
+        target_track_stability_score: float | None,
+    ) -> Dict[str, list[str]]:
+        source_tags: list[str] = []
+        target_tags: list[str] = []
+        frontalness = float(source_score_breakdown.get("frontalness") or 0.0)
+        face_ratio = float(source_score_breakdown.get("face_ratio") or 0.0)
+        if frontalness >= 17:
+            source_tags.append("frontal")
+        elif frontalness >= 12:
+            source_tags.append("semi_profile")
+        if "lighting_gap" in source_face_risk_tags:
+            source_tags.append("low_light")
+        if "heavy_shadow" in source_face_risk_tags:
+            source_tags.append("high_shadow")
+        if "overexposure" in source_face_risk_tags:
+            source_tags.append("overexposed")
+        if face_ratio >= 16:
+            source_tags.append("face_large")
+        elif face_ratio and face_ratio < 12:
+            source_tags.append("face_small")
+
+        stability = float(target_track_stability_score or 0.0)
+        if stability >= 0.7:
+            target_tags.append("stable_face")
+        elif stability > 0:
+            target_tags.append("moving_face")
+        if "occlusion_risk" in target_risk_tags:
+            target_tags.append("occluded_face")
+        if "resolution_low" in target_risk_tags:
+            target_tags.append("low_resolution")
+        if "compression_heavy" in target_risk_tags:
+            target_tags.append("compression_heavy")
+        if any(tag in target_risk_tags for tag in {"bbox_suspicious", "full_frame_fallback", "face_box_unstable"}):
+            target_tags.append("face_box_unstable")
+        return {
+            "source_image_tags": sorted(set(source_tags)),
+            "target_video_tags": sorted(set(target_tags)),
+        }
+
+    def _derive_route_channels(
+        self,
+        *,
+        extreme_requested: bool,
+        replacement_intensity: str,
+        modify_video_source: str,
+        gate_primary_channel: str | None,
+        degrade_reason_final: str,
+    ) -> Dict[str, str]:
+        requested_channel = "extreme_proxy_channel" if extreme_requested else "strong_identity_raw_channel"
+        if replacement_intensity == "extreme_replace" and modify_video_source == "proxy_target":
+            effective_channel = "extreme_proxy_channel"
+        else:
+            effective_channel = "strong_identity_raw_channel"
+        channel_switch_reason = "none" if requested_channel == effective_channel else degrade_reason_final or "route_channel_switch"
+        return {
+            "route_channel_requested": requested_channel,
+            "route_channel_effective": effective_channel,
+            "channel_switch_reason": channel_switch_reason,
+            "channel_switch_occurred": requested_channel != effective_channel,
+            "review_queue_candidate": effective_channel == "strong_identity_raw_channel" and extreme_requested,
+        }
+
+    def _build_manual_review_entry(
+        self,
+        *,
+        task_id: str,
+        requested_swap_strength: str,
+        final_decision: Dict[str, Any],
+        result_analysis: Dict[str, Any],
+    ) -> Dict[str, Any] | None:
+        if str(final_decision.get("delivery_status") or "") != "blocked":
+            return None
+        return {
+            "task_id": task_id,
+            "requested_swap_strength": requested_swap_strength,
+            "actual_submission_mode": final_decision.get("submission_mode_final"),
+            "degrade_reason": final_decision.get("degrade_reason_final"),
+            "result_analysis": result_analysis,
+            "suggested_rerun_strategy": final_decision.get("rerun_strategy"),
+        }
+
     def _build_final_decision(
         self,
         *,
@@ -618,6 +705,7 @@ class AkoolSwapFaceEngine:
         result_bucket: str,
         proxy_rejected_reason: str,
         rerun_guidance: Dict[str, Any],
+        route_channels: Dict[str, Any],
     ) -> Dict[str, Any]:
         final_extreme_submission_accepted = bool(
             extreme_replace_selected and replacement_intensity == "extreme_replace" and modify_video_source == "proxy_target"
@@ -657,6 +745,7 @@ class AkoolSwapFaceEngine:
             "result_grade": result_grade,
             "result_bucket": result_bucket,
             **rerun_guidance,
+            **route_channels,
         }
 
     async def _run_ab_compare(
@@ -2059,6 +2148,19 @@ class AkoolSwapFaceEngine:
             provider_status, business_status, delivery_status, requires_manual_review = self._derive_status_triad(quality_grade)
             result_grade, result_bucket = self._derive_result_labels(business_status)
             rerun_guidance = self._derive_rerun_guidance(result_analysis)
+            material_tags = self._derive_material_tags(
+                source_face_risk_tags=source_face_risk_tags,
+                target_risk_tags=target_risk_tags,
+                source_score_breakdown=source_score_breakdown,
+                target_track_stability_score=target_track_stability_score,
+            )
+            route_channels = self._derive_route_channels(
+                extreme_requested=extreme_replace_selected,
+                replacement_intensity=replacement_intensity,
+                modify_video_source=modify_video_source,
+                gate_primary_channel=gate_primary_channel,
+                degrade_reason_final=degrade_reason_final,
+            )
             proxy_rejected_reason = "none"
             if requested_proxy_profile and modify_video_source != "proxy_target":
                 proxy_rejected_reason = (
@@ -2091,6 +2193,7 @@ class AkoolSwapFaceEngine:
                 result_bucket=result_bucket,
                 proxy_rejected_reason=proxy_rejected_reason,
                 rerun_guidance=rerun_guidance,
+                route_channels=route_channels,
             )
             on_log(f"[swap][result-analyze] analysis={result_analysis} quality_grade={quality_grade}")
             if extreme_replace_selected:
@@ -2101,6 +2204,7 @@ class AkoolSwapFaceEngine:
                 on_log(f"[swap][gate-channel][proxy] result={proxy_result} reason={weak_track_proxy_override_reason or proxy_rejected_reason}")
                 on_log(f"[swap][gate-channel][raw] result={raw_result} reason={gate_primary_reason or degrade_reason_final}")
                 on_log(f"[swap][submission-final] mode={submission_mode_final} extreme_executed={str(final_decision['extreme_executed']).lower()}")
+            on_log(f"[swap][route-channel] requested={route_channels['route_channel_requested']} effective={route_channels['route_channel_effective']} switch_reason={route_channels['channel_switch_reason']}")
             on_log(f"[swap][final-decision] summary={final_decision}")
             quality_summary = {
                 "swap_strength": swap_strength,
@@ -2199,6 +2303,8 @@ class AkoolSwapFaceEngine:
                 "retry_reason": retry_reason,
                 "degraded_fallback_used": degraded_fallback_used,
                 "risk_tags": risk_tags,
+                **material_tags,
+                **route_channels,
                 "route_summary": route_summary,
                 "source_pack_summary": source_pack_summary,
                 "target_analysis": target_analysis,
@@ -2215,6 +2321,12 @@ class AkoolSwapFaceEngine:
                 "result_bucket": result_bucket,
                 **rerun_guidance,
                 "final_decision": final_decision,
+                "manual_review_entry": self._build_manual_review_entry(
+                    task_id=task_id,
+                    requested_swap_strength=swap_strength,
+                    final_decision=final_decision,
+                    result_analysis=result_analysis,
+                ),
                 "ab_compare": ab_compare_runtime,
             }
             outputs = {
@@ -2378,6 +2490,8 @@ class AkoolSwapFaceEngine:
                     "target_mapping_face_risk_tags": target_mapping_face_risk_tags,
                     "target_face_risk_tags": target_risk_tags,
                     "risk_tags": risk_tags,
+                    **material_tags,
+                    **route_channels,
                     "quality_summary": quality_summary,
                     "target_analysis": target_analysis,
                     "proxy_runtime": proxy_runtime,
@@ -2394,6 +2508,12 @@ class AkoolSwapFaceEngine:
                     "result_bucket": result_bucket,
                     **rerun_guidance,
                     "final_decision": final_decision,
+                    "manual_review_entry": self._build_manual_review_entry(
+                        task_id=task_id,
+                        requested_swap_strength=swap_strength,
+                        final_decision=final_decision,
+                        result_analysis=result_analysis,
+                    ),
                     "ab_compare": ab_compare_runtime,
                     "source_crop_policy": source_crop_policy,
                     "target_anchor_policy": target_anchor_policy,
@@ -2560,6 +2680,8 @@ class AkoolSwapFaceEngine:
                     "target_mapping_face_risk_tags": target_mapping_face_risk_tags,
                     "target_face_risk_tags": target_risk_tags,
                     "risk_tags": risk_tags,
+                    **material_tags,
+                    **route_channels,
                     "quality_summary": quality_summary,
                     "target_analysis": target_analysis,
                     "proxy_runtime": proxy_runtime,
@@ -2576,6 +2698,12 @@ class AkoolSwapFaceEngine:
                     "result_bucket": result_bucket,
                     **rerun_guidance,
                     "final_decision": final_decision,
+                    "manual_review_entry": self._build_manual_review_entry(
+                        task_id=task_id,
+                        requested_swap_strength=swap_strength,
+                        final_decision=final_decision,
+                        result_analysis=result_analysis,
+                    ),
                     "ab_compare": ab_compare_runtime,
                     "mode": str(record.mode or "basic").lower(),
                     "request_id": job.request_id or None,

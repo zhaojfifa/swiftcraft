@@ -1200,6 +1200,11 @@ def test_swap_engine_intelligence_extreme_replace_sets_route_and_face_enhance_fl
     assert result.metadata["delivery_status"] == "allowed"
     assert result.metadata["result_grade"] == "pass"
     assert result.metadata["result_bucket"] == "deliverable"
+    assert result.metadata["route_channel_requested"] == "extreme_proxy_channel"
+    assert result.metadata["route_channel_effective"] == "extreme_proxy_channel"
+    assert result.metadata["channel_switch_occurred"] is False
+    assert "semi_profile" in result.metadata["source_image_tags"]
+    assert "stable_face" in result.metadata["target_video_tags"]
     assert result.metadata["selected_source_score"] >= 0
     assert len(result.metadata["source_rank_top3"]) >= 1
     assert result.metadata["final_decision"]["provider_status"] == "completed"
@@ -1288,6 +1293,11 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert result.metadata["result_grade"] == "warn"
     assert result.metadata["result_bucket"] == "review_required"
     assert result.metadata["proxy_rejected_reason"] == "channel_gate_blocked_due_to_track_unusable"
+    assert result.metadata["route_channel_requested"] == "extreme_proxy_channel"
+    assert result.metadata["route_channel_effective"] == "strong_identity_raw_channel"
+    assert result.metadata["channel_switch_occurred"] is True
+    assert result.metadata["manual_review_entry"] is not None
+    assert result.metadata["manual_review_entry"]["suggested_rerun_strategy"] == result.metadata["final_decision"]["rerun_strategy"]
     assert result.metadata["rerun_recommended"] in {True, False}
     assert result.metadata["target_detection_mode"] == "frame_sampling_fallback"
     assert result.metadata["target_detect_mode"] == "frame_sampling_fallback"
@@ -1440,6 +1450,7 @@ def test_swap_engine_intelligence_allows_proxy_probe_with_comparison_log_pattern
     assert result.metadata["final_decision"]["degrade_reason_final"] == "result_analysis_face_presence_below_threshold"
     assert result.metadata["final_decision"]["business_status"] == "degraded"
     assert result.metadata["final_decision"]["delivery_status"] == "blocked"
+    assert result.metadata["final_decision"]["route_channel_effective"] == "extreme_proxy_channel"
 
 
 def test_swap_engine_intelligence_force_proxy_override_on_weak_track(monkeypatch):

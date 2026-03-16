@@ -761,6 +761,11 @@ export default function SwapClient({ service = "swap" }: Props) {
   const rerunRecommended = String(finalDecision.rerun_recommended ?? "");
   const rerunStrategy = String(finalDecision.rerun_strategy ?? "");
   const manualMaterialFixRequired = String(finalDecision.manual_material_fix_required ?? "");
+  const routeChannelRequested = String(finalDecision.route_channel_requested ?? "");
+  const routeChannelEffective = String(finalDecision.route_channel_effective ?? "");
+  const channelSwitchReason = String(finalDecision.channel_switch_reason ?? "");
+  const sourceImageTags = Array.isArray(taskMetadata.source_image_tags) ? (taskMetadata.source_image_tags as unknown[]).map((value) => String(value)).filter(Boolean) : [];
+  const targetVideoTags = Array.isArray(taskMetadata.target_video_tags) ? (taskMetadata.target_video_tags as unknown[]).map((value) => String(value)).filter(Boolean) : [];
   const taskStatusNormalized = String(task?.status || "").trim().toLowerCase();
   const isDegradedStatus = taskStatusNormalized === "success_degraded";
   const resultFacePresenceRatio = Number(resultAnalysis.face_presence_ratio ?? 0);
@@ -1938,6 +1943,11 @@ export default function SwapClient({ service = "swap" }: Props) {
                       <div>Rerun Recommended: {rerunRecommended || "false"}</div>
                       <div>Rerun Strategy: {rerunStrategy || "-"}</div>
                       <div>Manual Material Fix Required: {manualMaterialFixRequired || "false"}</div>
+                      <div>Route Channel Requested: {routeChannelRequested || "-"}</div>
+                      <div>Route Channel Effective: {routeChannelEffective || "-"}</div>
+                      <div>Channel Switch Reason: {channelSwitchReason || "-"}</div>
+                      <div>Source Image Tags: {sourceImageTags.length ? sourceImageTags.join(", ") : "-"}</div>
+                      <div>Target Video Tags: {targetVideoTags.length ? targetVideoTags.join(", ") : "-"}</div>
                       <div>Risk Tags: {taskRiskTags.length ? taskRiskTags.join(", ") : "-"}</div>
                     </div>
                     <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
