@@ -1,4 +1,4 @@
-export type ServiceId = "swap" | "action_replica" | "localization";
+export type ServiceId = "swap" | "action_replica" | "localization" | "follow_video";
 export type InputFieldType = "video" | "image" | "select" | "text";
 
 export type ServiceInput = {
@@ -75,6 +75,32 @@ export const SERVICE_REGISTRY: ServiceConfig[] = [
       titleClass: "text-2xl font-bold text-white mb-2 group-hover:text-rose-200 transition-colors",
       ctaClass:
         "relative z-10 flex items-center text-rose-200 font-medium text-sm group-hover:underline underline-offset-4",
+      ctaLabel: "Enter Workspace"
+    }
+  },
+  {
+    id: "follow_video",
+    title: "Follow Video",
+    description: "Create a new video from one subject image and two reference videos.",
+    badge: "Preview",
+    route: "/workspace?service=follow_video",
+    enabled: true,
+    inputs: [
+      { id: "subject_image", type: "image", label: "Subject Image" },
+      { id: "reference_video_a", type: "video", label: "Reference Video A" },
+      { id: "reference_video_b", type: "video", label: "Reference Video B" },
+      { id: "prompt", type: "text", label: "Task Prompt" }
+    ],
+    ui: {
+      cardClass:
+        "group relative block rounded-2xl border border-cyan-200/20 bg-gradient-to-br from-cyan-950 via-slate-950 to-slate-950 p-8 overflow-hidden shadow-[0_18px_60px_rgba(34,211,238,0.18)] hover:shadow-[0_22px_80px_rgba(34,211,238,0.24)] hover:-translate-y-1 transition-all duration-300",
+      glowClass:
+        "pointer-events-none absolute -top-24 -left-24 h-56 w-56 rounded-full bg-cyan-400/20 blur-3xl opacity-60 group-hover:opacity-80 transition-opacity",
+      badgeClass:
+        "text-[10px] font-bold text-cyan-200 bg-white/5 px-2 py-1 rounded border border-white/10 uppercase tracking-wider",
+      titleClass: "text-2xl font-bold text-white mb-2 group-hover:text-cyan-200 transition-colors",
+      ctaClass:
+        "relative z-10 flex items-center text-cyan-200 font-medium text-sm group-hover:underline underline-offset-4",
       ctaLabel: "Enter Workspace"
     }
   },

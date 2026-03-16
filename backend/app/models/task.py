@@ -13,7 +13,7 @@ def _now_iso() -> str:
 class TaskRecord(BaseModel):
     task_id: str
     id: Optional[str] = None
-    service: Literal["swap", "avatar", "localization"] = "swap"
+    service: Literal["swap", "avatar", "localization", "follow_video"] = "swap"
     mode: Literal["baseline", "intelligent", "basic", "intelligence"] = "baseline"
 
     status: Literal["queued", "running", "done", "failed"] = "queued"

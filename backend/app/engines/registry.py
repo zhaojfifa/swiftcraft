@@ -4,6 +4,7 @@ from typing import Callable, Dict
 
 from app.engines.akool_engine import AkoolEngine
 from app.engines.akool_swap_face_engine import AkoolSwapFaceEngine
+from app.engines.follow_video_placeholder_engine import FollowVideoPlaceholderEngine
 from app.engines.localization_engine import LocalizationEngine
 from app.engines.mock_engine import MockEngine
 from app.engines.real_engine import RealEngine
@@ -53,6 +54,7 @@ PROVIDER_ADAPTERS: Dict[str, Callable[[], object]] = {
     # Contract placeholder: runtime falls back to mock until lipsync provider is wired.
     "localization_intelligent": MockEngine,
     "localization-intelligent": MockEngine,
+    "follow_video_placeholder": FollowVideoPlaceholderEngine,
     # Legacy scene swap placeholder remains for compatibility only.
     "fal_pixverse_swap": MockEngine,
     "pixverse_swap": MockEngine,

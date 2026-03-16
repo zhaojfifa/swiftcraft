@@ -57,6 +57,7 @@ class ServiceType(str, Enum):
     # legacy alias kept for backward compatibility
     avatar_transfer = "avatar_transfer"
     localization = "localization"
+    follow_video = "follow_video"
 
 
 class TaskStatus(str, Enum):
@@ -367,8 +368,32 @@ class LocalizationRequest(BaseModel):
     inputs: dict = Field(default_factory=dict)
 
 
+class FollowVideoInputs(BaseModel):
+    subject_image: str
+    reference_video_a: str
+    reference_video_b: str
+    prompt: str
+    duration_sec: Literal[5, 8, 10] = 5
+    aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
+    follow_strength: Literal["low", "medium", "high"] = "medium"
+    reference_mix: Literal["a_dominant", "balanced", "b_dominant"] = "balanced"
+
+
+class FollowVideoRequest(BaseModel):
+    service_type: Literal["follow_video"] = "follow_video"
+    mode: Literal["basic", "intelligence"] = "basic"
+    input_key: Optional[str] = None
+    inputs: FollowVideoInputs
+
+    @model_validator(mode="after")
+    def normalize_input_key(self) -> "FollowVideoRequest":
+        if not self.input_key:
+            self.input_key = _strip_cdn_prefix(self.inputs.reference_video_a)
+        return self
+
+
 CreateTaskRequest = Annotated[
-    Union[SwapRequest, AvatarRequest, LocalizationRequest],
+    Union[SwapRequest, AvatarRequest, LocalizationRequest, FollowVideoRequest],
     Field(discriminator="service_type"),
 ]
 

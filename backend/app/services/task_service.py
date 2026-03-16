@@ -20,6 +20,7 @@ from app.models.task import TaskRecord
 from app.schemas.task import (
     AvatarRequest,
     CreateTaskRequest,
+    FollowVideoRequest,
     LegacySwapRequest,
     LocalizationRequest,
     ServiceType,
@@ -485,6 +486,29 @@ def _normalize_localization_inputs(payload: Dict[str, Any], mode: str) -> tuple[
     return normalized, {"enforced": enforced}
 
 
+def _extract_follow_video_run_config(payload: Dict[str, Any], mode: str) -> Dict[str, Any]:
+    inputs = payload.get("inputs")
+    data = dict(inputs) if isinstance(inputs, dict) else {}
+    resolved_mode = str(mode or "basic").strip().lower()
+    if resolved_mode not in {"basic", "intelligence"}:
+        resolved_mode = "basic"
+    return {
+        "service_type": "follow_video",
+        "mode": resolved_mode,
+        "provider": "follow_video_placeholder",
+        "subject_image": str(data.get("subject_image") or "").strip(),
+        "reference_video_a": str(data.get("reference_video_a") or "").strip(),
+        "reference_video_b": str(data.get("reference_video_b") or "").strip(),
+        "prompt": str(data.get("prompt") or "").strip(),
+        "duration_sec": int(data.get("duration_sec") or 5),
+        "aspect_ratio": str(data.get("aspect_ratio") or "9:16").strip() or "9:16",
+        "follow_strength": str(data.get("follow_strength") or "medium").strip() or "medium",
+        "reference_mix": str(data.get("reference_mix") or "balanced").strip() or "balanced",
+        "route_summary": "follow_video_placeholder",
+        "provider_contract": "pending",
+    }
+
+
 def _extract_localization_intelligence_contract(inputs: Dict[str, Any], mode: str) -> Dict[str, Any]:
     lipsync_enabled = bool(inputs.get("lipsync_enabled")) if mode == "intelligent" else False
     lipsync_scope = str(inputs.get("lipsync_scope") or "face").strip().lower() or "face"
@@ -519,6 +543,8 @@ def _service_type_from_legacy(service: str) -> ServiceType:
         return ServiceType.action_replica
     if service == "localization":
         return ServiceType.localization
+    if service == "follow_video":
+        return ServiceType.follow_video
     return ServiceType.swap
 
 
@@ -667,6 +693,8 @@ class TaskService:
             return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_BASELINE", "wan26_r2v").strip() or "wan26_r2v")
         if service == "localization":
             return "localization_basic" if mode == "baseline" else "localization_intelligent"
+        if service == "follow_video":
+            return "follow_video_placeholder"
         if service == "swap":
             inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
             requested = str((inputs or {}).get("provider") or payload.get("provider") or "").strip().lower()
@@ -686,6 +714,8 @@ class TaskService:
         return str(payload.get("provider") or self._default_provider()).strip().lower()
 
     def _public_url_from_key(self, key: str) -> str:
+        if str(key or "").strip().startswith(("http://", "https://")):
+            return str(key).strip()
         try:
             return R2Client().public_url(key)
         except Exception:
@@ -764,9 +794,11 @@ class TaskService:
                 service = "swap"
             elif service_type in {ServiceType.action_replica, ServiceType.avatar_transfer}:
                 service = "avatar"
+            elif service_type == ServiceType.follow_video:
+                service = "follow_video"
             else:
                 service = "localization"
-            if isinstance(parsed, (AvatarRequest, LocalizationRequest, SwapRequest)):
+            if isinstance(parsed, (AvatarRequest, LocalizationRequest, SwapRequest, FollowVideoRequest)):
                 input_key = parsed.input_key
             if isinstance(parsed, SwapRequest):
                 payload["subtype"] = parsed.subtype
@@ -785,6 +817,8 @@ class TaskService:
                 payload["replacement_intensity"] = parsed.replacement_intensity
                 payload["proxy_profile"] = parsed.proxy_profile
                 payload["face_enhance"] = parsed.face_enhance
+            if isinstance(parsed, FollowVideoRequest):
+                payload["input_key"] = parsed.input_key
         else:
             legacy = LegacySwapRequest.model_validate(payload)
             service = legacy.service
@@ -798,6 +832,10 @@ class TaskService:
             resolved_mode = _normalize_swap_mode(mode)
         elif resolved_service in {"action_replica", "avatar"}:
             resolved_mode = _normalize_action_replica_mode(mode)
+        elif resolved_service == "follow_video":
+            resolved_mode = str(mode or "basic").strip().lower()
+            if resolved_mode not in {"basic", "intelligence"}:
+                resolved_mode = "basic"
         else:
             resolved_mode = (mode or "baseline").lower()
         resolved_service_type = _service_type_from_legacy(resolved_service)
@@ -812,6 +850,7 @@ class TaskService:
         localization_inputs: Dict[str, Any] = {}
         localization_policy: Dict[str, Any] = {}
         localization_contract: Dict[str, Any] = {}
+        follow_video_cfg: Dict[str, Any] = _extract_follow_video_run_config(payload, resolved_mode) if resolved_service == "follow_video" else {}
         swap_cfg: Dict[str, Any] = _extract_swap_run_config(payload, resolved_mode) if resolved_service == "swap" else {}
         swap_face_image_key = str(payload.get("source_face_image_key") or (swap_cfg.get("source_face_image_key") if swap_cfg else "") or "").strip() or None
         swap_subtype = str(swap_cfg.get("swap_type") or "face").strip().lower() if swap_cfg else "face"
@@ -963,6 +1002,8 @@ class TaskService:
         if not input_key:
             if resolved_service == "swap":
                 input_key = str(swap_cfg.get("source_video_key") or swap_cfg.get("source_video_url") or "").strip() or None
+            elif resolved_service == "follow_video":
+                input_key = str(follow_video_cfg.get("reference_video_a") or "").strip() or None
             else:
                 input_key = resolve_input_key(resolved_service, resolved_mode)
 
@@ -988,6 +1029,19 @@ class TaskService:
             input_video_url = self._public_url_from_key(input_key)
         if resolved_service == "localization" and not input_video_url and input_key:
             input_video_url = self._public_url_from_key(input_key)
+        if resolved_service == "follow_video":
+            subject_image_key = str(follow_video_cfg.get("subject_image") or "").strip() or None
+            reference_video_a_key = str(follow_video_cfg.get("reference_video_a") or "").strip() or None
+            reference_video_b_key = str(follow_video_cfg.get("reference_video_b") or "").strip() or None
+            if subject_image_key and not input_image_url:
+                input_image_url = self._public_url_from_key(subject_image_key)
+            if reference_video_a_key and not input_video_url:
+                input_video_url = self._public_url_from_key(reference_video_a_key)
+            follow_video_cfg["provider"] = provider
+            follow_video_cfg["subject_image_url"] = input_image_url
+            follow_video_cfg["reference_video_a_url"] = input_video_url
+            if reference_video_b_key:
+                follow_video_cfg["reference_video_b_url"] = self._public_url_from_key(reference_video_b_key)
         if resolved_service == "swap":
             if not input_video_url and input_key:
                 input_video_url = self._public_url_from_key(input_key)
@@ -1045,6 +1099,13 @@ class TaskService:
                 ),
                 **(
                     {
+                        "run_config_snapshot": follow_video_cfg,
+                    }
+                    if resolved_service == "follow_video"
+                    else {}
+                ),
+                **(
+                    {
                         "run_config_snapshot": {
                             **swap_cfg,
                             "provider": provider,
@@ -1063,7 +1124,7 @@ class TaskService:
             input_video_url,
             input_image_url,
             input_key=input_key,
-            input_image_key=avatar_image_key or swap_face_image_key,
+            input_image_key=avatar_image_key or swap_face_image_key or (str(follow_video_cfg.get("subject_image") or "").strip() or None),
         )
         if resolved_service == "avatar":
             logger.info(
@@ -1094,9 +1155,15 @@ class TaskService:
                 "inputs": (
                     localization_inputs
                     if resolved_service == "localization"
-                    else (action_replica_cfg if resolved_service == "avatar" else {})
+                    else (
+                        action_replica_cfg
+                        if resolved_service == "avatar"
+                        else (follow_video_cfg if resolved_service == "follow_video" else {})
+                    )
                 ),
                 "swap_subtype": swap_subtype if resolved_service == "swap" else None,
+                "follow_video_reference_video_a": follow_video_cfg.get("reference_video_a") if resolved_service == "follow_video" else None,
+                "follow_video_reference_video_b": follow_video_cfg.get("reference_video_b") if resolved_service == "follow_video" else None,
             },
         )
         return self._to_response(record, resolved_service_type)
@@ -1120,6 +1187,8 @@ class TaskService:
             return (os.getenv("SWIFT_ACTION_REPLICA_PROVIDER_BASELINE", "wan26_r2v").strip() or "wan26_r2v")
         if record.service == "localization":
             return "localization_basic" if record.mode == "baseline" else "localization_intelligent"
+        if record.service == "follow_video":
+            return "follow_video_placeholder"
         if record.service == "swap":
             snapshot = (record.metadata or {}).get("run_config_snapshot")
             subtype = ""
@@ -1443,6 +1512,17 @@ class TaskService:
                 task_id,
                 f"[swap][route] mode={mode_name} provider={provider} single_face_only={str(single_face_only).lower()} "
                 f"face_count_limit={face_count_limit} engine={engine_name}",
+            )
+        elif record.service == "follow_video":
+            snapshot = (record.metadata or {}).get("run_config_snapshot")
+            mode_name = str(record.mode or "").strip().lower() or "basic"
+            route_summary = "follow_video_placeholder"
+            if isinstance(snapshot, dict):
+                mode_name = str(snapshot.get("mode") or mode_name).strip().lower() or mode_name
+                route_summary = str(snapshot.get("route_summary") or route_summary).strip() or route_summary
+            self.store.append_log(
+                task_id,
+                f"[follow_video][route] mode={mode_name} provider={provider} route_summary={route_summary} engine={engine_name}",
             )
         self.store.append_log(task_id, f"[dispatch] provider={provider or 'default'} engine={engine_name}")
         self.store.set_stage(task_id, "running", 1)

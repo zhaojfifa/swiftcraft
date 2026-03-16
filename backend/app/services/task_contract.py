@@ -9,6 +9,8 @@ def public_service_type(runtime_service: str) -> str:
         return "action_replica"
     if service == "localization":
         return "localization"
+    if service == "follow_video":
+        return "follow_video"
     return "swap"
 
 
@@ -37,6 +39,15 @@ def build_input_snapshot(record: Any, run_config_snapshot: Dict[str, Any] | None
         elif service_type == "action_replica":
             snapshot["source_video_url"] = run_config_snapshot.get("source_video_url") or snapshot["source_video_url"]
             snapshot["character_image_url"] = run_config_snapshot.get("character_image_url") or snapshot["character_image_url"]
+        elif service_type == "follow_video":
+            snapshot["subject_image"] = run_config_snapshot.get("subject_image")
+            snapshot["reference_video_a"] = run_config_snapshot.get("reference_video_a")
+            snapshot["reference_video_b"] = run_config_snapshot.get("reference_video_b")
+            snapshot["prompt"] = run_config_snapshot.get("prompt")
+            snapshot["duration_sec"] = run_config_snapshot.get("duration_sec")
+            snapshot["aspect_ratio"] = run_config_snapshot.get("aspect_ratio")
+            snapshot["follow_strength"] = run_config_snapshot.get("follow_strength")
+            snapshot["reference_mix"] = run_config_snapshot.get("reference_mix")
     return {key: value for key, value in snapshot.items() if value not in (None, "", [], {})}
 
 

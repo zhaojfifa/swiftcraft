@@ -1,6 +1,6 @@
 from pydantic import TypeAdapter
 
-from app.schemas.task import CreateTaskRequest, ServiceType, SwapRequest
+from app.schemas.task import CreateTaskRequest, FollowVideoRequest, ServiceType, SwapRequest
 from app.services.task_service import _service_type_from_legacy
 
 
@@ -46,6 +46,30 @@ def test_swap_request_accepts_target_face_alias():
 
 def test_service_type_from_legacy_swap_is_swap():
     assert _service_type_from_legacy("swap") == ServiceType.swap
+
+def test_service_type_from_legacy_follow_video_is_follow_video():
+    assert _service_type_from_legacy("follow_video") == ServiceType.follow_video
+
+
+def test_follow_video_request_accepts_placeholder_contract():
+    payload = {
+        "service_type": "follow_video",
+        "mode": "basic",
+        "inputs": {
+            "subject_image": "uploads/subject.png",
+            "reference_video_a": "uploads/ref-a.mp4",
+            "reference_video_b": "uploads/ref-b.mp4",
+            "prompt": "Track the subject with both references.",
+            "duration_sec": 5,
+            "aspect_ratio": "9:16",
+            "follow_strength": "medium",
+            "reference_mix": "balanced",
+        },
+    }
+    parsed = TypeAdapter(CreateTaskRequest).validate_python(payload)
+    assert isinstance(parsed, FollowVideoRequest)
+    assert parsed.input_key == "uploads/ref-a.mp4"
+    assert parsed.inputs.subject_image == "uploads/subject.png"
 
 
 def test_swap_request_accepts_basic_mode_alias():
