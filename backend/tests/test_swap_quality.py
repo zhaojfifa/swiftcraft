@@ -88,3 +88,40 @@ def test_create_proxy_target_clip_downgrades_close_profile_to_standard(monkeypat
     assert proxy_meta["requested_proxy_profile"] == "extreme_close"
     assert proxy_meta["effective_proxy_profile"] == "standard"
     assert proxy_meta["proxy_reason"] == "downgraded_to_standard_from_extreme_close"
+
+
+
+def test_rank_source_references_returns_candidate_scores():
+    pipeline = SwapQualityPipeline(bridge=_FakeBridge())
+    ranked = pipeline.rank_source_references(
+        source_candidates=[
+            {
+                "source_index": 0,
+                "source_face_score": 84,
+                "source_score_breakdown": {
+                    "frontalness": 12,
+                    "lighting": 10,
+                    "sharpness": 11,
+                    "expression_neutrality": 10,
+                    "face_ratio": 12,
+                },
+            },
+            {
+                "source_index": 1,
+                "source_face_score": 92,
+                "source_score_breakdown": {
+                    "frontalness": 18,
+                    "lighting": 13,
+                    "sharpness": 16,
+                    "expression_neutrality": 10,
+                    "face_ratio": 14,
+                },
+            },
+        ],
+        target_anchor={"quality_breakdown": {"frontalness": 17}},
+        replacement_intensity="extreme_replace",
+    )
+
+    assert ranked["selected"]["source_index"] == 1
+    assert len(ranked["candidate_scores"]) == 2
+    assert ranked["candidate_scores"][0]["final_source_selection_score"] > 0

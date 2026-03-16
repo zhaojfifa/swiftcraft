@@ -21,6 +21,7 @@ class Settings:
     SWIFT_SWAP_MAX_VIDEO_SEC: int = int(os.getenv("SWIFT_SWAP_MAX_VIDEO_SEC", "60"))
     SWIFT_SWAP_KEEP_ORIGINAL_AUDIO_DEFAULT: bool = _get_bool(os.getenv("SWIFT_SWAP_KEEP_ORIGINAL_AUDIO_DEFAULT"), True)
     SWIFT_SWAP_FACE_FIDELITY_DEFAULT: str = os.getenv("SWIFT_SWAP_FACE_FIDELITY_DEFAULT", "balanced")
+    SWAP_INTEL_AB_COMPARE: bool = _get_bool(os.getenv("SWAP_INTEL_AB_COMPARE"), False)
     AKOOL_CLIENT_ID: str = os.getenv("AKOOL_CLIENT_ID", "")
     AKOOL_API_KEY: str = os.getenv("AKOOL_API_KEY", "")
     WAVESPEED_API_KEY: str = os.getenv("WAVESPEED_API_KEY", "")

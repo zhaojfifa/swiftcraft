@@ -197,19 +197,31 @@ class AkoolSwapFaceEngine:
         source_face_score: float | None,
         target_track_face_score: float | None,
         target_track_stability_score: float | None,
+        true_detect_frame_ratio: float | None,
         proxy_clip_used: bool,
         proxy_is_true_close_crop: bool,
+        proxy_quality: str,
+        proxy_face_ratio_after: float | None,
+        selected_source_score: float | None,
     ) -> tuple[bool, str | None]:
         if replacement_intensity != "extreme_replace":
             return True, None
         if (source_face_score or 0) < 72:
             return False, "source_score_below_extreme_threshold"
+        if (selected_source_score or 0) < 90:
+            return False, "selected_source_score_below_extreme_threshold"
         if (target_track_face_score or 0) < 68:
             return False, "target_track_score_below_extreme_threshold"
         if (target_track_stability_score or 0.0) < 0.45:
             return False, "target_track_unstable"
+        if (true_detect_frame_ratio or 0.0) < 0.45:
+            return False, "true_detect_frame_ratio_below_threshold"
         if not proxy_clip_used:
             return False, "proxy_target_missing"
+        if proxy_quality == "synthetic_fallback":
+            return False, "proxy_quality_synthetic_fallback"
+        if (proxy_face_ratio_after or 0.0) < 0.40:
+            return False, "proxy_face_ratio_after_below_threshold"
         if not proxy_is_true_close_crop:
             return False, "proxy_not_true_close_crop"
         return True, None
@@ -325,6 +337,75 @@ class AkoolSwapFaceEngine:
         on_log(f"[swap][{stage_label}] face_url={mapping_face_url}")
         return mapping_face_url
 
+    def _analyze_result_heuristic(
+        self,
+        *,
+        source_face_score: float | None,
+        target_track_stability_score: float | None,
+        proxy_face_ratio_after: float | None,
+        proxy_clip_used: bool,
+        extreme_replace_effective: bool,
+    ) -> Dict[str, Any]:
+        face_presence_ratio = round(min(1.0, max(0.0, (target_track_stability_score or 0.0) * 1.05)), 4)
+        face_stability_score = round(min(1.0, max(0.0, target_track_stability_score or 0.0)), 4)
+        overwrite_strength = (
+            min(1.0, max(0.0, (proxy_face_ratio_after or 0.0) * 1.2))
+            + min(1.0, max(0.0, (source_face_score or 0.0) / 100.0)) * 0.35
+            + (0.15 if proxy_clip_used else 0.0)
+            + (0.15 if extreme_replace_effective else 0.0)
+        )
+        return {
+            "face_presence_ratio": round(face_presence_ratio, 4),
+            "face_stability_score": round(face_stability_score, 4),
+            "identity_overwrite_confidence": round(min(1.0, overwrite_strength), 4),
+            "analysis_mode": "heuristic",
+        }
+
+    async def _run_ab_compare(
+        self,
+        *,
+        enabled: bool,
+        is_intelligence_route: bool,
+        source_face: Dict[str, Any],
+        target_faces: list[Dict[str, Any]],
+        proxy_modify_video: str | None,
+        raw_modify_video: str,
+        face_enhance: bool,
+        on_log: Callable[[str], None],
+    ) -> Dict[str, Any] | None:
+        if not enabled or not is_intelligence_route or not proxy_modify_video or proxy_modify_video == raw_modify_video:
+            return None
+        on_log("[swap][ab-compare] enabled=true")
+        compare: Dict[str, Any] = {"enabled": True}
+        try:
+            proxy_content, proxy_runtime = await self._run_intelligence_vendor_job(
+                source_face=source_face,
+                target_faces=target_faces,
+                modify_video=proxy_modify_video,
+                face_enhance=face_enhance,
+                on_log=on_log,
+                segment_label="ab-proxy",
+            )
+            raw_content, raw_runtime = await self._run_intelligence_vendor_job(
+                source_face=source_face,
+                target_faces=target_faces,
+                modify_video=raw_modify_video,
+                face_enhance=face_enhance,
+                on_log=on_log,
+                segment_label="ab-raw",
+            )
+            compare["variants"] = {
+                "proxy_target": {"result_bytes": len(proxy_content), "effective_path": "proxy_target", "runtime": proxy_runtime},
+                "raw_target": {"result_bytes": len(raw_content), "effective_path": "raw_target", "runtime": raw_runtime},
+            }
+            on_log(
+                f"[swap][ab-compare] proxy_bytes={len(proxy_content)} raw_bytes={len(raw_content)}"
+            )
+        except Exception as exc:
+            compare["error"] = str(exc)
+            on_log(f"[swap][ab-compare] failed reason={exc}")
+        return compare
+
     async def run(
         self,
         task_id: str,
@@ -437,6 +518,7 @@ class AkoolSwapFaceEngine:
         source_selection_reason = "single_source_only"
         source_pack_size = 1
         selected_source_refs: list[dict[str, Any]] = []
+        source_candidate_scores: list[dict[str, Any]] = []
         target_track_face_score = None
         target_track_face_risk_tags: list[str] = []
         target_mapping_face_score = None
@@ -451,6 +533,7 @@ class AkoolSwapFaceEngine:
         proxy_face_ratio_before = None
         proxy_face_ratio_after = None
         proxy_is_true_close_crop = False
+        proxy_quality = "synthetic_fallback"
         modify_video_source = "raw_target"
         selected_source_ref: Dict[str, Any] | None = None
         source_bucket_reason: str | None = None
@@ -474,8 +557,14 @@ class AkoolSwapFaceEngine:
         target_detection_mode = "not_attempted"
         target_track_stability_score = None
         target_track_coverage_ratio = None
+        true_detect_frame_ratio = None
+        fallback_frame_ratio = None
+        selected_anchor_frame = None
+        selected_anchor_reason = None
+        anchor_quality_score = None
         route_gate_passed = True
         route_gate_fail_reason = None
+        ab_compare_runtime: Dict[str, Any] | None = None
         quality_summary: Dict[str, Any] | None = None
         degraded_fallback_used = False
         target_mapping_face_rank_reason = None
@@ -715,6 +804,15 @@ class AkoolSwapFaceEngine:
                 proxy_face_ratio_before = extraction.get("proxy_face_ratio_before")
                 proxy_face_ratio_after = extraction.get("proxy_face_ratio_after")
                 proxy_is_true_close_crop = bool(extraction.get("proxy_is_true_close_crop"))
+                proxy_quality = str(extraction.get("proxy_quality") or "synthetic_fallback")
+                selected_anchor_frame = (target_anchor_summary or {}).get("frame_index") if isinstance(target_anchor_summary, dict) else None
+                selected_anchor_reason = (target_anchor_summary or {}).get("rank_reason") if isinstance(target_anchor_summary, dict) else None
+                anchor_quality_score = (target_anchor_summary or {}).get("quality_score") if isinstance(target_anchor_summary, dict) else None
+                if isinstance(face_track_summary, dict):
+                    tracked_frames = max(int(face_track_summary.get("tracked_frames") or 0), 1)
+                    fallback_frames = int(face_track_summary.get("fallback_frames") or 0)
+                    true_detect_frame_ratio = round(max(0.0, 1.0 - (fallback_frames / tracked_frames)), 4)
+                    fallback_frame_ratio = round(min(1.0, fallback_frames / tracked_frames), 4)
                 target_mapping_face_rank_reason = (
                     (target_anchor_summary or {}).get("rank_reason")
                     if isinstance(target_anchor_summary, dict)
@@ -806,10 +904,13 @@ class AkoolSwapFaceEngine:
                     selection = self.swap_quality_pipeline.select_best_source_reference(
                         source_candidates=source_candidates_prepared,
                         target_anchor=target_anchor_summary or (target_faces[0] if target_faces else None),
+                        replacement_intensity=replacement_intensity,
                     )
+                    source_candidate_scores = list(selection.get("candidate_scores") or [])
                     selected_source_refs = self.swap_quality_pipeline.select_source_reference_buckets(
                         source_candidates=source_candidates_prepared,
                         target_anchor=target_anchor_summary or (target_faces[0] if target_faces else None),
+                        replacement_intensity=replacement_intensity,
                     )
                     selected_candidate = dict(selection["selected"])
                     selected_source_face_index = int(selection["selected_index"])
@@ -824,6 +925,7 @@ class AkoolSwapFaceEngine:
                         f"[swap][source-select] selected_index={selected_source_face_index} "
                         f"reason={source_selection_reason} score={selected_candidate.get('selection_score') or source_face_score}"
                     )
+                    on_log(f"[swap][source-rank] candidate_scores={source_candidate_scores}")
                 else:
                     source_pack_size = max(1, len(source_face_candidates_raw) or 1)
                     selected_source_refs = [
@@ -832,6 +934,18 @@ class AkoolSwapFaceEngine:
                             "selected_index": selected_source_face_index,
                             "selection_reason": source_selection_reason,
                             "selection_score": source_face_score,
+                        }
+                    ]
+                    source_candidate_scores = [
+                        {
+                            "source_index": selected_source_face_index,
+                            "pose_match_score": 0.0,
+                            "lighting_match_score": 0.0,
+                            "sharpness_score": float(dict(source_score_breakdown).get("sharpness") or 0.0),
+                            "frontal_score": float(dict(source_score_breakdown).get("frontalness") or 0.0),
+                            "expression_score": float(dict(source_score_breakdown).get("expression_neutrality") or 0.0),
+                            "face_size_score": float(dict(source_score_breakdown).get("face_ratio") or 0.0),
+                            "final_source_selection_score": float(source_face_score or 0.0),
                         }
                     ]
                     selected_source_bucket = "frontal"
@@ -949,17 +1063,24 @@ class AkoolSwapFaceEngine:
                     source_face_score=source_face_score,
                     target_track_face_score=target_track_face_score,
                     target_track_stability_score=target_track_stability_score,
+                    true_detect_frame_ratio=true_detect_frame_ratio,
                     proxy_clip_used=proxy_clip_used,
                     proxy_is_true_close_crop=proxy_is_true_close_crop,
+                    proxy_quality=proxy_quality,
+                    proxy_face_ratio_after=proxy_face_ratio_after,
+                    selected_source_score=(selected_source_ref or {}).get("selection_score") or source_face_score,
                 )
                 if not route_gate_passed and effective_replacement_intensity == "extreme_replace":
                     downgrade_reason = route_gate_fail_reason or "extreme_route_gate_failed"
                     fallback_reason = downgrade_reason
+                    on_log(f"[swap][extreme-gate] accepted=false reason={downgrade_reason}")
                     on_log(f"[swap][route] extreme_replace blocked -> downgrade reason={downgrade_reason}")
                     effective_replacement_intensity = "strong_identity"
                     proxy_clip_used = False
                     submit_modify_video = focused_target_url or source_video_vendor_url
                     modify_video_source = "focused_target" if focused_target_url else "raw_target"
+                else:
+                    on_log("[swap][extreme-gate] accepted=true reason=none")
                 if effective_replacement_intensity == "extreme_replace":
                     modify_video_source = "proxy_target"
                 elif submit_modify_video == focused_target_url and focused_target_url:
@@ -1451,6 +1572,16 @@ class AkoolSwapFaceEngine:
                 processed_content, postprocess_info = self._apply_intelligence_postprocess(content, on_log)
                 vendor_runtime["postprocess"] = postprocess_info
                 content = processed_content
+                ab_compare_runtime = await self._run_ab_compare(
+                    enabled=bool(settings.SWAP_INTEL_AB_COMPARE),
+                    is_intelligence_route=is_intelligence_route,
+                    source_face=source_face,
+                    target_faces=target_face_runtime["target_image_payload"],
+                    proxy_modify_video=proxy_target_url if 'proxy_target_url' in locals() else None,
+                    raw_modify_video=source_video_vendor_url,
+                    face_enhance=bool(face_enhance),
+                    on_log=on_log,
+                )
             output_key = f"outputs/{task_id}/result.mp4"
             on_log(f"[swap][result-upload] start output_key={output_key}")
             on_stage("finalizing", 90)
@@ -1483,6 +1614,44 @@ class AkoolSwapFaceEngine:
                 extreme_replace_effective = False
             if extreme_replace_selected and not extreme_replace_effective and not fallback_reason:
                 fallback_reason = downgrade_reason or "full_frame_target"
+            target_analysis = {
+                "detect_mode": target_detection_mode,
+                "true_detect_frame_ratio": true_detect_frame_ratio,
+                "fallback_frame_ratio": fallback_frame_ratio,
+                "coverage_ratio": target_track_coverage_ratio,
+                "stability_score": target_track_stability_score,
+                "selected_anchor_frame": selected_anchor_frame,
+                "selected_anchor_reason": selected_anchor_reason,
+                "anchor_quality_score": anchor_quality_score,
+            }
+            proxy_runtime = {
+                "proxy_clip_used": proxy_clip_used,
+                "proxy_profile_requested": requested_proxy_profile,
+                "proxy_profile_effective": effective_proxy_profile or None,
+                "proxy_quality": proxy_quality,
+                "proxy_face_ratio_before": proxy_face_ratio_before,
+                "proxy_face_ratio_after": proxy_face_ratio_after,
+                "proxy_is_true_close_crop": proxy_is_true_close_crop,
+            }
+            source_pack_summary = {
+                "candidate_count": source_pack_size,
+                "selected_ref": selected_source_ref,
+                "selected_reason": source_selection_reason,
+                "candidate_scores": source_candidate_scores,
+            }
+            extreme_replace_runtime = {
+                "requested": extreme_replace_selected,
+                "effective": extreme_replace_effective,
+                "block_reason": route_gate_fail_reason or downgrade_reason,
+            }
+            result_analysis = self._analyze_result_heuristic(
+                source_face_score=source_face_score,
+                target_track_stability_score=target_track_stability_score,
+                proxy_face_ratio_after=proxy_face_ratio_after,
+                proxy_clip_used=proxy_clip_used,
+                extreme_replace_effective=extreme_replace_effective,
+            )
+            on_log(f"[swap][result-analyze] analysis={result_analysis}")
             quality_summary = {
                 "swap_strength": swap_strength,
                 "replacement_intensity": replacement_intensity,
@@ -1500,6 +1669,7 @@ class AkoolSwapFaceEngine:
                 "source_pack_size": source_pack_size,
                 "selected_source_face_reason": source_selection_reason,
                 "selected_source_refs": selected_source_refs,
+                "source_candidate_scores": source_candidate_scores,
                 "selected_target_frame_index": selected_target_frame_index,
                 "face_enhance_used": bool(face_enhance),
                 "target_mapping_face_rank_reason": target_mapping_face_rank_reason,
@@ -1534,6 +1704,12 @@ class AkoolSwapFaceEngine:
                 "degraded_fallback_used": degraded_fallback_used,
                 "risk_tags": risk_tags,
                 "route_summary": route_summary,
+                "source_pack_summary": source_pack_summary,
+                "target_analysis": target_analysis,
+                "proxy_runtime": proxy_runtime,
+                "extreme_replace_runtime": extreme_replace_runtime,
+                "result_analysis": result_analysis,
+                "ab_compare": ab_compare_runtime,
             }
             outputs = {
                 "video_key": output_key,
@@ -1650,6 +1826,12 @@ class AkoolSwapFaceEngine:
                     "target_face_risk_tags": target_risk_tags,
                     "risk_tags": risk_tags,
                     "quality_summary": quality_summary,
+                    "target_analysis": target_analysis,
+                    "proxy_runtime": proxy_runtime,
+                    "source_pack_summary": source_pack_summary,
+                    "extreme_replace_runtime": extreme_replace_runtime,
+                    "result_analysis": result_analysis,
+                    "ab_compare": ab_compare_runtime,
                     "source_crop_policy": source_crop_policy,
                     "target_anchor_policy": target_anchor_policy,
                     "face_detect": {
@@ -1769,6 +1951,12 @@ class AkoolSwapFaceEngine:
                     "target_face_risk_tags": target_risk_tags,
                     "risk_tags": risk_tags,
                     "quality_summary": quality_summary,
+                    "target_analysis": target_analysis,
+                    "proxy_runtime": proxy_runtime,
+                    "source_pack_summary": source_pack_summary,
+                    "extreme_replace_runtime": extreme_replace_runtime,
+                    "result_analysis": result_analysis,
+                    "ab_compare": ab_compare_runtime,
                     "mode": str(record.mode or "basic").lower(),
                     "request_id": job.request_id or None,
                     "job_id": job.job_id or None,

@@ -118,8 +118,9 @@ class SwapQualityPipeline:
         face_ratio_score = _clamp(min(region["area_ratio"] / 0.28, 1.0) * 15.0, 2.0, 15.0)
         occlusion_score = _clamp((1.0 - min(region["center_offset"] / 0.25, 1.0)) * 12.0, 1.0, 12.0)
         expression_neutrality = 10.0
+        sharpness_score = _clamp(min(metrics["blur_signal"] / 52.0, 1.0) * 18.0, 2.0, 18.0)
         score = int(round(_clamp(
-            resolution_score + frontalness_score + lighting_score + face_ratio_score + occlusion_score + expression_neutrality,
+            resolution_score + frontalness_score + lighting_score + face_ratio_score + occlusion_score + expression_neutrality + sharpness_score,
             0.0,
             100.0,
         )))
@@ -142,6 +143,7 @@ class SwapQualityPipeline:
                 "frontalness": round(frontalness_score, 2),
                 "occlusion": round(occlusion_score, 2),
                 "lighting": round(lighting_score, 2),
+                "sharpness": round(sharpness_score, 2),
                 "face_ratio": round(face_ratio_score, 2),
                 "expression_neutrality": round(expression_neutrality, 2),
             },
@@ -186,46 +188,125 @@ class SwapQualityPipeline:
         *,
         source_candidates: List[Dict[str, Any]],
         target_anchor: Dict[str, Any] | None,
+        replacement_intensity: str = "strong_identity",
     ) -> Dict[str, Any]:
         if not source_candidates:
             raise EngineRunError("source_selection failed: no source candidates")
         if len(source_candidates) == 1:
             candidate = dict(source_candidates[0])
             candidate["selection_score"] = candidate.get("source_face_score")
+            candidate["candidate_score"] = {
+                "pose_match_score": 0.0,
+                "lighting_match_score": 0.0,
+                "sharpness_score": float(dict(candidate.get("source_score_breakdown") or {}).get("sharpness", 0.0)),
+                "frontal_score": float(dict(candidate.get("source_score_breakdown") or {}).get("frontalness", 0.0)),
+                "expression_score": float(dict(candidate.get("source_score_breakdown") or {}).get("expression_neutrality", 0.0)),
+                "face_size_score": float(dict(candidate.get("source_score_breakdown") or {}).get("face_ratio", 0.0)),
+                "final_source_selection_score": float(candidate.get("source_face_score") or 0.0),
+            }
             return {
                 "selected": candidate,
                 "selected_index": int(candidate.get("source_index") or 0),
                 "selection_reason": "single_source_only",
+                "candidate_scores": [candidate["candidate_score"]],
             }
-        target_breakdown = dict((target_anchor or {}).get("quality_breakdown") or {})
-        target_frontalness = float(target_breakdown.get("frontalness") or 0.0)
-        best_candidate = None
-        best_score = -1.0
-        for candidate in source_candidates:
-            source_breakdown = dict(candidate.get("source_score_breakdown") or {})
-            source_frontalness = float(source_breakdown.get("frontalness") or 0.0)
-            source_resolution = float(source_breakdown.get("resolution") or 0.0)
-            source_score = float(candidate.get("source_face_score") or 0.0)
-            frontalness_alignment = max(0.0, 20.0 - abs(source_frontalness - target_frontalness))
-            selection_score = source_score + frontalness_alignment + source_resolution
-            enriched = dict(candidate)
-            enriched["selection_score"] = round(selection_score, 2)
-            if selection_score > best_score:
-                best_candidate = enriched
-                best_score = selection_score
+        ranking = self.rank_source_references(
+            source_candidates=source_candidates,
+            target_anchor=target_anchor,
+            replacement_intensity=replacement_intensity,
+        )
+        best_candidate = ranking["selected"]
         if best_candidate is None:
             raise EngineRunError("source_selection failed: no source candidates")
         return {
             "selected": best_candidate,
             "selected_index": int(best_candidate.get("source_index") or 0),
-            "selection_reason": "target_anchor_pose_match",
+            "selection_reason": str(best_candidate.get("selection_reason") or "target_anchor_replacement_fit"),
+            "candidate_scores": list(ranking.get("candidate_scores") or []),
         }
+
+    def rank_source_references(
+        self,
+        *,
+        source_candidates: List[Dict[str, Any]],
+        target_anchor: Dict[str, Any] | None,
+        replacement_intensity: str = "strong_identity",
+    ) -> Dict[str, Any]:
+        target_breakdown = dict((target_anchor or {}).get("quality_breakdown") or {})
+        target_frontalness = float(target_breakdown.get("frontalness") or 0.0)
+        target_lighting = 11.0
+        target_expression = 10.0
+        weight = {
+            "pose": 1.1,
+            "lighting": 1.0,
+            "sharpness": 0.9,
+            "frontal": 1.0,
+            "expression": 0.7,
+            "face_size": 0.8,
+            "readiness": 0.6,
+        }
+        if replacement_intensity == "extreme_replace":
+            weight = {
+                "pose": 0.9,
+                "lighting": 1.25,
+                "sharpness": 1.15,
+                "frontal": 1.2,
+                "expression": 0.8,
+                "face_size": 1.0,
+                "readiness": 0.45,
+            }
+        best_candidate = None
+        best_score = -1.0
+        candidate_scores: List[Dict[str, Any]] = []
+        for candidate in source_candidates:
+            source_breakdown = dict(candidate.get("source_score_breakdown") or {})
+            source_frontalness = float(source_breakdown.get("frontalness") or 0.0)
+            source_lighting = float(source_breakdown.get("lighting") or 0.0)
+            source_sharpness = float(source_breakdown.get("sharpness") or source_breakdown.get("resolution") or 0.0)
+            source_expression = float(source_breakdown.get("expression_neutrality") or 0.0)
+            source_face_size = float(source_breakdown.get("face_ratio") or 0.0)
+            source_score = float(candidate.get("source_face_score") or 0.0)
+            pose_match_score = max(0.0, 20.0 - abs(source_frontalness - target_frontalness))
+            lighting_match_score = max(0.0, 18.0 - abs(source_lighting - target_lighting))
+            frontal_score = source_frontalness
+            sharpness_score = source_sharpness
+            expression_score = max(0.0, 14.0 - abs(source_expression - target_expression))
+            face_size_score = source_face_size
+            final_score = (
+                pose_match_score * weight["pose"]
+                + lighting_match_score * weight["lighting"]
+                + sharpness_score * weight["sharpness"]
+                + frontal_score * weight["frontal"]
+                + expression_score * weight["expression"]
+                + face_size_score * weight["face_size"]
+                + source_score * weight["readiness"]
+            )
+            score_row = {
+                "source_index": int(candidate.get("source_index") or 0),
+                "pose_match_score": round(pose_match_score, 2),
+                "lighting_match_score": round(lighting_match_score, 2),
+                "sharpness_score": round(sharpness_score, 2),
+                "frontal_score": round(frontal_score, 2),
+                "expression_score": round(expression_score, 2),
+                "face_size_score": round(face_size_score, 2),
+                "final_source_selection_score": round(final_score, 2),
+            }
+            candidate_scores.append(score_row)
+            enriched = dict(candidate)
+            enriched["selection_score"] = score_row["final_source_selection_score"]
+            enriched["candidate_score"] = score_row
+            enriched["selection_reason"] = "target_anchor_replacement_fit"
+            if final_score > best_score:
+                best_candidate = enriched
+                best_score = final_score
+        return {"selected": best_candidate, "candidate_scores": candidate_scores}
 
     def select_source_reference_buckets(
         self,
         *,
         source_candidates: List[Dict[str, Any]],
         target_anchor: Dict[str, Any] | None,
+        replacement_intensity: str = "strong_identity",
     ) -> List[Dict[str, Any]]:
         if not source_candidates:
             return []
@@ -236,12 +317,16 @@ class SwapQualityPipeline:
         target_breakdown = dict((target_anchor or {}).get("quality_breakdown") or {})
         target_frontalness = float(target_breakdown.get("frontalness") or 0.0)
         for candidate in source_candidates:
+            ranked = self.rank_source_references(
+                source_candidates=[candidate],
+                target_anchor=target_anchor,
+                replacement_intensity=replacement_intensity,
+            )["selected"]
             source_breakdown = dict(candidate.get("source_score_breakdown") or {})
             source_frontalness = float(source_breakdown.get("frontalness") or 0.0)
-            source_score = float(candidate.get("source_face_score") or 0.0)
-            resolution = float(source_breakdown.get("resolution") or 0.0)
-            frontal_bucket_score = source_score + (source_frontalness * 1.8) + resolution
-            side_bucket_score = source_score + max(0.0, 18.0 - abs(source_frontalness - min(target_frontalness, 14.0))) + resolution * 0.5
+            base_score = float((ranked or {}).get("selection_score") or candidate.get("source_face_score") or 0.0)
+            frontal_bucket_score = base_score + (source_frontalness * 1.2)
+            side_bucket_score = base_score + max(0.0, 18.0 - abs(source_frontalness - min(target_frontalness, 14.0)))
             if frontal_bucket_score > frontal_score:
                 frontal_candidate = candidate
                 frontal_score = frontal_bucket_score
@@ -271,6 +356,7 @@ class SwapQualityPipeline:
             primary = self.select_best_source_reference(
                 source_candidates=source_candidates,
                 target_anchor=target_anchor,
+                replacement_intensity=replacement_intensity,
             )
             selections.append(
                 {

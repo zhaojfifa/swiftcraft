@@ -510,6 +510,7 @@ class _FakeExtractor:
             "proxy_face_ratio_before": 0.08,
             "proxy_face_ratio_after": 0.42,
             "proxy_is_true_close_crop": True,
+            "proxy_quality": "track_based",
             "replacement_mode": "explicit_mapping_enhanced",
             "focus_crop_valid": True,
             "focus_mode": "focused_crop",
@@ -552,6 +553,7 @@ class _InvalidFocusExtractor(_FakeExtractor):
         payload["proxy_face_ratio_before"] = 1.0
         payload["proxy_face_ratio_after"] = 1.0
         payload["proxy_is_true_close_crop"] = False
+        payload["proxy_quality"] = "synthetic_fallback"
         return payload
 
 
@@ -581,17 +583,35 @@ class _FakeQualityPipeline:
     def score_target_face(self, *_args, **_kwargs):
         return {"score": 78, "risk_tags": ["face_small"], "breakdown": {"frontalness": 17}}
 
-    def select_best_source_reference(self, *, source_candidates, target_anchor):
+    def select_best_source_reference(self, *, source_candidates, target_anchor, replacement_intensity="strong_identity"):
         selected = max(source_candidates, key=lambda candidate: candidate.get("source_face_score") or 0)
+        selected = {**selected, "selection_score": float(selected.get("source_face_score") or 0.0) + 22.0}
         return {
             "selected": selected,
             "selected_index": selected["source_index"],
             "selection_reason": "target_anchor_pose_match",
+            "candidate_scores": [
+                {
+                    "source_index": int(candidate["source_index"]),
+                    "pose_match_score": 12.0,
+                    "lighting_match_score": 11.0,
+                    "sharpness_score": 14.0,
+                    "frontal_score": 16.0,
+                    "expression_score": 10.0,
+                    "face_size_score": 12.0,
+                    "final_source_selection_score": float(candidate.get("source_face_score") or 0.0) + 22.0,
+                }
+                for candidate in source_candidates
+            ],
         }
 
 
-    def select_source_reference_buckets(self, *, source_candidates, target_anchor):
-        selected = self.select_best_source_reference(source_candidates=source_candidates, target_anchor=target_anchor)
+    def select_source_reference_buckets(self, *, source_candidates, target_anchor, replacement_intensity="strong_identity"):
+        selected = self.select_best_source_reference(
+            source_candidates=source_candidates,
+            target_anchor=target_anchor,
+            replacement_intensity=replacement_intensity,
+        )
         alternate = next(
             (candidate for candidate in source_candidates if candidate["source_index"] != selected["selected_index"]),
             selected["selected"],
@@ -1041,6 +1061,12 @@ def test_swap_engine_intelligence_extreme_replace_sets_route_and_face_enhance_fl
     assert result.metadata["proxy_is_true_close_crop"] is True
     assert result.metadata["route_gate_passed"] is True
     assert result.metadata["route_gate_fail_reason"] is None
+    assert result.metadata["target_analysis"]["detect_mode"] == "video_multi_frame_detect"
+    assert result.metadata["proxy_runtime"]["proxy_quality"] == "track_based"
+    assert result.metadata["source_pack_summary"]["candidate_count"] == 1
+    assert len(result.metadata["source_pack_summary"]["candidate_scores"]) >= 1
+    assert result.metadata["extreme_replace_runtime"]["effective"] is True
+    assert result.metadata["result_analysis"]["analysis_mode"] == "heuristic"
     assert engine.client.last_submit_kwargs["modify_video"] == "https://vendor.example/focused-target.mp4"
 
 
@@ -1115,6 +1141,8 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert result.metadata["proxy_is_true_close_crop"] is False
     assert result.metadata["route_gate_passed"] is True
     assert result.metadata["route_gate_fail_reason"] is None
+    assert result.metadata["proxy_runtime"]["proxy_quality"] == "synthetic_fallback"
+    assert result.metadata["extreme_replace_runtime"]["effective"] is False
 
 
 def test_swap_engine_retries_provider_temp_file_error_with_raw_target_reason():

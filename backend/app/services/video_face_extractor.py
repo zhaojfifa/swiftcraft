@@ -763,6 +763,8 @@ class VideoFaceExtractor:
         )
         if not detected_faces:
             raise EngineRunError("target_face_extraction failed: no face detected in sampled frames")
+        if on_log is not None:
+            on_log(f"[swap][target-analyze] detect_mode={detection_mode} detected_faces={len(detected_faces)}")
         for detected in detected_faces:
             frame_path = Path(str(detected.get("frame_path") or ""))
             score = self.quality.score_target_face(frame_path, detected)
@@ -781,6 +783,11 @@ class VideoFaceExtractor:
                 f"[swap][target-anchor] selected_frame={selected.get('frame_index', 0)} "
                 f"score={selected.get('quality_score', 0)}"
             )
+            on_log(
+                f"[swap][anchor-select] selected_anchor_frame={selected.get('frame_index', 0)} "
+                f"selected_anchor_reason={'best_for_identity_overwrite' if selection_mode == 'aggressive_mapping' else 'highest_quality_primary_face'} "
+                f"anchor_quality_score={selected.get('quality_score', 0)}"
+            )
         video_size = self._probe_video_size(video_path)
         face_track_summary = self.summarize_face_track(
             detected_faces,
@@ -793,6 +800,12 @@ class VideoFaceExtractor:
                 f"[swap][target-track] mode={detection_mode} tracked_frames={face_track_summary['tracked_frames']} "
                 f"avg_box={face_track_summary['avg_box']} stability_score={face_track_summary.get('stability_score')} "
                 f"coverage_ratio={face_track_summary.get('coverage_ratio')}"
+            )
+            on_log(
+                f"[swap][track-build] track_id=primary coverage_ratio={face_track_summary.get('coverage_ratio')} "
+                f"stability_score={face_track_summary.get('stability_score')} "
+                f"true_detect_frame_ratio={round(1.0 - (float(face_track_summary.get('fallback_frames') or 0) / max(int(face_track_summary.get('tracked_frames') or 1), 1)), 4)} "
+                f"fallback_frame_ratio={round(float(face_track_summary.get('fallback_frames') or 0) / max(int(face_track_summary.get('tracked_frames') or 1), 1), 4)}"
             )
         exported_faces = self.export_target_face_images(selected_faces, work_dir / "target_faces")
         bridged_target_images = [
@@ -842,6 +855,14 @@ class VideoFaceExtractor:
                     proxy_clip_meta = {"proxy_clip_valid": True, "proxy_reason": "focused_clip_fallback"}
                 if on_log is not None and proxy_clip_asset is not None:
                     on_log(f"[swap][target-proxy] proxy_target_url={proxy_clip_asset.public_url}")
+                    on_log(
+                        f"[swap][proxy-build] proxy_profile={proxy_clip_meta.get('effective_proxy_profile') or proxy_profile} "
+                        f"proxy_crop_box={proxy_clip_meta.get('proxy_crop_box')} "
+                        f"proxy_face_ratio_before={proxy_clip_meta.get('proxy_face_ratio_before')} "
+                        f"proxy_face_ratio_after={proxy_clip_meta.get('proxy_face_ratio_after')} "
+                        f"proxy_is_true_close_crop={str(bool(proxy_clip_meta.get('proxy_is_true_close_crop'))).lower()} "
+                        f"proxy_quality={'track_based' if detection_mode == 'video_multi_frame_detect' else 'sampled'}"
+                    )
                 if on_log is not None and proxy_clip_asset is None:
                     on_log(f"[swap][target-proxy] proxy_clip_valid=false reason={proxy_clip_meta.get('proxy_reason')}")
         target_faces: List[Dict[str, Any]] = []
@@ -968,5 +989,12 @@ class VideoFaceExtractor:
             "proxy_face_ratio_before": (proxy_clip_meta or {}).get("proxy_face_ratio_before") or face_track_summary.get("proxy_face_ratio_before"),
             "proxy_face_ratio_after": (proxy_clip_meta or {}).get("proxy_face_ratio_after") or face_track_summary.get("proxy_face_ratio_after"),
             "proxy_is_true_close_crop": bool((proxy_clip_meta or {}).get("proxy_is_true_close_crop") or face_track_summary.get("proxy_is_true_close_crop")),
+            "proxy_quality": (
+                "track_based"
+                if proxy_clip_asset is not None and detection_mode == "video_multi_frame_detect"
+                else "sampled"
+                if proxy_clip_asset is not None
+                else "synthetic_fallback"
+            ),
             "original_target_url": source_video_url,
         }
