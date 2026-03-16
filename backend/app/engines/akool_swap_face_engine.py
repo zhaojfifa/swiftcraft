@@ -651,6 +651,11 @@ class AkoolSwapFaceEngine:
         proxy_margin_left = None
         proxy_margin_right = None
         proxy_center_offset = None
+        proxy_profile_downgrade_reason = None
+        proxy_recrop_attempted = False
+        proxy_face_ratio_after_recrop = None
+        proxy_face_ratio_threshold_required = 0.55
+        gate_failed_metric = None
         route_gate_passed = True
         route_gate_fail_reason = None
         weak_track_proxy_override_used = False
@@ -910,6 +915,9 @@ class AkoolSwapFaceEngine:
                 proxy_margin_left = extraction.get("proxy_margin_left")
                 proxy_margin_right = extraction.get("proxy_margin_right")
                 proxy_center_offset = extraction.get("proxy_center_offset")
+                proxy_profile_downgrade_reason = extraction.get("proxy_profile_downgrade_reason")
+                proxy_recrop_attempted = bool(extraction.get("proxy_recrop_attempted"))
+                proxy_face_ratio_after_recrop = extraction.get("proxy_face_ratio_after_recrop")
                 selected_anchor_frame = (target_anchor_summary or {}).get("frame_index") if isinstance(target_anchor_summary, dict) else None
                 selected_anchor_reason = (target_anchor_summary or {}).get("rank_reason") if isinstance(target_anchor_summary, dict) else None
                 anchor_quality_score = (target_anchor_summary or {}).get("anchor_quality_score") if isinstance(target_anchor_summary, dict) else None
@@ -1198,6 +1206,7 @@ class AkoolSwapFaceEngine:
                 if not route_gate_passed and effective_replacement_intensity == "extreme_replace":
                     downgrade_reason = route_gate_fail_reason or "extreme_route_gate_failed"
                     fallback_reason = downgrade_reason
+                    gate_failed_metric = "proxy_face_ratio_after" if downgrade_reason == "proxy_face_ratio_after_below_threshold" else downgrade_reason
                     on_log(f"[swap][extreme-gate] accepted=false reason={downgrade_reason}")
                     on_log(f"[swap][route] extreme_replace blocked -> downgrade reason={downgrade_reason}")
                     effective_replacement_intensity = "strong_identity"
@@ -1240,7 +1249,10 @@ class AkoolSwapFaceEngine:
                 on_log(
                     f"[swap][target-proxy] proxy_clip_valid={str(proxy_clip_valid).lower()} "
                     f"proxy_clip_used={str(proxy_clip_used).lower()} modifyVideo_source={modify_video_source} "
-                    f"requested_proxy_profile={requested_proxy_profile} effective_proxy_profile={effective_proxy_profile or 'none'}"
+                    f"requested_proxy_profile={requested_proxy_profile} effective_proxy_profile={effective_proxy_profile or 'none'} "
+                    f"proxy_profile_downgrade_reason={proxy_profile_downgrade_reason or 'none'} "
+                    f"proxy_face_ratio_threshold_required={proxy_face_ratio_threshold_required} "
+                    f"proxy_face_ratio_after_actual={proxy_face_ratio_after}"
                 )
                 on_log(f"[swap][submit] payload={submit_payload}")
                 replacement_intensity = effective_replacement_intensity
@@ -1832,6 +1844,11 @@ class AkoolSwapFaceEngine:
                 "proxy_face_ratio_before": proxy_face_ratio_before,
                 "proxy_face_ratio_after": proxy_face_ratio_after,
                 "proxy_is_true_close_crop": proxy_is_true_close_crop,
+                "proxy_profile_downgrade_reason": proxy_profile_downgrade_reason,
+                "proxy_recrop_attempted": proxy_recrop_attempted,
+                "proxy_face_ratio_after_recrop": proxy_face_ratio_after_recrop,
+                "proxy_face_ratio_threshold_required": proxy_face_ratio_threshold_required,
+                "proxy_face_ratio_after_actual": proxy_face_ratio_after,
                 "proxy_margin_top": proxy_margin_top,
                 "proxy_margin_bottom": proxy_margin_bottom,
                 "proxy_margin_left": proxy_margin_left,
@@ -1840,6 +1857,7 @@ class AkoolSwapFaceEngine:
                 "proxy_track_based": proxy_quality == "track_based",
                 "route_gate_passed": route_gate_passed,
                 "route_gate_fail_reason": route_gate_fail_reason,
+                "gate_failed_metric": gate_failed_metric,
                 "proxy_clip_valid": proxy_clip_valid,
                 "proxy_clip_used": proxy_clip_used,
                 "proxy_requested": bool(requested_proxy_profile),
@@ -1969,6 +1987,11 @@ class AkoolSwapFaceEngine:
                     "proxy_face_ratio_before": proxy_face_ratio_before,
                     "proxy_face_ratio_after": proxy_face_ratio_after,
                     "proxy_is_true_close_crop": proxy_is_true_close_crop,
+                    "proxy_profile_downgrade_reason": proxy_profile_downgrade_reason,
+                    "proxy_recrop_attempted": proxy_recrop_attempted,
+                    "proxy_face_ratio_after_recrop": proxy_face_ratio_after_recrop,
+                    "proxy_face_ratio_threshold_required": proxy_face_ratio_threshold_required,
+                    "proxy_face_ratio_after_actual": proxy_face_ratio_after,
                     "proxy_margin_top": proxy_margin_top,
                     "proxy_margin_bottom": proxy_margin_bottom,
                     "proxy_margin_left": proxy_margin_left,
@@ -1977,6 +2000,7 @@ class AkoolSwapFaceEngine:
                     "proxy_track_based": proxy_quality == "track_based",
                     "route_gate_passed": route_gate_passed,
                     "route_gate_fail_reason": route_gate_fail_reason,
+                    "gate_failed_metric": gate_failed_metric,
                     "replacement_mode": replacement_mode,
                     "modify_video_source": modify_video_source,
                     "provider_failure_reason": provider_failure_reason,
@@ -2117,6 +2141,11 @@ class AkoolSwapFaceEngine:
                     "proxy_face_ratio_before": proxy_face_ratio_before,
                     "proxy_face_ratio_after": proxy_face_ratio_after,
                     "proxy_is_true_close_crop": proxy_is_true_close_crop,
+                    "proxy_profile_downgrade_reason": proxy_profile_downgrade_reason,
+                    "proxy_recrop_attempted": proxy_recrop_attempted,
+                    "proxy_face_ratio_after_recrop": proxy_face_ratio_after_recrop,
+                    "proxy_face_ratio_threshold_required": proxy_face_ratio_threshold_required,
+                    "proxy_face_ratio_after_actual": proxy_face_ratio_after,
                     "proxy_margin_top": proxy_margin_top,
                     "proxy_margin_bottom": proxy_margin_bottom,
                     "proxy_margin_left": proxy_margin_left,
@@ -2125,6 +2154,7 @@ class AkoolSwapFaceEngine:
                     "proxy_track_based": proxy_quality == "track_based",
                     "route_gate_passed": route_gate_passed,
                     "route_gate_fail_reason": route_gate_fail_reason,
+                    "gate_failed_metric": gate_failed_metric,
                     "extreme_gate_accepted": route_gate_passed,
                     "extreme_gate_reason": route_gate_fail_reason or "none",
                     "extreme_replace_effective": extreme_replace_effective,

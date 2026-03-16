@@ -50,6 +50,10 @@ class VideoFaceExtractor:
             return 0.85
         if profile in {"tight", "proxy_tight"}:
             return 0.70
+        if profile in {"extreme_close_safe", "proxy_extreme_close_safe"}:
+            return 0.56
+        if profile in {"extreme_close_hard", "proxy_extreme_close_hard"}:
+            return 0.48
         if profile in {"extreme_close", "proxy_extreme_close", "proxy_extreme"}:
             return 0.50
         return 0.90
@@ -61,6 +65,10 @@ class VideoFaceExtractor:
             return 0.38
         if profile in {"tight", "proxy_tight"}:
             return 0.51
+        if profile in {"extreme_close_safe", "proxy_extreme_close_safe"}:
+            return 0.6
+        if profile in {"extreme_close_hard", "proxy_extreme_close_hard"}:
+            return 0.68
         if profile in {"extreme_close", "proxy_extreme_close", "proxy_extreme"}:
             return 0.64
         return None
@@ -72,6 +80,10 @@ class VideoFaceExtractor:
             return 0.32, 0.42, 0.38
         if profile in {"tight", "proxy_tight"}:
             return 0.45, 0.58, 0.51
+        if profile in {"extreme_close_safe", "proxy_extreme_close_safe"}:
+            return 0.52, 0.64, 0.6
+        if profile in {"extreme_close_hard", "proxy_extreme_close_hard"}:
+            return 0.58, 0.72, 0.68
         if profile in {"extreme_close", "proxy_extreme_close", "proxy_extreme"}:
             return 0.58, 0.72, 0.64
         return 0.28, 0.42, 0.35
@@ -83,6 +95,10 @@ class VideoFaceExtractor:
             return {"top": 0.24, "bottom": 0.30, "left": 0.22, "right": 0.22}
         if profile in {"tight", "proxy_tight"}:
             return {"top": 0.15, "bottom": 0.19, "left": 0.12, "right": 0.12}
+        if profile in {"extreme_close_safe", "proxy_extreme_close_safe"}:
+            return {"top": 0.08, "bottom": 0.12, "left": 0.06, "right": 0.06}
+        if profile in {"extreme_close_hard", "proxy_extreme_close_hard"}:
+            return {"top": 0.05, "bottom": 0.08, "left": 0.04, "right": 0.04}
         if profile in {"extreme_close", "proxy_extreme_close", "proxy_extreme"}:
             return {"top": 0.10, "bottom": 0.14, "left": 0.08, "right": 0.08}
         return {"top": 0.22, "bottom": 0.28, "left": 0.20, "right": 0.20}
@@ -944,8 +960,10 @@ class VideoFaceExtractor:
             },
         }
         attempt_profiles = [requested_proxy_profile]
-        if requested_proxy_profile in {"tight", "extreme_close", "proxy_tight", "proxy_extreme_close", "proxy_extreme"}:
-            attempt_profiles.append("standard")
+        if requested_proxy_profile in {"extreme_close", "proxy_extreme_close", "proxy_extreme"}:
+            attempt_profiles = ["extreme_close_hard", "extreme_close_safe", "standard"]
+        elif requested_proxy_profile in {"tight", "proxy_tight"}:
+            attempt_profiles = ["tight", "standard"]
         last_meta: Dict[str, Any] = {}
         for index, attempt_profile in enumerate(attempt_profiles):
             proxy_path, proxy_meta = self.create_focused_target_clip(
@@ -958,12 +976,13 @@ class VideoFaceExtractor:
             proxy_meta["requested_proxy_profile"] = requested_proxy_profile
             proxy_meta["effective_proxy_profile"] = attempt_profile if proxy_path is not None else None
             proxy_meta["proxy_profile"] = attempt_profile if proxy_path is not None else requested_proxy_profile
+            proxy_meta["proxy_profile_downgrade_reason"] = None
+            proxy_meta["proxy_recrop_attempted"] = index > 0
+            proxy_meta["proxy_face_ratio_after_recrop"] = proxy_meta.get("proxy_face_ratio_after") if index > 0 else None
             if proxy_path is not None:
-                proxy_meta["proxy_reason"] = (
-                    proxy_reason
-                    if index == 0
-                    else f"downgraded_to_standard_from_{requested_proxy_profile}"
-                )
+                proxy_meta["proxy_reason"] = proxy_reason if index == 0 else f"recrop_{attempt_profile}"
+                if index > 0:
+                    proxy_meta["proxy_profile_downgrade_reason"] = f"{requested_proxy_profile}_resolved_as_{attempt_profile}"
                 return proxy_path, proxy_meta
             last_meta = dict(proxy_meta)
         last_meta["proxy_clip_valid"] = False
@@ -971,6 +990,7 @@ class VideoFaceExtractor:
         last_meta["requested_proxy_profile"] = requested_proxy_profile
         last_meta["effective_proxy_profile"] = None
         last_meta["proxy_profile"] = requested_proxy_profile
+        last_meta["proxy_profile_downgrade_reason"] = f"{requested_proxy_profile}_unresolved"
         return None, last_meta
 
     async def _bridge_proxy_clip(
@@ -1261,6 +1281,9 @@ class VideoFaceExtractor:
             "proxy_margin_left": (proxy_clip_meta or {}).get("proxy_margin_left") or face_track_summary.get("proxy_margin_left"),
             "proxy_margin_right": (proxy_clip_meta or {}).get("proxy_margin_right") or face_track_summary.get("proxy_margin_right"),
             "proxy_center_offset": (proxy_clip_meta or {}).get("proxy_center_offset") or face_track_summary.get("proxy_center_offset"),
+            "proxy_profile_downgrade_reason": (proxy_clip_meta or {}).get("proxy_profile_downgrade_reason"),
+            "proxy_recrop_attempted": bool((proxy_clip_meta or {}).get("proxy_recrop_attempted")),
+            "proxy_face_ratio_after_recrop": (proxy_clip_meta or {}).get("proxy_face_ratio_after_recrop"),
             "proxy_track_based": bool((proxy_clip_meta or {}).get("proxy_track_based") or str(detection_mode) == "detected_track"),
             "proxy_quality": (
                 "track_based"

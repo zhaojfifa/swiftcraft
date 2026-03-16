@@ -74,9 +74,9 @@ def test_create_proxy_target_clip_downgrades_close_profile_to_standard(monkeypat
 
     def fake_create_focused_target_clip(*, source_video_path, output_path, face_track_summary, crop_profile="standard"):
         calls.append(crop_profile)
-        if crop_profile == "extreme_close":
-            return None, {"focus_crop_valid": False, "focus_mode": "full_frame_fallback"}
-        return output_path, {"focus_crop_valid": True, "focus_mode": "focused_crop", "focus_crop_area_ratio": 0.84}
+        if crop_profile in {"extreme_close_hard", "extreme_close_safe"}:
+            return None, {"focus_crop_valid": False, "focus_mode": "insufficient_close_crop", "proxy_face_ratio_after": 0.33}
+        return output_path, {"focus_crop_valid": True, "focus_mode": "focused_crop", "focus_crop_area_ratio": 0.84, "proxy_face_ratio_after": 0.4}
 
     extractor.create_focused_target_clip = fake_create_focused_target_clip
     proxy_path, proxy_meta = extractor.create_proxy_target_clip(
@@ -87,11 +87,13 @@ def test_create_proxy_target_clip_downgrades_close_profile_to_standard(monkeypat
         proxy_profile="extreme_close",
     )
 
-    assert calls == ["extreme_close", "standard"]
+    assert calls == ["extreme_close_hard", "extreme_close_safe", "standard"]
     assert proxy_path == tmp_path / "proxy.mp4"
     assert proxy_meta["requested_proxy_profile"] == "extreme_close"
     assert proxy_meta["effective_proxy_profile"] == "standard"
-    assert proxy_meta["proxy_reason"] == "downgraded_to_standard_from_extreme_close"
+    assert proxy_meta["proxy_reason"] == "recrop_standard"
+    assert proxy_meta["proxy_profile_downgrade_reason"] == "extreme_close_resolved_as_standard"
+    assert proxy_meta["proxy_recrop_attempted"] is True
 
 
 def test_summarize_face_track_uses_track_usable_for_ratios():
