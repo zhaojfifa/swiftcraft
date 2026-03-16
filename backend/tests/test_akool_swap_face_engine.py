@@ -1267,10 +1267,15 @@ def test_swap_engine_intelligence_allows_guarded_proxy_on_weak_track(monkeypatch
 
     assert result.metadata["replacement_intensity"] == "extreme_replace"
     assert result.metadata["route_gate_passed"] is True
-    assert result.metadata["route_gate_fail_reason"] == "weak_track_proxy_override"
+    assert result.metadata["route_gate_fail_reason"] is None
+    assert result.metadata["gate_primary_reason"] == "usable_box_ratio_below_threshold"
+    assert result.metadata["gate_override_applied"] is True
+    assert result.metadata["gate_override_reason"] == "proxy_face_ratio_sufficient"
     assert result.metadata["weak_track_proxy_override_used"] is True
-    assert result.metadata["weak_track_proxy_override_reason"] == "weak_track_proxy_override"
+    assert result.metadata["weak_track_proxy_override_reason"] == "proxy_face_ratio_sufficient"
     assert result.metadata["weak_track_proxy_confidence"] >= 0.78
+    assert result.metadata["raw_detect_confidence"] > 0.35
+    assert result.metadata["proxy_replace_confidence"] >= 0.82
     assert result.metadata["usable_box_ratio"] == 0.0
     assert result.metadata["track_usable_ratio"] == 0.0
     assert result.metadata["proxy_clip_used"] is True
