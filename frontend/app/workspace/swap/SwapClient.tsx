@@ -708,9 +708,11 @@ export default function SwapClient({ service = "swap" }: Props) {
       ? (taskMetadata.quality_analysis as Record<string, unknown>)
       : {};
   const taskRequestId = String(taskMetadata.request_id || "");
-  const taskProviderStatus = String(taskMetadata.provider_status || "");
-  const taskDeliveryAllowed = String(taskMetadata.delivery_allowed ?? "");
-  const taskRequiresManualReview = String(taskMetadata.requires_manual_review ?? "");
+  const taskProviderStatus = String(finalDecision.provider_status ?? "");
+  const taskBusinessStatus = String(finalDecision.business_status ?? "");
+  const taskDeliveryStatus = String(finalDecision.delivery_status ?? "");
+  const taskDeliveryAllowed = String(finalDecision.delivery_status === "allowed");
+  const taskRequiresManualReview = String(finalDecision.requires_manual_review ?? "");
   const taskModeSummary = String(taskMetadata.mode || (task?.mode || "") || "");
   const taskProviderSummary = String(taskMetadata.provider || (isSwap ? swapProvider : ""));
   const taskEngineSummary = String(taskMetadata.engine || "");
@@ -741,16 +743,24 @@ export default function SwapClient({ service = "swap" }: Props) {
   const taskReplacementIntensity = String(taskMetadata.replacement_intensity ?? taskMetadata.swap_strength ?? "");
   const taskRequestedProxyProfile = String(finalDecision.requested_proxy_profile ?? "");
   const taskEffectiveProxyProfile = String(finalDecision.effective_proxy_profile ?? "");
-  const finalModifyVideoSource = String(finalDecision.modify_video_source_final ?? taskMetadata.modifyVideoSource_final ?? "");
-  const finalDegradeReason = String(finalDecision.degrade_reason_final ?? taskMetadata.downgrade_reason ?? taskMetadata.fallback_reason ?? "");
+  const finalModifyVideoSource = String(finalDecision.modify_video_source_final ?? "");
+  const finalDegradeReason = String(finalDecision.degrade_reason_final ?? "");
   const finalSubmissionMode = String(finalDecision.submission_mode_final ?? "");
-  const finalExtremeRequested = String(finalDecision.extreme_requested ?? taskMetadata.extreme_requested ?? "");
-  const finalExtremeExecuted = String(finalDecision.extreme_executed ?? taskMetadata.extreme_executed ?? "");
-  const finalExtremeEffective = String(finalDecision.extreme_effective ?? taskMetadata.extreme_replace_effective ?? "");
+  const finalExtremeRequested = String(finalDecision.extreme_requested ?? "");
+  const finalExtremeExecuted = String(finalDecision.extreme_executed ?? "");
+  const finalExtremeEffective = String(finalDecision.extreme_effective ?? "");
   const finalGatePrimaryResult = String(finalDecision.extreme_gate_primary_result ?? "");
   const finalGateResult = String(finalDecision.extreme_gate_final_result ?? "");
-  const finalOverrideApplied = String(finalDecision.override_applied ?? taskMetadata.gate_override_applied ?? "");
-  const finalQualityGrade = String(taskMetadata.quality_grade ?? finalDecision.quality_grade ?? "");
+  const finalOverrideApplied = String(finalDecision.override_applied ?? "");
+  const finalQualityGrade = String(finalDecision.quality_grade ?? "");
+  const finalResultGrade = String(finalDecision.result_grade ?? "");
+  const finalResultBucket = String(finalDecision.result_bucket ?? "");
+  const proxyThresholdRequired = String(taskMetadata.proxy_face_ratio_threshold_required ?? "");
+  const proxyFaceRatioActual = String(taskMetadata.proxy_face_ratio_after_actual ?? "");
+  const proxyRejectedReason = String(finalDecision.proxy_rejected_reason ?? "");
+  const rerunRecommended = String(finalDecision.rerun_recommended ?? "");
+  const rerunStrategy = String(finalDecision.rerun_strategy ?? "");
+  const manualMaterialFixRequired = String(finalDecision.manual_material_fix_required ?? "");
   const taskStatusNormalized = String(task?.status || "").trim().toLowerCase();
   const isDegradedStatus = taskStatusNormalized === "success_degraded";
   const resultFacePresenceRatio = Number(resultAnalysis.face_presence_ratio ?? 0);
@@ -1777,6 +1787,8 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Quality Grade: <span className={`inline-flex rounded border px-2 py-0.5 ${getQualityGradeTone(finalQualityGrade)}`}>{finalQualityGrade || "-"}</span></div>
                         <div>Final Submission Mode: {finalSubmissionMode || "-"}</div>
                         <div>Provider Status: {taskProviderStatus || "-"}</div>
+                        <div>Business Status: {taskBusinessStatus || "-"}</div>
+                        <div>Delivery Status: {taskDeliveryStatus || "-"}</div>
                         <div>Delivery Allowed: {taskDeliveryAllowed || "-"}</div>
                         <div>Requires Manual Review: {taskRequiresManualReview || "-"}</div>
                         <div>Single-Face Only: {taskSingleFaceOnly ? taskSingleFaceOnly : "true"}</div>
@@ -1901,8 +1913,10 @@ export default function SwapClient({ service = "swap" }: Props) {
                         <div>Effective Proxy Profile: {taskEffectiveProxyProfile || "-"}</div>
                         <div>Extreme Effective: {finalExtremeEffective || "false"}</div>
                         <div>Final ModifyVideo Source: {finalModifyVideoSource || "-"}</div>
-                        <div>Degrade Reason: {finalDegradeReason || "-"}</div>
+                        <div>Degrade Reason Final: {finalDegradeReason || "-"}</div>
                         <div>Quality Grade: <span className={`inline-flex rounded border px-2 py-0.5 ${getQualityGradeTone(finalQualityGrade)}`}>{finalQualityGrade || "-"}</span></div>
+                        <div>Result Grade: {finalResultGrade || "-"}</div>
+                        <div>Result Bucket: {finalResultBucket || "-"}</div>
                       </div>
                     </div>
                     <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
@@ -1917,6 +1931,13 @@ export default function SwapClient({ service = "swap" }: Props) {
                       <div>Primary Gate Result: {finalGatePrimaryResult || "-"}</div>
                       <div>Final Gate Result: {finalGateResult || "-"}</div>
                       <div>Override Applied: {finalOverrideApplied || "false"}</div>
+                      <div>Proxy Threshold Required: {proxyThresholdRequired || "-"}</div>
+                      <div>Proxy Face Ratio Actual: {proxyFaceRatioActual || "-"}</div>
+                      <div>Proxy Used Final: {String(finalDecision.proxy_used_final ?? "") || "-"}</div>
+                      <div>Proxy Rejected Reason: {proxyRejectedReason || "-"}</div>
+                      <div>Rerun Recommended: {rerunRecommended || "false"}</div>
+                      <div>Rerun Strategy: {rerunStrategy || "-"}</div>
+                      <div>Manual Material Fix Required: {manualMaterialFixRequired || "false"}</div>
                       <div>Risk Tags: {taskRiskTags.length ? taskRiskTags.join(", ") : "-"}</div>
                     </div>
                     <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">

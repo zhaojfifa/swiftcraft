@@ -1432,14 +1432,27 @@ class TaskService:
                     manifest_exc,
                 )
 
-        quality_grade = str(metadata.get("quality_grade") or "").strip().lower()
-        provider_status = "provider_done"
-        final_status = "success_degraded" if quality_grade == "success_degraded" else "success"
+        final_decision = metadata.get("final_decision") if isinstance(metadata.get("final_decision"), dict) else {}
+        quality_grade = str(final_decision.get("quality_grade") or metadata.get("quality_grade") or "").strip().lower() or "success_weak"
+        provider_status = str(final_decision.get("provider_status") or metadata.get("provider_status") or "completed").strip().lower() or "completed"
+        business_status = str(final_decision.get("business_status") or metadata.get("business_status") or ("degraded" if quality_grade == "success_degraded" else "passed")).strip().lower()
+        delivery_status = str(final_decision.get("delivery_status") or metadata.get("delivery_status") or ("blocked" if business_status != "passed" else "allowed")).strip().lower()
+        requires_manual_review = bool(final_decision.get("requires_manual_review") if final_decision else metadata.get("requires_manual_review") or business_status != "passed")
+        final_status = "failed" if business_status == "failed" else "success_degraded" if business_status == "degraded" else "success"
         metadata["provider_status"] = provider_status
-        metadata["quality_grade"] = quality_grade or metadata.get("quality_grade") or "success_weak"
-        metadata["delivery_allowed"] = final_status == "success"
-        metadata["requires_manual_review"] = final_status != "success"
-        metadata["delivery_decision"] = "deliverable" if final_status == "success" else "manual_review_required"
+        metadata["business_status"] = business_status
+        metadata["delivery_status"] = delivery_status
+        metadata["quality_grade"] = quality_grade
+        metadata["delivery_allowed"] = delivery_status == "allowed"
+        metadata["requires_manual_review"] = requires_manual_review
+        metadata["delivery_decision"] = "deliverable" if delivery_status == "allowed" else "manual_review_required"
+        if final_decision:
+            final_decision["provider_status"] = provider_status
+            final_decision["business_status"] = business_status
+            final_decision["delivery_status"] = delivery_status
+            final_decision["requires_manual_review"] = requires_manual_review
+            final_decision["quality_grade"] = quality_grade
+            metadata["final_decision"] = final_decision
         updated = record.copy(
             update={
                 "output_url": output_url or record.output_url,

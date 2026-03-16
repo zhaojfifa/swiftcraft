@@ -20,6 +20,29 @@ from app.services.task_contract import build_input_snapshot, build_manifest
 from app.services.vendor_asset_bridge import VendorAssetBridge, VendorAssetBridgeError
 
 
+DEGRADE_REASON_ENUMS = {
+    "none",
+    "target_detect_failed_no_landmarks",
+    "usable_box_ratio_below_threshold",
+    "track_usable_ratio_below_threshold",
+    "proxy_face_ratio_after_below_threshold",
+    "target_mapping_face_below_extreme_threshold",
+    "result_analysis_face_presence_below_threshold",
+    "result_analysis_identity_overwrite_below_threshold",
+    "provider_completed_but_quality_degraded",
+    "source_score_below_extreme_threshold",
+    "selected_source_score_below_extreme_threshold",
+    "target_track_score_below_extreme_threshold",
+    "target_track_unstable",
+    "proxy_target_missing",
+    "proxy_quality_synthetic_fallback",
+    "proxy_not_true_close_crop",
+    "true_detect_frame_ratio_below_threshold",
+    "target_detect_mode_not_detected_track",
+    "weak_track_proxy_override_not_allowed",
+}
+
+
 class AkoolSwapFaceEngine:
     def __init__(self) -> None:
         self.provider = "akool_swap_face"
@@ -505,16 +528,79 @@ class AkoolSwapFaceEngine:
             return "success_strong"
         return "success_weak"
 
+    def _normalize_degrade_reason(
+        self,
+        raw_reason: str | None,
+        *,
+        result_analysis: Dict[str, Any],
+        quality_grade: str,
+    ) -> str:
+        normalized = str(raw_reason or "").strip().lower()
+        aliases = {
+            "full_frame_target": "usable_box_ratio_below_threshold",
+            "proxy_target_required_for_extreme_replace": "usable_box_ratio_below_threshold",
+            "missing_face_box": "target_detect_failed_no_landmarks",
+            "detect_faces returned no crop_landmarks": "target_detect_failed_no_landmarks",
+        }
+        normalized = aliases.get(normalized, normalized)
+        if normalized in DEGRADE_REASON_ENUMS:
+            return normalized
+        face_presence_ratio = float(result_analysis.get("face_presence_ratio") or 0.0)
+        identity_overwrite_confidence = float(result_analysis.get("identity_overwrite_confidence") or 0.0)
+        if quality_grade == "success_degraded":
+            if face_presence_ratio < 0.6:
+                return "result_analysis_face_presence_below_threshold"
+            if identity_overwrite_confidence < 0.55:
+                return "result_analysis_identity_overwrite_below_threshold"
+            return "provider_completed_but_quality_degraded"
+        return normalized or "none"
+
+    def _derive_status_triad(self, quality_grade: str) -> tuple[str, str, str, bool]:
+        provider_status = "completed"
+        if quality_grade == "success_degraded":
+            return provider_status, "degraded", "blocked", True
+        return provider_status, "passed", "allowed", False
+
+    def _derive_result_labels(self, business_status: str) -> tuple[str, str]:
+        if business_status == "passed":
+            return "pass", "deliverable"
+        if business_status == "degraded":
+            return "warn", "review_required"
+        return "fail", "rejected"
+
+    def _derive_rerun_guidance(self, result_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        face_presence_ratio = float(result_analysis.get("face_presence_ratio") or 0.0)
+        face_stability_score = float(result_analysis.get("face_stability_score") or 0.0)
+        track_quality_confidence = float(result_analysis.get("track_quality_confidence") or 0.0)
+        proxy_execution_confidence = float(result_analysis.get("proxy_execution_confidence") or 0.0)
+        identity_overwrite_confidence = float(result_analysis.get("identity_overwrite_confidence") or 0.0)
+        rerun_recommended = False
+        rerun_strategy = "none"
+        manual_material_fix_required = False
+        if face_presence_ratio < 0.2 or face_stability_score < 0.2 or track_quality_confidence < 0.2:
+            manual_material_fix_required = True
+        elif proxy_execution_confidence >= 0.5 and 0.4 <= identity_overwrite_confidence < 0.62:
+            rerun_recommended = True
+            rerun_strategy = "retry_with_tighter_proxy"
+        elif face_presence_ratio >= 0.6 and identity_overwrite_confidence < 0.55:
+            rerun_recommended = True
+            rerun_strategy = "retry_with_alt_source_ref"
+        return {
+            "rerun_recommended": rerun_recommended,
+            "rerun_strategy": rerun_strategy,
+            "manual_material_fix_required": manual_material_fix_required,
+        }
+
     def _build_final_decision(
         self,
         *,
+        requested_swap_strength: str,
         requested_proxy_profile: str | None,
         effective_proxy_profile: str | None,
         gate_primary_channel: str | None,
         route_gate_passed: bool,
         modify_video_source: str,
-        downgrade_reason: str | None,
-        fallback_reason: str | None,
+        degrade_reason_final: str,
         proxy_clip_used: bool,
         replacement_intensity: str,
         extreme_replace_selected: bool,
@@ -522,25 +608,39 @@ class AkoolSwapFaceEngine:
         weak_track_proxy_override_used: bool,
         quality_grade: str,
         submission_mode_final: str,
+        face_enhance_requested: bool,
+        face_enhance_used: bool,
+        provider_status: str,
+        business_status: str,
+        delivery_status: str,
+        requires_manual_review: bool,
+        result_grade: str,
+        result_bucket: str,
+        proxy_rejected_reason: str,
+        rerun_guidance: Dict[str, Any],
     ) -> Dict[str, Any]:
         final_extreme_submission_accepted = bool(
             extreme_replace_selected and replacement_intensity == "extreme_replace" and modify_video_source == "proxy_target"
         )
-        extreme_gate_primary_result = "accepted" if gate_primary_channel == "raw_detect" and route_gate_passed else "blocked"
-        if gate_primary_channel == "proxy_override" and route_gate_passed:
-            extreme_gate_primary_result = "proxy_override_candidate"
+        primary_gate_result = "passed" if gate_primary_channel == "raw_detect" and route_gate_passed else "blocked"
+        channel_gate_result = "passed" if route_gate_passed else "blocked"
+        extreme_gate_primary_result = primary_gate_result if gate_primary_channel == "raw_detect" else "proxy_override_candidate" if route_gate_passed else "blocked"
         extreme_gate_final_result = "accepted" if final_extreme_submission_accepted else "degraded"
-        degrade_reason_final = downgrade_reason or fallback_reason or "none"
-        if final_extreme_submission_accepted:
-            degrade_reason_final = "none"
         return {
+            "requested_swap_strength": requested_swap_strength,
             "requested_proxy_profile": requested_proxy_profile,
             "effective_proxy_profile": effective_proxy_profile,
+            "face_enhance_requested": face_enhance_requested,
+            "face_enhance_used": face_enhance_used,
+            "primary_gate_result": primary_gate_result,
+            "channel_gate_result": channel_gate_result,
+            "final_submission_result": "proxy_target_submitted" if modify_video_source == "proxy_target" else "raw_target_submitted",
             "extreme_gate_primary_result": extreme_gate_primary_result,
             "extreme_gate_final_result": extreme_gate_final_result,
             "modify_video_source_final": modify_video_source,
             "degrade_reason_final": degrade_reason_final,
             "proxy_used_final": bool(proxy_clip_used and modify_video_source == "proxy_target"),
+            "proxy_rejected_reason": proxy_rejected_reason,
             "submission_mode_final": submission_mode_final,
             "raw_channel_accepted": bool(gate_primary_channel == "raw_detect" and route_gate_passed),
             "proxy_channel_accepted": bool(gate_primary_channel == "proxy_override" and route_gate_passed),
@@ -550,6 +650,13 @@ class AkoolSwapFaceEngine:
             "extreme_effective": extreme_replace_effective,
             "override_applied": weak_track_proxy_override_used,
             "quality_grade": quality_grade,
+            "provider_status": provider_status,
+            "business_status": business_status,
+            "delivery_status": delivery_status,
+            "requires_manual_review": requires_manual_review,
+            "result_grade": result_grade,
+            "result_bucket": result_bucket,
+            **rerun_guidance,
         }
 
     async def _run_ab_compare(
@@ -1345,10 +1452,6 @@ class AkoolSwapFaceEngine:
                     fallback_reason = downgrade_reason
                     gate_failed_metric = "proxy_face_ratio_after" if downgrade_reason == "proxy_face_ratio_after_below_threshold" else downgrade_reason
                     gate_secondary_blocker = gate_primary_reason or downgrade_reason
-                    on_log(
-                        f"[swap][extreme-gate] accepted=false channel={gate_primary_channel or 'raw_detect'} "
-                        f"reason={downgrade_reason} secondary_blocker={gate_secondary_blocker or downgrade_reason}"
-                    )
                     on_log(f"[swap][route] extreme_replace blocked -> downgrade reason={downgrade_reason}")
                     effective_replacement_intensity = "strong_identity"
                     submission_mode_final = "v3_raw_target_degraded"
@@ -1357,12 +1460,6 @@ class AkoolSwapFaceEngine:
                     modify_video_source = "focused_target" if focused_target_url else "raw_target"
                 else:
                     gate_secondary_blocker = gate_primary_reason
-                    if extreme_requested:
-                        on_log(
-                            f"[swap][extreme-gate] accepted=true channel={gate_primary_channel or 'raw_detect'} "
-                            f"reason={weak_track_proxy_override_reason or 'none'} "
-                            f"primary_reason={gate_primary_reason or 'none'} override={str(weak_track_proxy_override_used).lower()}"
-                        )
                 if effective_replacement_intensity == "extreme_replace":
                     modify_video_source = "proxy_target"
                     if gate_primary_channel == "proxy_override":
@@ -1954,14 +2051,29 @@ class AkoolSwapFaceEngine:
                 proxy_quality=proxy_quality,
             )
             quality_grade = self._derive_quality_grade(result_analysis)
+            degrade_reason_final = self._normalize_degrade_reason(
+                downgrade_reason or fallback_reason or route_gate_fail_reason,
+                result_analysis=result_analysis,
+                quality_grade=quality_grade,
+            )
+            provider_status, business_status, delivery_status, requires_manual_review = self._derive_status_triad(quality_grade)
+            result_grade, result_bucket = self._derive_result_labels(business_status)
+            rerun_guidance = self._derive_rerun_guidance(result_analysis)
+            proxy_rejected_reason = "none"
+            if requested_proxy_profile and modify_video_source != "proxy_target":
+                proxy_rejected_reason = (
+                    "channel_gate_blocked_due_to_track_unusable"
+                    if degrade_reason_final in {"usable_box_ratio_below_threshold", "track_usable_ratio_below_threshold", "target_mapping_face_below_extreme_threshold"}
+                    else degrade_reason_final
+                )
             final_decision = self._build_final_decision(
+                requested_swap_strength=swap_strength,
                 requested_proxy_profile=requested_proxy_profile,
                 effective_proxy_profile=effective_proxy_profile or None,
                 gate_primary_channel=gate_primary_channel,
                 route_gate_passed=route_gate_passed,
                 modify_video_source=modify_video_source,
-                downgrade_reason=downgrade_reason,
-                fallback_reason=fallback_reason,
+                degrade_reason_final=degrade_reason_final,
                 proxy_clip_used=proxy_clip_used,
                 replacement_intensity=replacement_intensity,
                 extreme_replace_selected=extreme_replace_selected,
@@ -1969,8 +2081,26 @@ class AkoolSwapFaceEngine:
                 weak_track_proxy_override_used=weak_track_proxy_override_used,
                 quality_grade=quality_grade,
                 submission_mode_final=submission_mode_final,
+                face_enhance_requested=bool(run_cfg.get("face_enhance", True)),
+                face_enhance_used=bool(face_enhance),
+                provider_status=provider_status,
+                business_status=business_status,
+                delivery_status=delivery_status,
+                requires_manual_review=requires_manual_review,
+                result_grade=result_grade,
+                result_bucket=result_bucket,
+                proxy_rejected_reason=proxy_rejected_reason,
+                rerun_guidance=rerun_guidance,
             )
             on_log(f"[swap][result-analyze] analysis={result_analysis} quality_grade={quality_grade}")
+            if extreme_replace_selected:
+                primary_result = "passed" if (gate_primary_channel == "raw_detect" and route_gate_passed) else "blocked"
+                raw_result = "passed" if (gate_primary_channel == "raw_detect" and route_gate_passed) else "blocked"
+                proxy_result = "passed" if (gate_primary_channel == "proxy_override" and route_gate_passed) else "blocked"
+                on_log(f"[swap][gate-primary] result={primary_result} reason={gate_primary_reason or degrade_reason_final}")
+                on_log(f"[swap][gate-channel][proxy] result={proxy_result} reason={weak_track_proxy_override_reason or proxy_rejected_reason}")
+                on_log(f"[swap][gate-channel][raw] result={raw_result} reason={gate_primary_reason or degrade_reason_final}")
+                on_log(f"[swap][submission-final] mode={submission_mode_final} extreme_executed={str(final_decision['extreme_executed']).lower()}")
             on_log(f"[swap][final-decision] summary={final_decision}")
             quality_summary = {
                 "swap_strength": swap_strength,
@@ -1996,8 +2126,10 @@ class AkoolSwapFaceEngine:
                 "source_pack_size": source_pack_size,
                 "selected_source_face_reason": source_selection_reason,
                 "selected_source_refs": selected_source_refs,
+                "selected_source_score": float((selected_source_ref or {}).get("selection_score") or source_face_score or 0.0),
                 "source_candidate_scores": source_candidate_scores,
                 "source_rank_table": source_candidate_scores,
+                "source_rank_top3": list(source_candidate_scores[:3]),
                 "selected_target_frame_index": selected_target_frame_index,
                 "face_enhance_used": bool(face_enhance),
                 "target_mapping_face_rank_reason": target_mapping_face_rank_reason,
@@ -2047,6 +2179,7 @@ class AkoolSwapFaceEngine:
                 "proxy_requested": bool(requested_proxy_profile),
                 "proxy_executed": proxy_clip_used,
                 "proxy_clip_reason": proxy_clip_reason,
+                "proxy_rejected_reason": proxy_rejected_reason,
                 "requested_proxy_profile": requested_proxy_profile,
                 "proxy_profile_requested": requested_proxy_profile,
                 "proxy_requested_profile": requested_proxy_profile,
@@ -2074,6 +2207,13 @@ class AkoolSwapFaceEngine:
                 "result_analysis": result_analysis,
                 "quality_analysis": result_analysis,
                 "quality_grade": quality_grade,
+                "provider_status": provider_status,
+                "business_status": business_status,
+                "delivery_status": delivery_status,
+                "requires_manual_review": requires_manual_review,
+                "result_grade": result_grade,
+                "result_bucket": result_bucket,
+                **rerun_guidance,
                 "final_decision": final_decision,
                 "ab_compare": ab_compare_runtime,
             }
@@ -2151,7 +2291,9 @@ class AkoolSwapFaceEngine:
                     "source_bucket_reason": source_bucket_reason,
                     "source_selection_reason": source_selection_reason,
                     "selected_source_refs": selected_source_refs,
+                    "selected_source_score": float((selected_source_ref or {}).get("selection_score") or source_face_score or 0.0),
                     "source_rank_table": source_candidate_scores,
+                    "source_rank_top3": list(source_candidate_scores[:3]),
                     "canonical_source_face_url": canonical_source_face_url,
                     "original_target_url": original_target_url,
                     "focused_target_url": focused_target_url,
@@ -2209,6 +2351,7 @@ class AkoolSwapFaceEngine:
                     "proxy_requested": bool(requested_proxy_profile),
                     "proxy_executed": proxy_clip_used,
                     "proxy_clip_reason": proxy_clip_reason,
+                    "proxy_rejected_reason": proxy_rejected_reason,
                     "requested_proxy_profile": requested_proxy_profile,
                     "proxy_profile_requested": requested_proxy_profile,
                     "proxy_requested_profile": requested_proxy_profile,
@@ -2243,6 +2386,13 @@ class AkoolSwapFaceEngine:
                     "result_analysis": result_analysis,
                     "quality_analysis": result_analysis,
                     "quality_grade": quality_grade,
+                    "provider_status": provider_status,
+                    "business_status": business_status,
+                    "delivery_status": delivery_status,
+                    "requires_manual_review": requires_manual_review,
+                    "result_grade": result_grade,
+                    "result_bucket": result_bucket,
+                    **rerun_guidance,
                     "final_decision": final_decision,
                     "ab_compare": ab_compare_runtime,
                     "source_crop_policy": source_crop_policy,
@@ -2284,8 +2434,8 @@ class AkoolSwapFaceEngine:
             outputs["manifest_url"] = manifest_url
             manifest["outputs"]["manifest_url"] = manifest_url
             on_log(f"[swap][manifest] manifest_url={manifest_url}")
-            on_log(f"[swap][finalize] status=succeeded output_key={output_key} output_url={output_url}")
-            on_log("[swap][finalize] task_completed status=success progress=100")
+            on_log(f"[swap][finalize] status={business_status} output_key={output_key} output_url={output_url}")
+            on_log(f"[swap][finalize] task_completed provider_status={provider_status} business_status={business_status} delivery_status={delivery_status} progress=100")
             finalize_stage = "completed"
             on_stage("DONE", 100)
 
@@ -2322,7 +2472,9 @@ class AkoolSwapFaceEngine:
                     "source_bucket_reason": source_bucket_reason,
                     "source_selection_reason": source_selection_reason,
                     "selected_source_refs": selected_source_refs,
+                    "selected_source_score": float((selected_source_ref or {}).get("selection_score") or source_face_score or 0.0),
                     "source_rank_table": source_candidate_scores,
+                    "source_rank_top3": list(source_candidate_scores[:3]),
                     "canonical_source_face_url": canonical_source_face_url,
                     "original_target_url": original_target_url,
                     "focused_target_url": focused_target_url,
@@ -2381,6 +2533,7 @@ class AkoolSwapFaceEngine:
                     "proxy_requested": bool(requested_proxy_profile),
                     "proxy_executed": proxy_clip_used,
                     "proxy_clip_reason": proxy_clip_reason,
+                    "proxy_rejected_reason": proxy_rejected_reason,
                     "requested_proxy_profile": requested_proxy_profile,
                     "proxy_profile_requested": requested_proxy_profile,
                     "proxy_requested_profile": requested_proxy_profile,
@@ -2415,6 +2568,13 @@ class AkoolSwapFaceEngine:
                     "result_analysis": result_analysis,
                     "quality_analysis": result_analysis,
                     "quality_grade": quality_grade,
+                    "provider_status": provider_status,
+                    "business_status": business_status,
+                    "delivery_status": delivery_status,
+                    "requires_manual_review": requires_manual_review,
+                    "result_grade": result_grade,
+                    "result_bucket": result_bucket,
+                    **rerun_guidance,
                     "final_decision": final_decision,
                     "ab_compare": ab_compare_runtime,
                     "mode": str(record.mode or "basic").lower(),

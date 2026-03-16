@@ -1195,6 +1195,17 @@ def test_swap_engine_intelligence_extreme_replace_sets_route_and_face_enhance_fl
     assert result.metadata["quality_analysis"]["analysis_mode"] == "heuristic"
     assert result.metadata["extreme_replace_runtime"]["effective"] is True
     assert result.metadata["result_analysis"]["analysis_mode"] == "heuristic"
+    assert result.metadata["provider_status"] == "completed"
+    assert result.metadata["business_status"] == "passed"
+    assert result.metadata["delivery_status"] == "allowed"
+    assert result.metadata["result_grade"] == "pass"
+    assert result.metadata["result_bucket"] == "deliverable"
+    assert result.metadata["selected_source_score"] >= 0
+    assert len(result.metadata["source_rank_top3"]) >= 1
+    assert result.metadata["final_decision"]["provider_status"] == "completed"
+    assert result.metadata["final_decision"]["business_status"] == "passed"
+    assert result.metadata["final_decision"]["delivery_status"] == "allowed"
+    assert result.metadata["final_decision"]["requested_swap_strength"] == "extreme_replace"
     assert engine.client.last_submit_kwargs["modify_video"] == "https://vendor.example/proxy-target.mp4"
 
 
@@ -1251,8 +1262,9 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
         )
     )
 
-    assert any("[swap][extreme-gate] accepted=false" in message for message in logs)
-    assert not any("[swap][extreme-gate] accepted=true" in message for message in logs)
+    assert any("[swap][gate-primary] result=blocked" in message for message in logs)
+    assert any("[swap][submission-final] mode=v3_raw_target_degraded extreme_executed=false" in message for message in logs)
+    assert not any("[swap][extreme-gate]" in message for message in logs)
     assert result.metadata["degraded_fallback_used"] is True
     assert result.metadata["extreme_replace_effective"] is False
     assert result.metadata["downgrade_reason"] == "full_frame_target"
@@ -1270,6 +1282,13 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert result.metadata["fallback_reason"] == "full_frame_target"
     assert result.metadata["requested_proxy_profile"] == "extreme_close"
     assert result.metadata["effective_proxy_profile"] is None
+    assert result.metadata["provider_status"] == "completed"
+    assert result.metadata["business_status"] == "degraded"
+    assert result.metadata["delivery_status"] == "blocked"
+    assert result.metadata["result_grade"] == "warn"
+    assert result.metadata["result_bucket"] == "review_required"
+    assert result.metadata["proxy_rejected_reason"] == "channel_gate_blocked_due_to_track_unusable"
+    assert result.metadata["rerun_recommended"] in {True, False}
     assert result.metadata["target_detection_mode"] == "frame_sampling_fallback"
     assert result.metadata["target_detect_mode"] == "frame_sampling_fallback"
     assert result.metadata["target_track_stability_score"] == 0.18
@@ -1354,6 +1373,7 @@ def test_swap_engine_intelligence_allows_guarded_proxy_on_weak_track(monkeypatch
     assert result.metadata["final_decision"]["modify_video_source_final"] == "proxy_target"
     assert result.metadata["final_decision"]["extreme_gate_final_result"] == "accepted"
     assert result.metadata["final_decision"]["submission_mode_final"] == "extreme_probe_proxy"
+    assert result.metadata["final_decision"]["proxy_rejected_reason"] == "none"
 
 def test_swap_engine_intelligence_allows_proxy_probe_with_comparison_log_pattern(monkeypatch):
     import app.engines.akool_swap_face_engine as swap_engine_module
@@ -1417,7 +1437,9 @@ def test_swap_engine_intelligence_allows_proxy_probe_with_comparison_log_pattern
     assert result.metadata["submission_mode_final"] == "extreme_probe_proxy"
     assert result.metadata["final_decision"]["final_extreme_submission_accepted"] is True
     assert result.metadata["final_decision"]["modify_video_source_final"] == "proxy_target"
-    assert result.metadata["final_decision"]["degrade_reason_final"] == "none"
+    assert result.metadata["final_decision"]["degrade_reason_final"] == "result_analysis_face_presence_below_threshold"
+    assert result.metadata["final_decision"]["business_status"] == "degraded"
+    assert result.metadata["final_decision"]["delivery_status"] == "blocked"
 
 
 def test_swap_engine_intelligence_force_proxy_override_on_weak_track(monkeypatch):
