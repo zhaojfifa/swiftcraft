@@ -471,12 +471,21 @@ class _FakeExtractor:
             "target_mapping_face_risk_tags": ["lighting_gap"],
             "target_face_risk_tags": ["face_small"],
             "face_track_summary": {
+                "target_detection_mode": "video_multi_frame_detect",
                 "tracked_frames": 3,
                 "frame_indexes": [1, 3, 5],
+                "frame_boxes": [
+                    {"frame_index": 1, "box": {"x": 40, "y": 20, "width": 180, "height": 180}, "used_bbox_fallback": False},
+                    {"frame_index": 3, "box": {"x": 42, "y": 22, "width": 176, "height": 176}, "used_bbox_fallback": False},
+                    {"frame_index": 5, "box": {"x": 44, "y": 24, "width": 172, "height": 172}, "used_bbox_fallback": False},
+                ],
                 "avg_box": {"x": 40, "y": 20, "width": 180, "height": 180},
+                "median_box": {"x": 42, "y": 22, "width": 176, "height": 176},
                 "anchor_box": {"x": 42, "y": 22, "width": 176, "height": 176},
                 "smoothed_anchor_box": {"x": 44, "y": 24, "width": 172, "height": 172},
                 "focused_crop": {"x": 10, "y": 0, "width": 260, "height": 260},
+                "stability_score": 0.82,
+                "coverage_ratio": 0.75,
             },
             "target_anchor_summary": {
                 "frame_index": 5,
@@ -494,6 +503,13 @@ class _FakeExtractor:
             },
             "focused_target_url": "https://vendor.example/focused-target.mp4",
             "proxy_target_url": "https://vendor.example/focused-target.mp4",
+            "target_detection_mode": "video_multi_frame_detect",
+            "target_track_stability_score": 0.82,
+            "target_track_coverage_ratio": 0.75,
+            "proxy_crop_box": {"x": 10, "y": 0, "width": 260, "height": 260},
+            "proxy_face_ratio_before": 0.08,
+            "proxy_face_ratio_after": 0.42,
+            "proxy_is_true_close_crop": True,
             "replacement_mode": "explicit_mapping_enhanced",
             "focus_crop_valid": True,
             "focus_mode": "focused_crop",
@@ -526,7 +542,16 @@ class _InvalidFocusExtractor(_FakeExtractor):
             **dict(payload["face_track_summary"]),
             "full_frame_fallback": True,
             "avg_box_area_ratio": 1.0,
+            "stability_score": 0.18,
+            "coverage_ratio": 0.22,
         }
+        payload["target_detection_mode"] = "frame_sampling_fallback"
+        payload["target_track_stability_score"] = 0.18
+        payload["target_track_coverage_ratio"] = 0.22
+        payload["proxy_crop_box"] = None
+        payload["proxy_face_ratio_before"] = 1.0
+        payload["proxy_face_ratio_after"] = 1.0
+        payload["proxy_is_true_close_crop"] = False
         return payload
 
 
@@ -1007,6 +1032,15 @@ def test_swap_engine_intelligence_extreme_replace_sets_route_and_face_enhance_fl
     assert result.metadata["proxy_profile"] == "extreme_close"
     assert result.metadata["postprocess_profile"] == "postprocess_minimal"
     assert result.metadata["overwrite_strength_expected"] == "high"
+    assert result.metadata["target_detection_mode"] == "video_multi_frame_detect"
+    assert result.metadata["target_track_stability_score"] == 0.82
+    assert result.metadata["target_track_coverage_ratio"] == 0.75
+    assert result.metadata["proxy_crop_box"] == {"x": 10, "y": 0, "width": 260, "height": 260}
+    assert result.metadata["proxy_face_ratio_before"] == 0.08
+    assert result.metadata["proxy_face_ratio_after"] == 0.42
+    assert result.metadata["proxy_is_true_close_crop"] is True
+    assert result.metadata["route_gate_passed"] is True
+    assert result.metadata["route_gate_fail_reason"] is None
     assert engine.client.last_submit_kwargs["modify_video"] == "https://vendor.example/focused-target.mp4"
 
 
@@ -1075,6 +1109,12 @@ def test_swap_engine_intelligence_extreme_replace_marks_effective_false_when_deg
     assert result.metadata["fallback_reason"] == "target_mapping_face_below_extreme_threshold"
     assert result.metadata["requested_proxy_profile"] == "extreme_close"
     assert result.metadata["effective_proxy_profile"] is None
+    assert result.metadata["target_detection_mode"] == "frame_sampling_fallback"
+    assert result.metadata["target_track_stability_score"] == 0.18
+    assert result.metadata["target_track_coverage_ratio"] == 0.22
+    assert result.metadata["proxy_is_true_close_crop"] is False
+    assert result.metadata["route_gate_passed"] is True
+    assert result.metadata["route_gate_fail_reason"] is None
 
 
 def test_swap_engine_retries_provider_temp_file_error_with_raw_target_reason():

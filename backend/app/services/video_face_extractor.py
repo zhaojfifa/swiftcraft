@@ -17,6 +17,17 @@ from app.services.vendor_asset_bridge import VendorAssetBridge
 
 class VideoFaceExtractor:
     @staticmethod
+    def _max_crop_area_ratio(crop_profile: str) -> float:
+        profile = str(crop_profile or "").strip().lower()
+        if profile in {"standard", "proxy_standard"}:
+            return 0.85
+        if profile in {"tight", "proxy_tight"}:
+            return 0.70
+        if profile in {"extreme_close", "proxy_extreme_close", "proxy_extreme"}:
+            return 0.50
+        return 0.90
+
+    @staticmethod
     def _proxy_profile_target_ratio(crop_profile: str) -> float | None:
         profile = str(crop_profile or "").strip().lower()
         if profile in {"standard", "proxy_standard"}:
@@ -181,6 +192,61 @@ class VideoFaceExtractor:
                 )
         return detections
 
+    async def detect_faces_from_video_hybrid(
+        self,
+        *,
+        source_video_url: str,
+        frame_paths: List[Path],
+        service: str = "swap",
+        num_frames: int = 16,
+        on_log: Any | None = None,
+    ) -> tuple[List[Dict[str, Any]], str]:
+        detections: List[Dict[str, Any]] = []
+        try:
+            detected = await self.client.detect_faces(
+                source_video_url,
+                single_face=True,
+                return_face_url=True,
+                num_frames=num_frames,
+            )
+            faces = list(detected.get("faces") or [])
+            for index, face in enumerate(faces):
+                frame_index = int(face.get("frame_index") or face.get("frame") or index)
+                frame_path = frame_paths[min(max(frame_index, 0), max(len(frame_paths) - 1, 0))] if frame_paths else None
+                raw_box = self._region_to_box(face.get("region")) or self._opts_to_box(face.get("opts"))
+                normalized_box = None
+                if raw_box is not None and frame_path is not None and Path(frame_path).exists():
+                    frame_width, frame_height = self._image_size(Path(frame_path))
+                    normalized_box = self._normalized_box(raw_box, frame_width, frame_height)
+                if on_log is not None:
+                    on_log(f"[swap][target-track][frame={frame_index}] raw_box={raw_box}")
+                    on_log(f"[swap][target-track][frame={frame_index}] normalized_box={normalized_box}")
+                    on_log(f"[swap][target-track][frame={frame_index}] fallback=false")
+                detections.append(
+                    {
+                        "frame_index": frame_index,
+                        "frame_path": str(frame_path) if frame_path is not None else None,
+                        "frame_vendor_url": source_video_url,
+                        "used_bbox_fallback": False,
+                        "raw_box": raw_box,
+                        "normalized_box": normalized_box,
+                        **face,
+                    }
+                )
+        except Exception as exc:
+            if on_log is not None:
+                on_log(f"[swap][target-detect] video_detect_failed reason={type(exc).__name__}:{exc}")
+        stable_boxes = [
+            item for item in detections
+            if (self._region_to_box(item.get("region")) or self._opts_to_box(item.get("opts")) or item.get("raw_box")) is not None
+            and not bool(item.get("used_bbox_fallback"))
+        ]
+        coverage_ratio = (len(stable_boxes) / max(len(frame_paths), 1)) if frame_paths else 0.0
+        if stable_boxes and coverage_ratio >= 0.35:
+            return detections, "video_multi_frame_detect"
+        fallback = await self.detect_faces_from_frames(frame_paths, service=service, on_log=on_log)
+        return fallback, "frame_sampling_fallback"
+
     @staticmethod
     def _image_size(path: Path) -> tuple[int, int]:
         from PIL import Image
@@ -309,10 +375,12 @@ class VideoFaceExtractor:
         *,
         video_size: tuple[int, int] | None,
         selected_face: Dict[str, Any] | None,
+        detection_mode: str = "frame_sampling_fallback",
     ) -> Dict[str, Any]:
         boxes: List[tuple[float, float, float, float]] = []
         frames: List[int] = []
         fallback_frames = 0
+        frame_boxes: List[Dict[str, Any]] = []
         for candidate in candidates:
             box = self._region_to_box(candidate.get("region")) or self._opts_to_box(candidate.get("opts"))
             if box is None:
@@ -325,7 +393,20 @@ class VideoFaceExtractor:
             if bool(candidate.get("used_bbox_fallback")):
                 fallback_frames += 1
             boxes.append(box)
-            frames.append(int(candidate.get("frame_index") or 0))
+            frame_index = int(candidate.get("frame_index") or 0)
+            frames.append(frame_index)
+            frame_boxes.append(
+                {
+                    "frame_index": frame_index,
+                    "box": {
+                        "x": round(box[0], 2),
+                        "y": round(box[1], 2),
+                        "width": round(box[2], 2),
+                        "height": round(box[3], 2),
+                    },
+                    "used_bbox_fallback": bool(candidate.get("used_bbox_fallback")),
+                }
+            )
         if not boxes:
             if video_size is None:
                 raise EngineRunError("target_face_extraction failed: no face detected in sampled frames")
@@ -361,15 +442,47 @@ class VideoFaceExtractor:
         avg_box_area = avg_w * avg_h
         avg_box_area_ratio = avg_box_area / frame_area
         full_frame_fallback = avg_box_area_ratio >= 0.8
+        median_box = None
+        stability_score = 0.0
+        coverage_ratio = len(boxes) / max(len(candidates), 1)
+        if boxes:
+            sorted_x = sorted(box[0] for box in boxes)
+            sorted_y = sorted(box[1] for box in boxes)
+            sorted_w = sorted(box[2] for box in boxes)
+            sorted_h = sorted(box[3] for box in boxes)
+            mid = len(boxes) // 2
+            median_box = {
+                "x": round(sorted_x[mid], 2),
+                "y": round(sorted_y[mid], 2),
+                "width": round(sorted_w[mid], 2),
+                "height": round(sorted_h[mid], 2),
+            }
+            if len(boxes) == 1:
+                stability_score = 0.92 if not full_frame_fallback else 0.0
+            else:
+                x_span = max(box[0] for box in boxes) - min(box[0] for box in boxes)
+                y_span = max(box[1] for box in boxes) - min(box[1] for box in boxes)
+                w_span = max(box[2] for box in boxes) - min(box[2] for box in boxes)
+                h_span = max(box[3] for box in boxes) - min(box[3] for box in boxes)
+                span_penalty = (
+                    (x_span / max(video_size[0] if video_size else 1, 1))
+                    + (y_span / max(video_size[1] if video_size else 1, 1))
+                    + (w_span / max(avg_w, 1.0))
+                    + (h_span / max(avg_h, 1.0))
+                ) / 4.0
+                stability_score = max(0.0, min(1.0, 1.0 - span_penalty))
         return {
+            "target_detection_mode": detection_mode,
             "tracked_frames": len(boxes),
             "frame_indexes": frames,
+            "frame_boxes": frame_boxes,
             "avg_box": {
                 "x": round(avg_x, 2),
                 "y": round(avg_y, 2),
                 "width": round(avg_w, 2),
                 "height": round(avg_h, 2),
             },
+            "median_box": median_box,
             "selected_frame_index": anchor_index,
             "anchor_box": {
                 "x": round(anchor_box[0], 2),
@@ -383,6 +496,8 @@ class VideoFaceExtractor:
             "fallback_frames": fallback_frames,
             "avg_box_area_ratio": round(avg_box_area_ratio, 4),
             "full_frame_fallback": full_frame_fallback,
+            "stability_score": round(stability_score, 4),
+            "coverage_ratio": round(coverage_ratio, 4),
         }
 
     def create_focused_target_clip(
@@ -396,6 +511,9 @@ class VideoFaceExtractor:
         video_width = int(face_track_summary.get("video_width") or 0)
         video_height = int(face_track_summary.get("video_height") or 0)
         anchor_box = dict(face_track_summary.get("smoothed_anchor_box") or face_track_summary.get("anchor_box") or face_track_summary.get("avg_box") or {})
+        median_box = dict(face_track_summary.get("median_box") or {})
+        if median_box:
+            anchor_box = dict(median_box)
         if video_width <= 0 or video_height <= 0:
             raise EngineRunError("target_face_extraction failed: focused clip missing video dimensions")
         crop_x, crop_y, crop_w, crop_h, crop_area_ratio, focus_face_ratio = self._resolve_proxy_crop_geometry(
@@ -407,15 +525,24 @@ class VideoFaceExtractor:
         width = float(anchor_box.get("width") or video_width or 0.0)
         height = float(anchor_box.get("height") or video_height or 0.0)
         target_ratio = self._proxy_profile_target_ratio(crop_profile)
-        suspicious_overexpanded = crop_area_ratio > 0.9 if target_ratio is None else crop_area_ratio > min(0.9, target_ratio + 0.08)
+        suspicious_overexpanded = crop_area_ratio > self._max_crop_area_ratio(crop_profile)
         focus_mode = "focused_crop"
         focus_crop_valid = True
+        proxy_face_ratio_before = round((width * height) / max(video_width * video_height, 1), 4)
+        proxy_face_ratio_after = round(focus_face_ratio, 4)
+        proxy_is_true_close_crop = bool(
+            focus_face_ratio > max(proxy_face_ratio_before + 0.08, proxy_face_ratio_before * 1.35)
+            and crop_area_ratio < min(0.98, self._max_crop_area_ratio(crop_profile))
+        )
         if bool(face_track_summary.get("full_frame_fallback")):
             focus_crop_valid = False
             focus_mode = "full_frame_fallback"
         elif suspicious_overexpanded:
             focus_crop_valid = False
             focus_mode = "suspicious_overexpanded"
+        elif not proxy_is_true_close_crop and str(crop_profile or "").strip().lower() in {"tight", "proxy_tight", "extreme_close", "proxy_extreme_close", "proxy_extreme"}:
+            focus_crop_valid = False
+            focus_mode = "insufficient_close_crop"
         crop_filter = f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}"
         focus_meta = {
             "x": crop_x,
@@ -427,6 +554,10 @@ class VideoFaceExtractor:
             "focus_mode": focus_mode,
             "focus_face_ratio": round(focus_face_ratio, 4),
             "focus_crop_area_ratio": round(crop_area_ratio, 4),
+            "proxy_crop_box": {"x": crop_x, "y": crop_y, "width": crop_w, "height": crop_h},
+            "proxy_face_ratio_before": proxy_face_ratio_before,
+            "proxy_face_ratio_after": proxy_face_ratio_after,
+            "proxy_is_true_close_crop": proxy_is_true_close_crop,
             "crop_filter": crop_filter,
             "crop_profile": crop_profile,
         }
@@ -435,6 +566,10 @@ class VideoFaceExtractor:
         face_track_summary["focus_mode"] = focus_mode
         face_track_summary["focus_face_ratio"] = round(focus_face_ratio, 4)
         face_track_summary["focus_crop_area_ratio"] = round(crop_area_ratio, 4)
+        face_track_summary["proxy_crop_box"] = focus_meta["proxy_crop_box"]
+        face_track_summary["proxy_face_ratio_before"] = proxy_face_ratio_before
+        face_track_summary["proxy_face_ratio_after"] = proxy_face_ratio_after
+        face_track_summary["proxy_is_true_close_crop"] = proxy_is_true_close_crop
         if not focus_crop_valid:
             return None, focus_meta
         cmd = [
@@ -619,7 +754,13 @@ class VideoFaceExtractor:
         frames = self.extract_candidate_frames(video_path, max_frames=max_frames)
         if on_log is not None:
             on_log(f"[swap][target-sample] frames_sampled={len(frames)}")
-        detected_faces = await self.detect_faces_from_frames(frames, service=service, on_log=on_log)
+        detected_faces, detection_mode = await self.detect_faces_from_video_hybrid(
+            source_video_url=source_video_url,
+            frame_paths=frames,
+            service=service,
+            num_frames=min(max_frames * 2, 16),
+            on_log=on_log,
+        )
         if not detected_faces:
             raise EngineRunError("target_face_extraction failed: no face detected in sampled frames")
         for detected in detected_faces:
@@ -645,9 +786,14 @@ class VideoFaceExtractor:
             detected_faces,
             video_size=video_size,
             selected_face=selected_faces[0] if selected_faces else None,
+            detection_mode=detection_mode,
         )
         if on_log is not None:
-            on_log(f"[swap][target-track] tracked_frames={face_track_summary['tracked_frames']} avg_box={face_track_summary['avg_box']}")
+            on_log(
+                f"[swap][target-track] mode={detection_mode} tracked_frames={face_track_summary['tracked_frames']} "
+                f"avg_box={face_track_summary['avg_box']} stability_score={face_track_summary.get('stability_score')} "
+                f"coverage_ratio={face_track_summary.get('coverage_ratio')}"
+            )
         exported_faces = self.export_target_face_images(selected_faces, work_dir / "target_faces")
         bridged_target_images = [
             await self.bridge.bridge_asset(source_path=str(item["path"]), service=service, asset_kind="target-face")
@@ -783,9 +929,13 @@ class VideoFaceExtractor:
                 "valid_for_extreme": bool(
                     target_mapping_face_score is not None
                     and target_mapping_face_score >= 72
+                    and float(face_track_summary.get("stability_score") or 0.0) >= 0.45
                     and not {"face_small", "blur", "occlusion_risk", "full_frame_fallback", "bbox_suspicious"}.intersection(target_mapping_face_risk_tags)
                 ),
             },
+            "target_detection_mode": detection_mode,
+            "target_track_stability_score": face_track_summary.get("stability_score"),
+            "target_track_coverage_ratio": face_track_summary.get("coverage_ratio"),
             "face_track_summary": face_track_summary,
             "target_anchor_summary": {
                 "frame_index": selected_faces[0].get("frame_index") if selected_faces else None,
@@ -814,5 +964,9 @@ class VideoFaceExtractor:
             "focus_mode": focus_mode,
             "focus_face_ratio": focus_face_ratio,
             "focus_crop_area_ratio": focus_crop_area_ratio,
+            "proxy_crop_box": (proxy_clip_meta or {}).get("proxy_crop_box") or face_track_summary.get("proxy_crop_box"),
+            "proxy_face_ratio_before": (proxy_clip_meta or {}).get("proxy_face_ratio_before") or face_track_summary.get("proxy_face_ratio_before"),
+            "proxy_face_ratio_after": (proxy_clip_meta or {}).get("proxy_face_ratio_after") or face_track_summary.get("proxy_face_ratio_after"),
+            "proxy_is_true_close_crop": bool((proxy_clip_meta or {}).get("proxy_is_true_close_crop") or face_track_summary.get("proxy_is_true_close_crop")),
             "original_target_url": source_video_url,
         }
